@@ -93,7 +93,7 @@ const Login = () => {
         <Card className="w-full max-w-md border-border bg-card">
           <CardHeader className="text-center">
             <img src={neotopiaLogo} alt="Neotopia" className="mx-auto mb-2 h-10 w-auto" />
-            <CardTitle className="text-2xl font-bold text-foreground">Navigator</CardTitle>
+            <CardTitle className="text-2xl font-bold text-foreground">navigator</CardTitle>
             <CardDescription className="text-muted-foreground">
               Geben Sie Ihre E-Mail-Adresse ein
             </CardDescription>
@@ -139,7 +139,7 @@ const Login = () => {
       <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="text-center">
           <img src={neotopiaLogo} alt="Neotopia" className="mx-auto mb-2 h-10 w-auto" />
-          <CardTitle className="text-2xl font-bold text-foreground">Navigator</CardTitle>
+          <CardTitle className="text-2xl font-bold text-foreground">navigator</CardTitle>
           <CardDescription className="text-muted-foreground">
             Melden Sie sich an oder erstellen Sie ein Konto
           </CardDescription>

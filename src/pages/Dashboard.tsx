@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Shield } from 'lucide-react';
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user, signOut, isAdmin } = useAuth();
 
   const handleSignOut = async () => {
     await signOut();
@@ -21,13 +22,25 @@ const Dashboard = () => {
             <h1 className="text-3xl font-bold text-accent">NEOTOPIA</h1>
             <p className="text-muted-foreground">Navigator Dashboard</p>
           </div>
-          <Button
-            variant="outline"
-            onClick={handleSignOut}
-            className="border-accent text-accent hover:bg-accent hover:text-accent-foreground"
-          >
-            Abmelden
-          </Button>
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <Button
+                variant="outline"
+                onClick={() => navigate('/admin')}
+                className="border-accent text-accent hover:bg-accent hover:text-accent-foreground"
+              >
+                <Shield className="mr-2 h-4 w-4" />
+                Admin
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={handleSignOut}
+              className="border-accent text-accent hover:bg-accent hover:text-accent-foreground"
+            >
+              Abmelden
+            </Button>
+          </div>
         </header>
 
         <Card className="border-border bg-card">

@@ -19,72 +19,126 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [showResetForm, setShowResetForm] = useState(false);
 
+  const getErrorMessage = (error: { message: string }): string => {
+    const msg = error.message.toLowerCase();
+    if (msg.includes('email not confirmed') || msg.includes('email_not_confirmed')) {
+      return 'E-Mail noch nicht bestätigt. Bitte bestätige die Mail oder wir deaktivieren die Bestätigung im Supabase-Dashboard.';
+    }
+    if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
+      return 'Ungültige Anmeldedaten. Bitte überprüfen Sie E-Mail und Passwort.';
+    }
+    return error.message;
+  };
+
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     
-    const { error } = await signIn(email, password);
-    
-    if (error) {
+    try {
+      const { error } = await signIn(email, password);
+      
+      if (error) {
+        const message = getErrorMessage(error);
+        if (import.meta.env.DEV) {
+          console.error('[Login] Sign in error:', error);
+        }
+        toast({
+          variant: 'destructive',
+          title: 'Anmeldung fehlgeschlagen',
+          description: message,
+        });
+      } else {
+        toast({
+          title: 'Erfolgreich angemeldet',
+          description: 'Willkommen zurück!',
+        });
+        navigate('/dashboard');
+      }
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('[Login] Unexpected error:', err);
+      }
       toast({
         variant: 'destructive',
         title: 'Anmeldung fehlgeschlagen',
-        description: error.message,
+        description: 'Ein unerwarteter Fehler ist aufgetreten.',
       });
-    } else {
-      toast({
-        title: 'Erfolgreich angemeldet',
-        description: 'Willkommen zurück!',
-      });
-      navigate('/dashboard');
+    } finally {
+      setLoading(false);
     }
-    
-    setLoading(false);
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     
-    const { error } = await signUp(email, password);
-    
-    if (error) {
+    try {
+      const { error } = await signUp(email, password);
+      
+      if (error) {
+        if (import.meta.env.DEV) {
+          console.error('[Login] Sign up error:', error);
+        }
+        toast({
+          variant: 'destructive',
+          title: 'Registrierung fehlgeschlagen',
+          description: error.message,
+        });
+      } else {
+        toast({
+          title: 'Registrierung erfolgreich',
+          description: 'Bitte überprüfen Sie Ihre E-Mail zur Bestätigung.',
+        });
+      }
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('[Login] Unexpected error:', err);
+      }
       toast({
         variant: 'destructive',
         title: 'Registrierung fehlgeschlagen',
-        description: error.message,
+        description: 'Ein unerwarteter Fehler ist aufgetreten.',
       });
-    } else {
-      toast({
-        title: 'Registrierung erfolgreich',
-        description: 'Bitte überprüfen Sie Ihre E-Mail zur Bestätigung.',
-      });
+    } finally {
+      setLoading(false);
     }
-    
-    setLoading(false);
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     
-    const { error } = await resetPassword(email);
-    
-    if (error) {
+    try {
+      const { error } = await resetPassword(email);
+      
+      if (error) {
+        if (import.meta.env.DEV) {
+          console.error('[Login] Reset password error:', error);
+        }
+        toast({
+          variant: 'destructive',
+          title: 'Fehler',
+          description: error.message,
+        });
+      } else {
+        toast({
+          title: 'E-Mail gesendet',
+          description: 'Überprüfen Sie Ihr Postfach für den Passwort-Reset-Link.',
+        });
+        setShowResetForm(false);
+      }
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('[Login] Unexpected error:', err);
+      }
       toast({
         variant: 'destructive',
         title: 'Fehler',
-        description: error.message,
+        description: 'Ein unerwarteter Fehler ist aufgetreten.',
       });
-    } else {
-      toast({
-        title: 'E-Mail gesendet',
-        description: 'Überprüfen Sie Ihr Postfach für den Passwort-Reset-Link.',
-      });
-      setShowResetForm(false);
+    } finally {
+      setLoading(false);
     }
-    
-    setLoading(false);
   };
 
   if (showResetForm) {

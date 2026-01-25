@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Shield, LogOut } from 'lucide-react';
 import RegionMap from '@/components/map/RegionMap';
 import RegionSidebar from '@/components/map/RegionSidebar';
+import neotopiaLogo from '@/assets/neotopia-logo.svg';
 
 const DashboardContent = () => {
   const navigate = useNavigate();
@@ -21,8 +22,8 @@ const DashboardContent = () => {
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-bold text-accent">NEOTOPIA</h1>
-          <span className="text-sm text-muted-foreground">Navigator</span>
+          <img src={neotopiaLogo} alt="Neotopia" className="h-6 w-auto" />
+          <span className="text-lg font-bold text-foreground">navigator</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden text-sm text-muted-foreground sm:inline">

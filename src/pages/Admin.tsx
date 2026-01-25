@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, RefreshCw, Shield, Users } from 'lucide-react';
+import neotopiaLogo from '@/assets/neotopia-logo.svg';
 
 interface UserProfile {
   id: string;
@@ -122,14 +123,15 @@ const Admin = () => {
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-bold text-accent">NEOTOPIA</h1>
+              <div className="flex items-center gap-3">
+                <img src={neotopiaLogo} alt="Neotopia" className="h-7 w-auto" />
+                <span className="text-2xl font-bold text-foreground">navigator</span>
                 <Badge variant="default" className="bg-accent text-accent-foreground">
                   <Shield className="mr-1 h-3 w-3" />
                   Admin
                 </Badge>
               </div>
-              <p className="text-muted-foreground">Benutzerverwaltung</p>
+              <p className="mt-1 text-muted-foreground">Benutzerverwaltung</p>
             </div>
           </div>
           <Button

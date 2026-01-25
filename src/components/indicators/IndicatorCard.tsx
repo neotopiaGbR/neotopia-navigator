@@ -4,9 +4,10 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
 interface IndicatorCardProps {
   data: RegionIndicatorData;
+  onClick?: () => void;
 }
 
-const IndicatorCard: React.FC<IndicatorCardProps> = ({ data }) => {
+const IndicatorCard: React.FC<IndicatorCardProps> = ({ data, onClick }) => {
   const { indicator, values, latestValue, latestYear } = data;
 
   // Calculate trend (compare last two values if available)
@@ -33,7 +34,11 @@ const IndicatorCard: React.FC<IndicatorCardProps> = ({ data }) => {
   };
 
   return (
-    <div className="group rounded-md border border-border bg-card p-3 transition-colors hover:border-accent/50">
+    <button
+      type="button"
+      onClick={onClick}
+      className="group w-full cursor-pointer rounded-md border border-border bg-card p-3 text-left transition-colors hover:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent"
+    >
       {/* Header */}
       <div className="mb-2 flex items-start justify-between">
         <div className="min-w-0 flex-1">
@@ -97,7 +102,7 @@ const IndicatorCard: React.FC<IndicatorCardProps> = ({ data }) => {
           })}
         </div>
       )}
-    </div>
+    </button>
   );
 };
 

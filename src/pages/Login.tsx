@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
+import neotopiaLogo from '@/assets/neotopia-logo.svg';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -91,8 +92,8 @@ const Login = () => {
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md border-border bg-card">
           <CardHeader className="text-center">
-            <div className="mx-auto mb-4 text-4xl font-bold text-accent">N</div>
-            <CardTitle className="text-2xl font-bold text-foreground">Passwort vergessen</CardTitle>
+            <img src={neotopiaLogo} alt="Neotopia" className="mx-auto mb-2 h-10 w-auto" />
+            <CardTitle className="text-2xl font-bold text-foreground">Navigator</CardTitle>
             <CardDescription className="text-muted-foreground">
               Geben Sie Ihre E-Mail-Adresse ein
             </CardDescription>
@@ -137,7 +138,7 @@ const Login = () => {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 text-4xl font-bold text-accent">NEOTOPIA</div>
+          <img src={neotopiaLogo} alt="Neotopia" className="mx-auto mb-2 h-10 w-auto" />
           <CardTitle className="text-2xl font-bold text-foreground">Navigator</CardTitle>
           <CardDescription className="text-muted-foreground">
             Melden Sie sich an oder erstellen Sie ein Konto

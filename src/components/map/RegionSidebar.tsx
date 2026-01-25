@@ -2,13 +2,15 @@ import React from 'react';
 import { useRegion } from '@/contexts/RegionContext';
 import { MapPin, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import IndicatorsPanel from '@/components/indicators/IndicatorsPanel';
 
 const RegionSidebar: React.FC = () => {
   const { selectedRegion, setSelectedRegionId, regions } = useRegion();
 
   return (
-    <div className="flex h-full w-64 flex-col border-r border-border bg-card">
-      <div className="border-b border-border p-4">
+    <div className="flex h-full w-72 flex-col border-r border-border bg-card">
+      {/* Header */}
+      <div className="shrink-0 border-b border-border p-4">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <MapPin className="h-4 w-4 text-accent" />
           Regionen
@@ -18,40 +20,35 @@ const RegionSidebar: React.FC = () => {
         </p>
       </div>
 
-      {selectedRegion ? (
-        <div className="flex-1 p-4">
-          <div className="mb-4 flex items-start justify-between">
-            <div>
+      {/* Selected Region Header */}
+      {selectedRegion && (
+        <div className="shrink-0 border-b border-border p-4">
+          <div className="flex items-start justify-between">
+            <div className="min-w-0 flex-1">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">
                 Ausgewählt
               </p>
-              <h3 className="mt-1 text-lg font-bold text-accent">
+              <h3 className="mt-1 truncate text-lg font-bold text-accent">
                 {selectedRegion.name}
               </h3>
             </div>
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-muted-foreground hover:text-foreground"
+              className="ml-2 h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
               onClick={() => setSelectedRegionId(null)}
             >
               <X className="h-4 w-4" />
             </Button>
           </div>
-
-          <div className="rounded-lg border border-dashed border-accent/50 p-4 text-center">
-            <p className="text-sm text-muted-foreground">
-              Indikatoren werden hier angezeigt
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-1 items-center justify-center p-4">
-          <p className="text-center text-sm text-muted-foreground">
-            Klicken Sie auf eine Region, um Details anzuzeigen
-          </p>
         </div>
       )}
+
+      {/* Indicators Panel */}
+      <IndicatorsPanel
+        regionId={selectedRegion?.id ?? null}
+        regionName={selectedRegion?.name ?? null}
+      />
     </div>
   );
 };

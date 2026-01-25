@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -6,8 +6,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -16,8 +14,9 @@ import {
   Area,
   AreaChart,
 } from 'recharts';
+import { Slider } from '@/components/ui/slider';
 import { RegionIndicatorData } from '@/hooks/useRegionIndicators';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Calendar } from 'lucide-react';
 
 interface IndicatorChartDialogProps {
   open: boolean;
@@ -32,29 +31,60 @@ const IndicatorChartDialog: React.FC<IndicatorChartDialogProps> = ({
   data,
   regionName,
 }) => {
+  // Year range state
+  const [yearRange, setYearRange] = useState<[number, number]>([0, 0]);
+
+  // Get min/max years from data
+  const yearBounds = useMemo(() => {
+    if (!data || data.values.length === 0) return { min: 0, max: 0 };
+    const years = data.values.map((v) => v.year);
+    return { min: Math.min(...years), max: Math.max(...years) };
+  }, [data]);
+
+  // Reset year range when data changes
+  useEffect(() => {
+    if (yearBounds.min && yearBounds.max) {
+      setYearRange([yearBounds.min, yearBounds.max]);
+    }
+  }, [yearBounds.min, yearBounds.max]);
+
+  // Filter values based on year range
+  const filteredValues = useMemo(() => {
+    if (!data) return [];
+    return data.values.filter((v) => v.year >= yearRange[0] && v.year <= yearRange[1]);
+  }, [data, yearRange]);
+
   if (!data) return null;
 
-  const { indicator, values, latestValue, latestYear } = data;
+  const { indicator } = data;
 
-  // Calculate statistics
-  const minValue = Math.min(...values.map((v) => v.value));
-  const maxValue = Math.max(...values.map((v) => v.value));
-  const avgValue = values.reduce((sum, v) => sum + v.value, 0) / values.length;
+  // Calculate statistics from filtered values
+  const stats = useMemo(() => {
+    if (filteredValues.length === 0) {
+      return { min: 0, max: 0, latest: 0, latestYear: null, firstYear: null };
+    }
+    const values = filteredValues.map((v) => v.value);
+    return {
+      min: Math.min(...values),
+      max: Math.max(...values),
+      latest: filteredValues[filteredValues.length - 1].value,
+      latestYear: filteredValues[filteredValues.length - 1].year,
+      firstYear: filteredValues[0].year,
+    };
+  }, [filteredValues]);
 
-  // Calculate trend percentage
-  const getTrendPercent = (): { value: number; direction: 'up' | 'down' | 'neutral' } => {
-    if (values.length < 2) return { value: 0, direction: 'neutral' };
-    const first = values[0].value;
-    const last = values[values.length - 1].value;
-    if (first === 0) return { value: 0, direction: 'neutral' };
+  // Calculate trend percentage from filtered data
+  const trend = useMemo(() => {
+    if (filteredValues.length < 2) return { value: 0, direction: 'neutral' as const };
+    const first = filteredValues[0].value;
+    const last = filteredValues[filteredValues.length - 1].value;
+    if (first === 0) return { value: 0, direction: 'neutral' as const };
     const percent = ((last - first) / Math.abs(first)) * 100;
     return {
       value: Math.abs(percent),
       direction: percent > 0 ? 'up' : percent < 0 ? 'down' : 'neutral',
-    };
-  };
-
-  const trend = getTrendPercent();
+    } as { value: number; direction: 'up' | 'down' | 'neutral' };
+  }, [filteredValues]);
 
   const formatValue = (value: number): string => {
     if (Math.abs(value) >= 1000000) {
@@ -92,6 +122,14 @@ const IndicatorChartDialog: React.FC<IndicatorChartDialogProps> = ({
     );
   };
 
+  const handleYearRangeChange = (values: number[]) => {
+    if (values.length === 2) {
+      setYearRange([values[0], values[1]]);
+    }
+  };
+
+  const isFiltered = yearRange[0] !== yearBounds.min || yearRange[1] !== yearBounds.max;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl border-border bg-background">
@@ -111,14 +149,55 @@ const IndicatorChartDialog: React.FC<IndicatorChartDialogProps> = ({
           </div>
         </DialogHeader>
 
+        {/* Year Range Slider */}
+        {yearBounds.max > yearBounds.min && (
+          <div className="rounded-md border border-border bg-muted/30 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <span className="text-xs font-medium text-muted-foreground">Zeitraum</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-accent/20 px-2 py-0.5 text-sm font-bold tabular-nums text-accent">
+                  {yearRange[0]}
+                </span>
+                <span className="text-xs text-muted-foreground">bis</span>
+                <span className="rounded bg-accent/20 px-2 py-0.5 text-sm font-bold tabular-nums text-accent">
+                  {yearRange[1]}
+                </span>
+                {isFiltered && (
+                  <button
+                    onClick={() => setYearRange([yearBounds.min, yearBounds.max])}
+                    className="ml-2 text-xs text-muted-foreground underline hover:text-foreground"
+                  >
+                    Zurücksetzen
+                  </button>
+                )}
+              </div>
+            </div>
+            <Slider
+              value={yearRange}
+              onValueChange={handleYearRangeChange}
+              min={yearBounds.min}
+              max={yearBounds.max}
+              step={1}
+              className="w-full"
+            />
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+              <span>{yearBounds.min}</span>
+              <span>{yearBounds.max}</span>
+            </div>
+          </div>
+        )}
+
         {/* Stats Row */}
         <div className="grid grid-cols-4 gap-3">
           <div className="rounded-md border border-border p-3">
             <p className="text-xs text-muted-foreground">Aktuell</p>
             <p className="mt-1 text-lg font-bold tabular-nums text-foreground">
-              {formatValue(latestValue ?? 0)}
+              {formatValue(stats.latest)}
             </p>
-            <p className="text-xs text-muted-foreground">{latestYear}</p>
+            <p className="text-xs text-muted-foreground">{stats.latestYear}</p>
           </div>
           <div className="rounded-md border border-border p-3">
             <p className="text-xs text-muted-foreground">Trend</p>
@@ -143,20 +222,20 @@ const IndicatorChartDialog: React.FC<IndicatorChartDialogProps> = ({
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              {values[0]?.year}–{latestYear}
+              {stats.firstYear}–{stats.latestYear}
             </p>
           </div>
           <div className="rounded-md border border-border p-3">
             <p className="text-xs text-muted-foreground">Minimum</p>
             <p className="mt-1 text-lg font-bold tabular-nums text-foreground">
-              {formatValue(minValue)}
+              {formatValue(stats.min)}
             </p>
             <p className="text-xs text-muted-foreground">{indicator.unit}</p>
           </div>
           <div className="rounded-md border border-border p-3">
             <p className="text-xs text-muted-foreground">Maximum</p>
             <p className="mt-1 text-lg font-bold tabular-nums text-foreground">
-              {formatValue(maxValue)}
+              {formatValue(stats.max)}
             </p>
             <p className="text-xs text-muted-foreground">{indicator.unit}</p>
           </div>
@@ -166,7 +245,7 @@ const IndicatorChartDialog: React.FC<IndicatorChartDialogProps> = ({
         <div className="mt-4 h-64">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
-              data={values}
+              data={filteredValues}
               margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
             >
               <defs>
@@ -230,7 +309,7 @@ const IndicatorChartDialog: React.FC<IndicatorChartDialogProps> = ({
               </tr>
             </thead>
             <tbody>
-              {values
+              {filteredValues
                 .slice()
                 .reverse()
                 .map((v, i, arr) => {

@@ -1,6 +1,7 @@
-import React from 'react';
-import { useRegionIndicators } from '@/hooks/useRegionIndicators';
+import React, { useState } from 'react';
+import { useRegionIndicators, RegionIndicatorData } from '@/hooks/useRegionIndicators';
 import IndicatorCard from './IndicatorCard';
+import IndicatorChartDialog from './IndicatorChartDialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart3, AlertCircle } from 'lucide-react';
 
@@ -11,6 +12,13 @@ interface IndicatorsPanelProps {
 
 const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName }) => {
   const { data, isLoading, error } = useRegionIndicators(regionId);
+  const [selectedIndicator, setSelectedIndicator] = useState<RegionIndicatorData | null>(null);
+  const [chartOpen, setChartOpen] = useState(false);
+
+  const handleCardClick = (indicator: RegionIndicatorData) => {
+    setSelectedIndicator(indicator);
+    setChartOpen(true);
+  };
 
   if (!regionId) {
     return (
@@ -57,19 +65,32 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Indikatoren
-        </p>
-        <span className="text-xs text-muted-foreground">{data.length} verfügbar</span>
+    <>
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Indikatoren
+          </p>
+          <span className="text-xs text-muted-foreground">{data.length} verfügbar</span>
+        </div>
+        <div className="grid gap-3">
+          {data.map((item) => (
+            <IndicatorCard
+              key={item.indicator.id}
+              data={item}
+              onClick={() => handleCardClick(item)}
+            />
+          ))}
+        </div>
       </div>
-      <div className="grid gap-3">
-        {data.map((item) => (
-          <IndicatorCard key={item.indicator.id} data={item} />
-        ))}
-      </div>
-    </div>
+
+      <IndicatorChartDialog
+        open={chartOpen}
+        onOpenChange={setChartOpen}
+        data={selectedIndicator}
+        regionName={regionName}
+      />
+    </>
   );
 };
 

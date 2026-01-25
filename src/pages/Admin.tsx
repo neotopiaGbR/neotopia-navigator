@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -13,13 +14,13 @@ import { ArrowLeft, RefreshCw, Shield, Users } from 'lucide-react';
 interface UserProfile {
   id: string;
   role: 'admin' | 'kommune' | null;
-  email?: string;
+  email?: string | null;
   created_at?: string;
 }
 
 const Admin = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const { toast } = useToast();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,13 +29,22 @@ const Admin = () => {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, role, created_at')
-        .order('created_at', { ascending: false });
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/admin-users`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+          'apikey': SUPABASE_PUBLISHABLE_KEY,
+        },
+      });
 
-      if (error) throw error;
-      setUsers(data || []);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Fehler beim Laden der Benutzer');
+      }
+
+      setUsers(data.users || []);
     } catch (error: any) {
       toast({
         title: 'Fehler',
@@ -47,8 +57,10 @@ const Admin = () => {
   };
 
   useEffect(() => {
-    fetchUsers();
-  }, []);
+    if (session?.access_token) {
+      fetchUsers();
+    }
+  }, [session?.access_token]);
 
   const updateUserRole = async (userId: string, newRole: 'admin' | 'kommune') => {
     if (userId === user?.id) {
@@ -157,6 +169,7 @@ const Admin = () => {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead>E-Mail</TableHead>
                       <TableHead>Benutzer-ID</TableHead>
                       <TableHead>Aktuelle Rolle</TableHead>
                       <TableHead>Erstellt am</TableHead>
@@ -166,13 +179,18 @@ const Admin = () => {
                   <TableBody>
                     {users.map((profile) => (
                       <TableRow key={profile.id}>
-                        <TableCell className="font-mono text-sm">
-                          {profile.id.slice(0, 8)}...
+                        <TableCell>
+                          {profile.email || (
+                            <span className="text-muted-foreground italic">Keine E-Mail</span>
+                          )}
                           {profile.id === user?.id && (
                             <Badge variant="outline" className="ml-2 text-xs">
                               Sie
                             </Badge>
                           )}
+                        </TableCell>
+                        <TableCell className="font-mono text-sm text-muted-foreground">
+                          {profile.id.slice(0, 8)}...
                         </TableCell>
                         <TableCell>
                           <Badge variant={getRoleBadgeVariant(profile.role)}>

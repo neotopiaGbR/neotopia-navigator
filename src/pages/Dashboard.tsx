@@ -1,11 +1,13 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { RegionProvider } from '@/contexts/RegionContext';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Shield } from 'lucide-react';
+import { Shield, LogOut } from 'lucide-react';
+import RegionMap from '@/components/map/RegionMap';
+import RegionSidebar from '@/components/map/RegionSidebar';
 
-const Dashboard = () => {
+const DashboardContent = () => {
   const navigate = useNavigate();
   const { user, signOut, isAdmin } = useAuth();
 
@@ -15,54 +17,55 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background p-8">
-      <div className="mx-auto max-w-4xl">
-        <header className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-accent">NEOTOPIA</h1>
-            <p className="text-muted-foreground">Navigator Dashboard</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {isAdmin && (
-              <Button
-                variant="outline"
-                onClick={() => navigate('/admin')}
-                className="border-accent text-accent hover:bg-accent hover:text-accent-foreground"
-              >
-                <Shield className="mr-2 h-4 w-4" />
-                Admin
-              </Button>
-            )}
+    <div className="flex h-screen flex-col bg-background">
+      {/* Header */}
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold text-accent">NEOTOPIA</h1>
+          <span className="text-sm text-muted-foreground">Navigator</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="hidden text-sm text-muted-foreground sm:inline">
+            {user?.email}
+          </span>
+          {isAdmin && (
             <Button
-              variant="outline"
-              onClick={handleSignOut}
-              className="border-accent text-accent hover:bg-accent hover:text-accent-foreground"
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/admin')}
+              className="text-accent hover:bg-accent/10"
             >
-              Abmelden
+              <Shield className="mr-1 h-4 w-4" />
+              Admin
             </Button>
-          </div>
-        </header>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleSignOut}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <LogOut className="h-4 w-4" />
+          </Button>
+        </div>
+      </header>
 
-        <Card className="border-border bg-card">
-          <CardHeader>
-            <CardTitle className="text-foreground">Willkommen!</CardTitle>
-            <CardDescription className="text-muted-foreground">
-              Sie sind angemeldet als: {user?.email}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="rounded-lg border border-dashed border-accent/50 p-12 text-center">
-              <p className="text-lg text-muted-foreground">
-                Dashboard-Inhalt wird hier angezeigt
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground/70">
-                Platzhalter für zukünftige Funktionen
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Main Content */}
+      <div className="flex flex-1 overflow-hidden">
+        <RegionSidebar />
+        <main className="flex-1">
+          <RegionMap />
+        </main>
       </div>
     </div>
+  );
+};
+
+const Dashboard = () => {
+  return (
+    <RegionProvider>
+      <DashboardContent />
+    </RegionProvider>
   );
 };
 

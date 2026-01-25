@@ -1,23 +1,54 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import neotopiaLogo from '@/assets/neotopia-logo.svg';
 
+const LOGIN_TIMEOUT_MS = 8000;
+
+type AuthStep = 'idle' | 'submitting' | 'success' | 'error' | 'timeout';
+
+const devLog = (tag: string, ...args: unknown[]) => {
+  if (import.meta.env.DEV) {
+    console.log(`[Login:${tag}]`, ...args);
+  }
+};
+
 const Login = () => {
   const navigate = useNavigate();
-  const { signIn, signUp, resetPassword } = useAuth();
+  const { signIn, signUp, resetPassword, session } = useAuth();
   const { toast } = useToast();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showResetForm, setShowResetForm] = useState(false);
+  
+  // DEV debug state
+  const [authStep, setAuthStep] = useState<AuthStep>('idle');
+  const [lastError, setLastError] = useState<string | null>(null);
+  
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // If already logged in, redirect immediately
+  useEffect(() => {
+    if (session) {
+      devLog('SESSION_EXISTS', 'Redirecting to dashboard');
+      navigate('/dashboard', { replace: true });
+    }
+  }, [session, navigate]);
+
+  const clearTimeoutRef = () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  };
 
   const getErrorMessage = (error: { message: string }): string => {
     const msg = error.message.toLowerCase();
@@ -32,38 +63,79 @@ const Login = () => {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     
+    // Reset state
+    setLoading(true);
+    setAuthStep('submitting');
+    setLastError(null);
+    devLog('LOGIN_START', { email });
+
+    // Set hard timeout
+    timeoutRef.current = setTimeout(() => {
+      devLog('LOGIN_TIMEOUT', { afterMs: LOGIN_TIMEOUT_MS });
+      setAuthStep('timeout');
+      setLastError('Login timeout. Please try again.');
+      setLoading(false);
+      toast({
+        variant: 'destructive',
+        title: 'Zeitüberschreitung',
+        description: 'Login hat zu lange gedauert. Bitte erneut versuchen.',
+      });
+    }, LOGIN_TIMEOUT_MS);
+
     try {
-      const { error } = await signIn(email, password);
+      const { error, session: newSession } = await signIn(email, password);
+      
+      // Clear timeout immediately after response
+      clearTimeoutRef();
       
       if (error) {
         const message = getErrorMessage(error);
-        if (import.meta.env.DEV) {
-          console.error('[Login] Sign in error:', error);
-        }
+        devLog('LOGIN_ERROR', { error });
+        setAuthStep('error');
+        setLastError(message);
         toast({
           variant: 'destructive',
           title: 'Anmeldung fehlgeschlagen',
           description: message,
         });
-      } else {
+        return; // RETURN IMMEDIATELY
+      }
+      
+      if (newSession) {
+        devLog('LOGIN_OK', { userId: newSession.user?.id });
+        setAuthStep('success');
         toast({
           title: 'Erfolgreich angemeldet',
           description: 'Willkommen zurück!',
         });
-        navigate('/dashboard');
+        // IMMEDIATELY navigate - DO NOT wait for profile
+        navigate('/dashboard', { replace: true });
+        return; // RETURN IMMEDIATELY
       }
-    } catch (err) {
-      if (import.meta.env.DEV) {
-        console.error('[Login] Unexpected error:', err);
-      }
+      
+      // Edge case: no error but no session
+      devLog('LOGIN_ERROR', { reason: 'no_session_returned' });
+      setAuthStep('error');
+      setLastError('Keine Session erhalten');
       toast({
         variant: 'destructive',
         title: 'Anmeldung fehlgeschlagen',
-        description: 'Ein unerwarteter Fehler ist aufgetreten.',
+        description: 'Keine Session erhalten. Bitte erneut versuchen.',
+      });
+    } catch (err) {
+      clearTimeoutRef();
+      const message = err instanceof Error ? err.message : 'Ein unerwarteter Fehler ist aufgetreten.';
+      devLog('LOGIN_ERROR', { unexpected: err });
+      setAuthStep('error');
+      setLastError(message);
+      toast({
+        variant: 'destructive',
+        title: 'Anmeldung fehlgeschlagen',
+        description: message,
       });
     } finally {
+      clearTimeoutRef();
       setLoading(false);
     }
   };
@@ -71,33 +143,37 @@ const Login = () => {
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setAuthStep('submitting');
+    setLastError(null);
     
     try {
       const { error } = await signUp(email, password);
       
       if (error) {
-        if (import.meta.env.DEV) {
-          console.error('[Login] Sign up error:', error);
-        }
+        devLog('SIGNUP_ERROR', { error });
+        setAuthStep('error');
+        setLastError(error.message);
         toast({
           variant: 'destructive',
           title: 'Registrierung fehlgeschlagen',
           description: error.message,
         });
       } else {
+        setAuthStep('success');
         toast({
           title: 'Registrierung erfolgreich',
           description: 'Bitte überprüfen Sie Ihre E-Mail zur Bestätigung.',
         });
       }
     } catch (err) {
-      if (import.meta.env.DEV) {
-        console.error('[Login] Unexpected error:', err);
-      }
+      const message = err instanceof Error ? err.message : 'Ein unerwarteter Fehler ist aufgetreten.';
+      devLog('SIGNUP_ERROR', { unexpected: err });
+      setAuthStep('error');
+      setLastError(message);
       toast({
         variant: 'destructive',
         title: 'Registrierung fehlgeschlagen',
-        description: 'Ein unerwarteter Fehler ist aufgetreten.',
+        description: message,
       });
     } finally {
       setLoading(false);
@@ -107,20 +183,23 @@ const Login = () => {
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setAuthStep('submitting');
+    setLastError(null);
     
     try {
       const { error } = await resetPassword(email);
       
       if (error) {
-        if (import.meta.env.DEV) {
-          console.error('[Login] Reset password error:', error);
-        }
+        devLog('RESET_ERROR', { error });
+        setAuthStep('error');
+        setLastError(error.message);
         toast({
           variant: 'destructive',
           title: 'Fehler',
           description: error.message,
         });
       } else {
+        setAuthStep('success');
         toast({
           title: 'E-Mail gesendet',
           description: 'Überprüfen Sie Ihr Postfach für den Passwort-Reset-Link.',
@@ -128,17 +207,33 @@ const Login = () => {
         setShowResetForm(false);
       }
     } catch (err) {
-      if (import.meta.env.DEV) {
-        console.error('[Login] Unexpected error:', err);
-      }
+      const message = err instanceof Error ? err.message : 'Ein unerwarteter Fehler ist aufgetreten.';
+      devLog('RESET_ERROR', { unexpected: err });
+      setAuthStep('error');
+      setLastError(message);
       toast({
         variant: 'destructive',
         title: 'Fehler',
-        description: 'Ein unerwarteter Fehler ist aufgetreten.',
+        description: message,
       });
     } finally {
       setLoading(false);
     }
+  };
+
+  // DEV Debug Box Component
+  const DevDebugBox = () => {
+    if (!import.meta.env.DEV) return null;
+    
+    return (
+      <div className="mt-4 rounded border border-yellow-500/50 bg-yellow-500/10 p-3 font-mono text-xs">
+        <div className="mb-1 font-bold text-yellow-600">DEV DEBUG</div>
+        <div><span className="text-muted-foreground">authStep:</span> <span className="text-foreground">{authStep}</span></div>
+        <div><span className="text-muted-foreground">lastError:</span> <span className="text-red-400">{lastError || 'null'}</span></div>
+        <div><span className="text-muted-foreground">hasSession:</span> <span className="text-foreground">{session ? 'true' : 'false'}</span></div>
+        <div><span className="text-muted-foreground">loading:</span> <span className="text-foreground">{loading ? 'true' : 'false'}</span></div>
+      </div>
+    );
   };
 
   if (showResetForm) {
@@ -165,6 +260,7 @@ const Login = () => {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
+                  disabled={loading}
                   className="border-input bg-background text-foreground"
                 />
               </div>
@@ -180,10 +276,12 @@ const Login = () => {
                 variant="ghost"
                 className="w-full text-muted-foreground hover:text-foreground"
                 onClick={() => setShowResetForm(false)}
+                disabled={loading}
               >
                 Zurück zur Anmeldung
               </Button>
             </form>
+            <DevDebugBox />
           </CardContent>
         </Card>
       </div>
@@ -224,6 +322,7 @@ const Login = () => {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
+                    disabled={loading}
                     className="border-input bg-background text-foreground"
                   />
                 </div>
@@ -236,6 +335,7 @@ const Login = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
+                    disabled={loading}
                     className="border-input bg-background text-foreground"
                   />
                 </div>
@@ -251,6 +351,7 @@ const Login = () => {
                   variant="link"
                   className="w-full text-accent hover:text-accent/80"
                   onClick={() => setShowResetForm(true)}
+                  disabled={loading}
                 >
                   Passwort vergessen?
                 </Button>
@@ -268,6 +369,7 @@ const Login = () => {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
+                    disabled={loading}
                     className="border-input bg-background text-foreground"
                   />
                 </div>
@@ -281,6 +383,7 @@ const Login = () => {
                     onChange={(e) => setPassword(e.target.value)}
                     required
                     minLength={6}
+                    disabled={loading}
                     className="border-input bg-background text-foreground"
                   />
                 </div>
@@ -294,6 +397,7 @@ const Login = () => {
               </form>
             </TabsContent>
           </Tabs>
+          <DevDebugBox />
         </CardContent>
       </Card>
     </div>

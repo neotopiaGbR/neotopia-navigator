@@ -72,8 +72,8 @@ export function useRegionIndicators(
         // Call RPC to get all indicator data for this region (null year = all years)
         const { data: rpcData, error: rpcError } = await supabase
           .rpc('get_region_indicators', { 
-            p_region_id: regionId,
-            p_year: null
+            region_id: regionId,
+            year: null
           });
 
         if (rpcError) throw rpcError;

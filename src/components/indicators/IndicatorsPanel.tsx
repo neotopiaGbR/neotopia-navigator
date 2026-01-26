@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRegionIndicators, RegionIndicatorData } from '@/hooks/useRegionIndicators';
+import { useRegion } from '@/contexts/RegionContext';
 import IndicatorCard from './IndicatorCard';
 import IndicatorChartDialog from './IndicatorChartDialog';
+import YearSelector from './YearSelector';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart3, AlertCircle } from 'lucide-react';
 
@@ -11,9 +13,19 @@ interface IndicatorsPanelProps {
 }
 
 const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName }) => {
-  const { data, isLoading, error } = useRegionIndicators(regionId);
+  const { selectedYear, setSelectedYear, setAvailableYears } = useRegion();
+  const { data, isLoading, error, availableYears } = useRegionIndicators(regionId, selectedYear);
   const [selectedIndicator, setSelectedIndicator] = useState<RegionIndicatorData | null>(null);
   const [chartOpen, setChartOpen] = useState(false);
+
+  // Sync available years to context and set default year
+  useEffect(() => {
+    setAvailableYears(availableYears);
+    if (availableYears.length > 0 && selectedYear === null) {
+      // Default to latest year
+      setSelectedYear(availableYears[0]);
+    }
+  }, [availableYears, selectedYear, setSelectedYear, setAvailableYears]);
 
   const handleCardClick = (indicator: RegionIndicatorData) => {
     setSelectedIndicator(indicator);
@@ -67,17 +79,34 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
   return (
     <>
       <div className="flex-1 overflow-y-auto p-4">
+        {/* Header with Year Selector */}
         <div className="mb-3 flex items-center justify-between">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Indikatoren
           </p>
-          <span className="text-xs text-muted-foreground">{data.length} verfügbar</span>
+          {availableYears.length > 1 && (
+            <YearSelector
+              years={availableYears}
+              selectedYear={selectedYear}
+              onYearChange={setSelectedYear}
+            />
+          )}
         </div>
+        
+        {/* Indicator count */}
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">{data.length} verfügbar</span>
+          {selectedYear && (
+            <span className="text-xs text-accent">Jahr {selectedYear}</span>
+          )}
+        </div>
+
         <div className="grid gap-3">
           {data.map((item) => (
             <IndicatorCard
               key={item.indicator.id}
               data={item}
+              selectedYear={selectedYear}
               onClick={() => handleCardClick(item)}
             />
           ))}

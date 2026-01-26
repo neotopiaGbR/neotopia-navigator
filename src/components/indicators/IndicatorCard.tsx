@@ -4,23 +4,34 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
 interface IndicatorCardProps {
   data: RegionIndicatorData;
+  selectedYear: number | null;
   onClick?: () => void;
 }
 
-const IndicatorCard: React.FC<IndicatorCardProps> = ({ data, onClick }) => {
-  const { indicator, values, latestValue, latestYear } = data;
+const IndicatorCard: React.FC<IndicatorCardProps> = ({ data, selectedYear, onClick }) => {
+  const { 
+    indicator, 
+    values,
+    latestYear,
+    selectedYearValue,
+    delta,
+    deltaPercent,
+    sparklineValues,
+  } = data;
 
-  // Calculate trend (compare last two values if available)
+  // Determine effective year for display
+  const displayYear = selectedYear ?? latestYear;
+  const displayValue = selectedYearValue;
+
+  // Determine trend based on delta
   const getTrend = (): 'up' | 'down' | 'neutral' => {
-    if (values.length < 2) return 'neutral';
-    const prev = values[values.length - 2].value;
-    const curr = values[values.length - 1].value;
-    if (curr > prev) return 'up';
-    if (curr < prev) return 'down';
-    return 'neutral';
+    if (delta === null || delta === 0) return 'neutral';
+    return delta > 0 ? 'up' : 'down';
   };
 
   const trend = getTrend();
+  const hasMultipleYears = values.length > 1;
+  const hasDelta = delta !== null && hasMultipleYears;
 
   const formatValue = (value: number | null): string => {
     if (value === null) return '—';
@@ -31,6 +42,22 @@ const IndicatorCard: React.FC<IndicatorCardProps> = ({ data, onClick }) => {
       return `${(value / 1000).toFixed(1)}K`;
     }
     return value.toLocaleString('de-DE', { maximumFractionDigits: 2 });
+  };
+
+  const formatDelta = (value: number): string => {
+    const sign = value > 0 ? '+' : '';
+    if (Math.abs(value) >= 1000000) {
+      return `${sign}${(value / 1000000).toFixed(1)}M`;
+    }
+    if (Math.abs(value) >= 1000) {
+      return `${sign}${(value / 1000).toFixed(1)}K`;
+    }
+    return `${sign}${value.toLocaleString('de-DE', { maximumFractionDigits: 1 })}`;
+  };
+
+  const formatPercent = (value: number): string => {
+    const sign = value > 0 ? '+' : '';
+    return `${sign}${value.toFixed(1)}%`;
   };
 
   return (
@@ -49,7 +76,7 @@ const IndicatorCard: React.FC<IndicatorCardProps> = ({ data, onClick }) => {
             {indicator.name}
           </p>
         </div>
-        {trend !== 'neutral' && (
+        {hasDelta && trend !== 'neutral' && (
           <div
             className={`ml-2 flex h-5 w-5 shrink-0 items-center justify-center rounded ${
               trend === 'up' ? 'text-accent' : 'text-destructive'
@@ -67,36 +94,73 @@ const IndicatorCard: React.FC<IndicatorCardProps> = ({ data, onClick }) => {
       {/* Value */}
       <div className="flex items-baseline gap-1.5">
         <span className="text-2xl font-bold tabular-nums text-foreground">
-          {formatValue(latestValue)}
+          {formatValue(displayValue)}
         </span>
         <span className="text-xs text-muted-foreground">{indicator.unit}</span>
       </div>
 
+      {/* Delta since previous year */}
+      {hasDelta && (
+        <div className="mt-1 flex items-center gap-2">
+          <span
+            className={`text-xs font-medium tabular-nums ${
+              trend === 'up'
+                ? 'text-accent'
+                : trend === 'down'
+                ? 'text-destructive'
+                : 'text-muted-foreground'
+            }`}
+          >
+            {formatDelta(delta!)}
+          </span>
+          {deltaPercent !== null && Math.abs(deltaPercent) < 1000 && (
+            <span
+              className={`text-xs tabular-nums ${
+                trend === 'up'
+                  ? 'text-accent/70'
+                  : trend === 'down'
+                  ? 'text-destructive/70'
+                  : 'text-muted-foreground'
+              }`}
+            >
+              ({formatPercent(deltaPercent)})
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground">vs. Vorjahr</span>
+        </div>
+      )}
+
       {/* Footer */}
       <div className="mt-2 flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
-          {latestYear ? `Stand ${latestYear}` : 'Keine Daten'}
+          {displayYear ? `Stand ${displayYear}` : 'Keine Daten'}
         </span>
-        {values.length > 1 && (
+        {hasMultipleYears && (
           <span className="text-xs text-muted-foreground">
             {values.length} Jahre
           </span>
         )}
       </div>
 
-      {/* Mini sparkline indicator (visual only) */}
-      {values.length > 1 && (
+      {/* Mini sparkline (last 5 years) */}
+      {sparklineValues.length > 1 && (
         <div className="mt-2 flex h-4 items-end gap-px">
-          {values.slice(-8).map((v, i) => {
-            const max = Math.max(...values.slice(-8).map((x) => x.value));
-            const min = Math.min(...values.slice(-8).map((x) => x.value));
+          {sparklineValues.map((v, i) => {
+            const max = Math.max(...sparklineValues.map((x) => x.value));
+            const min = Math.min(...sparklineValues.map((x) => x.value));
             const range = max - min || 1;
             const height = ((v.value - min) / range) * 100;
+            const isLatest = i === sparklineValues.length - 1;
             return (
               <div
-                key={i}
-                className="flex-1 rounded-sm bg-accent/30 transition-colors group-hover:bg-accent/50"
+                key={v.year}
+                className={`flex-1 rounded-sm transition-colors ${
+                  isLatest
+                    ? 'bg-accent/60 group-hover:bg-accent/80'
+                    : 'bg-accent/30 group-hover:bg-accent/50'
+                }`}
                 style={{ height: `${Math.max(height, 10)}%` }}
+                title={`${v.year}: ${formatValue(v.value)}`}
               />
             );
           })}

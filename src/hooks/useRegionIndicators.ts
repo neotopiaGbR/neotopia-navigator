@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
 export interface Indicator {
@@ -21,12 +21,10 @@ export interface RegionIndicatorData {
   values: { year: number; value: number }[];
   latestValue: number | null;
   latestYear: number | null;
-  // For selected year display
   selectedYearValue: number | null;
   previousYearValue: number | null;
   delta: number | null;
   deltaPercent: number | null;
-  // Sparkline data (last 5 years from selected year)
   sparklineValues: { year: number; value: number }[];
 }
 
@@ -49,12 +47,14 @@ export function useRegionIndicators(
   regionId: string | null,
   selectedYear: number | null
 ): UseRegionIndicatorsResult {
+  // ALL hooks called unconditionally at top level
   const [data, setData] = useState<RegionIndicatorData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [availableYears, setAvailableYears] = useState<number[]>([]);
 
   useEffect(() => {
+    // Early return INSIDE useEffect, not before hooks
     if (!regionId) {
       setData([]);
       setError(null);
@@ -62,27 +62,27 @@ export function useRegionIndicators(
       return;
     }
 
-    const fetchIndicators = async () => {
-      setIsLoading(true);
-      setError(null);
+    let cancelled = false;
 
+    const load = async () => {
       try {
-        // Call RPC to get all indicator data for this region
-        // We need to fetch all years first to populate availableYears and sparklines
+        setIsLoading(true);
+        setError(null);
+
+        // Call RPC to get all indicator data for this region (null year = all years)
         const { data: rpcData, error: rpcError } = await supabase
           .rpc('get_region_indicators', { 
             p_region_id: regionId,
-            p_year: null // Pass null to get all years
+            p_year: null
           });
 
-        if (rpcError) {
-          throw rpcError;
-        }
+        if (rpcError) throw rpcError;
+
+        if (cancelled) return;
 
         if (!rpcData || rpcData.length === 0) {
           setData([]);
           setAvailableYears([]);
-          setIsLoading(false);
           return;
         }
 
@@ -92,7 +92,10 @@ export function useRegionIndicators(
         const yearsSet = new Set<number>();
         rows.forEach((row) => yearsSet.add(row.year));
         const years = Array.from(yearsSet).sort((a, b) => b - a);
-        setAvailableYears(years);
+        
+        if (!cancelled) {
+          setAvailableYears(years);
+        }
 
         // Group by indicator code
         const indicatorMap = new Map<string, {
@@ -106,7 +109,7 @@ export function useRegionIndicators(
           if (!indicatorMap.has(code)) {
             indicatorMap.set(code, {
               indicator: {
-                id: code, // Use code as ID since RPC doesn't return UUID
+                id: code,
                 code: row.indicator_code,
                 name: row.indicator_name,
                 unit: row.unit,
@@ -123,26 +126,22 @@ export function useRegionIndicators(
         }
 
         // Convert to RegionIndicatorData with computed fields
+        const effectiveYear = selectedYear ?? years[0] ?? null;
+        
         const processedData: RegionIndicatorData[] = Array.from(indicatorMap.values()).map((entry) => {
           const { indicator, values } = entry;
           
-          // Sort values by year
           const sortedValues = [...values].sort((a, b) => a.year - b.year);
           const latestYear = sortedValues.length > 0 ? sortedValues[sortedValues.length - 1].year : null;
           const latestValue = sortedValues.length > 0 ? sortedValues[sortedValues.length - 1].value : null;
           
-          const effectiveYear = selectedYear ?? latestYear;
-          
-          // Find value for selected year
           const selectedYearData = sortedValues.find((v) => v.year === effectiveYear);
           const selectedYearValue = selectedYearData?.value ?? null;
           
-          // Find previous year value
           const previousYear = effectiveYear ? effectiveYear - 1 : null;
           const previousYearData = previousYear ? sortedValues.find((v) => v.year === previousYear) : null;
           const previousYearValue = previousYearData?.value ?? null;
           
-          // Calculate delta
           let delta: number | null = null;
           let deltaPercent: number | null = null;
           
@@ -153,7 +152,6 @@ export function useRegionIndicators(
             }
           }
           
-          // Get sparkline values (last 5 years up to and including effective year)
           let sparklineValues: { year: number; value: number }[] = [];
           if (effectiveYear !== null) {
             sparklineValues = sortedValues
@@ -174,19 +172,29 @@ export function useRegionIndicators(
           };
         });
 
-        setData(processedData);
+        if (!cancelled) {
+          setData(processedData);
+        }
       } catch (err) {
         if (import.meta.env.DEV) {
           console.error('[useRegionIndicators] RPC error:', err);
         }
-        setError(err instanceof Error ? err.message : 'Failed to load indicators');
-        setData([]);
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load indicators');
+          setData([]);
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     };
 
-    fetchIndicators();
+    load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [regionId, selectedYear]);
 
   return { data, isLoading, error, availableYears };

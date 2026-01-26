@@ -10,7 +10,7 @@ interface ClimateIndicatorCardProps {
 const ClimateIndicatorCard: React.FC<ClimateIndicatorCardProps> = ({ data, onClick }) => {
   const { indicator, baselineValue, projectedValue, absoluteChange, relativeChange, scenario, timeHorizon } = data;
 
-  const isProjection = scenario !== 'baseline' && timeHorizon !== 'baseline';
+  const isProjection = scenario !== 'historical' && timeHorizon !== 'baseline';
   const hasChange = absoluteChange !== null && isProjection;
 
   // Determine if change is problematic (for climate, increases are usually bad)
@@ -35,12 +35,14 @@ const ClimateIndicatorCard: React.FC<ClimateIndicatorCardProps> = ({ data, onCli
 
   const getCategoryIcon = () => {
     switch (indicator.category) {
-      case 'heat':
+      case 'temperature':
         return <ThermometerSun className="h-4 w-4" />;
       case 'extremes':
         return <AlertTriangle className="h-4 w-4" />;
-      case 'water':
+      case 'precipitation':
         return <Droplets className="h-4 w-4" />;
+      default:
+        return <ThermometerSun className="h-4 w-4" />;
     }
   };
 

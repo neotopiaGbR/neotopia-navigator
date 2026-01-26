@@ -1,22 +1,34 @@
 import React, { useState } from 'react';
 import { useRegion } from '@/contexts/RegionContext';
 import { useClimateIndicators } from '@/hooks/useClimateIndicators';
-import { ClimateScenario, ClimateTimeHorizon, CLIMATE_CATEGORY_LABELS, CLIMATE_INDICATORS } from './types';
+import {
+  ClimateScenario,
+  ClimateTimeHorizon,
+  CLIMATE_CATEGORY_LABELS,
+  CLIMATE_INDICATORS,
+  CLIMATE_DATA_ATTRIBUTION,
+  ClimateIndicatorCategory,
+} from './types';
 import ClimateScenarioSelector from './ClimateScenarioSelector';
 import ClimateTimeHorizonSelector from './ClimateTimeHorizonSelector';
 import ClimateIndicatorCard from './ClimateIndicatorCard';
 import ClimateAnalogCard from './ClimateAnalogCard';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Thermometer, CloudSun, Info } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Thermometer, CloudSun, Info, RefreshCw, ExternalLink } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+
+const CATEGORY_ORDER: ClimateIndicatorCategory[] = ['temperature', 'extremes', 'precipitation', 'urban'];
 
 const ClimateProjectionPanel: React.FC = () => {
   const { selectedRegion, selectedRegionId } = useRegion();
-  
-  const [scenario, setScenario] = useState<ClimateScenario>('ssp245');
-  const [timeHorizon, setTimeHorizon] = useState<ClimateTimeHorizon>('2031-2060');
 
-  const { data, climateAnalog, isLoading, hasData } = useClimateIndicators(
+  const [scenario, setScenario] = useState<ClimateScenario>('ssp245');
+  const [timeHorizon, setTimeHorizon] = useState<ClimateTimeHorizon>('near');
+  const [showAttribution, setShowAttribution] = useState(false);
+
+  const { data, climateAnalog, isLoading, error, hasData, refetch } = useClimateIndicators(
     selectedRegionId,
     scenario,
     timeHorizon
@@ -24,10 +36,12 @@ const ClimateProjectionPanel: React.FC = () => {
 
   // Group indicators by category
   const groupedData = React.useMemo(() => {
-    const groups: Record<string, typeof data> = {
-      heat: [],
+    const groups: Record<ClimateIndicatorCategory, typeof data> = {
+      temperature: [],
       extremes: [],
-      water: [],
+      precipitation: [],
+      urban: [],
+      analog: [],
     };
 
     for (const item of data) {
@@ -59,10 +73,24 @@ const ClimateProjectionPanel: React.FC = () => {
         <Skeleton className="h-9 w-full" />
         <Skeleton className="h-9 w-full" />
         <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-24 w-full rounded-md" />
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-28 w-full rounded-md" />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center p-6 text-center">
+        <CloudSun className="mb-3 h-8 w-8 text-destructive/50" />
+        <p className="mb-3 text-sm text-destructive">{error}</p>
+        <Button variant="outline" size="sm" onClick={refetch}>
+          <RefreshCw className="mr-2 h-4 w-4" />
+          Erneut versuchen
+        </Button>
       </div>
     );
   }
@@ -84,14 +112,11 @@ const ClimateProjectionPanel: React.FC = () => {
 
       {/* Controls */}
       <div className="shrink-0 space-y-3 border-b border-border p-4">
-        <ClimateScenarioSelector
-          value={scenario}
-          onChange={setScenario}
-        />
+        <ClimateScenarioSelector value={scenario} onChange={setScenario} />
         <ClimateTimeHorizonSelector
           value={timeHorizon}
           onChange={setTimeHorizon}
-          disabled={scenario === 'baseline'}
+          disabled={scenario === 'historical'}
         />
       </div>
 
@@ -106,22 +131,22 @@ const ClimateProjectionPanel: React.FC = () => {
                 Klimaprojektionen werden hier angezeigt, sobald Daten geladen sind.
               </p>
               <p className="mt-2 text-xs text-muted-foreground">
-                Datenquellen: Copernicus ERA5-Land, CMIP6
+                Datenquellen: Copernicus ERA5-Land, EURO-CORDEX
               </p>
             </div>
           )}
 
           {/* Climate Analog Card */}
-          {(hasData || scenario !== 'baseline') && (
+          {(hasData || scenario !== 'historical') && (
             <ClimateAnalogCard result={climateAnalog} />
           )}
 
           {/* Indicator Cards by Category */}
           {hasData && (
             <>
-              {(['heat', 'extremes', 'water'] as const).map((category) => {
+              {CATEGORY_ORDER.map((category) => {
                 const categoryData = groupedData[category];
-                if (categoryData.length === 0) return null;
+                if (!categoryData || categoryData.length === 0) return null;
 
                 return (
                   <div key={category}>
@@ -140,19 +165,51 @@ const ClimateProjectionPanel: React.FC = () => {
           )}
 
           {/* Data sources info */}
-          <div className="rounded-md bg-muted/30 p-3">
-            <div className="flex items-start gap-2">
-              <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <div className="text-xs text-muted-foreground">
-                <p className="font-medium">Datenquellen:</p>
-                <ul className="mt-1 list-inside list-disc space-y-0.5">
-                  <li>Baseline: Copernicus ERA5-Land (1991–2020)</li>
-                  <li>Projektionen: CMIP6 (SSP-Szenarien)</li>
-                  <li>Auflösung: 1 km EU-Raster (EPSG:3035)</li>
-                </ul>
+          <Collapsible open={showAttribution} onOpenChange={setShowAttribution}>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" className="w-full justify-start text-xs">
+                <Info className="mr-2 h-3.5 w-3.5" />
+                Datenquellen & Lizenzen
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="mt-2 rounded-md bg-muted/30 p-3 text-xs text-muted-foreground">
+                <div className="space-y-3">
+                  <div>
+                    <p className="font-medium text-foreground">Baseline (1991–2020)</p>
+                    <p>{CLIMATE_DATA_ATTRIBUTION.baseline.source}</p>
+                    <p>{CLIMATE_DATA_ATTRIBUTION.baseline.dataset}</p>
+                    <p>Lizenz: {CLIMATE_DATA_ATTRIBUTION.baseline.license}</p>
+                    <a
+                      href={CLIMATE_DATA_ATTRIBUTION.baseline.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-accent hover:underline"
+                    >
+                      Datensatz
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">Projektionen</p>
+                    <p>{CLIMATE_DATA_ATTRIBUTION.projections.source}</p>
+                    <p>{CLIMATE_DATA_ATTRIBUTION.projections.dataset}</p>
+                    <p>Szenarien: {CLIMATE_DATA_ATTRIBUTION.projections.scenarios.join(', ')}</p>
+                    <p>Lizenz: {CLIMATE_DATA_ATTRIBUTION.projections.license}</p>
+                    <a
+                      href={CLIMATE_DATA_ATTRIBUTION.projections.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-accent hover:underline"
+                    >
+                      Datensatz
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            </CollapsibleContent>
+          </Collapsible>
         </div>
       </ScrollArea>
     </div>

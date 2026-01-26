@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -25,12 +25,13 @@ import type { DataSource } from '@/types/dataModule';
 import { toast } from '@/hooks/use-toast';
 
 const formSchema = z.object({
+  key: z.string().min(1, 'Key ist erforderlich'),
   name: z.string().min(1, 'Name ist erforderlich'),
   description: z.string().optional(),
+  homepage: z.string().url('Ungültige URL').optional().or(z.literal('')),
   license_name: z.string().min(1, 'Lizenzname ist erforderlich'),
   license_url: z.string().url('Ungültige URL').optional().or(z.literal('')),
   attribution_text: z.string().min(1, 'Quellenangabe ist erforderlich'),
-  website_url: z.string().url('Ungültige URL').optional().or(z.literal('')),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -50,14 +51,39 @@ export function DataSourceFormDialog({ open, onOpenChange, source }: DataSourceF
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
+      key: source?.key || '',
       name: source?.name || '',
       description: source?.description || '',
+      homepage: source?.homepage || '',
       license_name: source?.license_name || '',
       license_url: source?.license_url || '',
       attribution_text: source?.attribution_text || '',
-      website_url: source?.website_url || '',
     },
   });
+
+  useEffect(() => {
+    if (source) {
+      form.reset({
+        key: source.key || '',
+        name: source.name || '',
+        description: source.description || '',
+        homepage: source.homepage || '',
+        license_name: source.license_name || '',
+        license_url: source.license_url || '',
+        attribution_text: source.attribution_text || '',
+      });
+    } else {
+      form.reset({
+        key: '',
+        name: '',
+        description: '',
+        homepage: '',
+        license_name: '',
+        license_url: '',
+        attribution_text: '',
+      });
+    }
+  }, [source, form]);
 
   async function onSubmit(values: FormValues) {
     setIsSubmitting(true);
@@ -65,19 +91,24 @@ export function DataSourceFormDialog({ open, onOpenChange, source }: DataSourceF
       if (isEditing && source) {
         await updateSource.mutateAsync({
           id: source.id,
-          ...values,
+          key: values.key,
+          name: values.name,
+          description: values.description || null,
+          homepage: values.homepage || null,
+          license_name: values.license_name,
           license_url: values.license_url || null,
-          website_url: values.website_url || null,
+          attribution_text: values.attribution_text,
         });
         toast({ title: 'Datenquelle aktualisiert' });
       } else {
         await createSource.mutateAsync({
+          key: values.key,
           name: values.name,
-          license_name: values.license_name,
-          attribution_text: values.attribution_text,
           description: values.description,
-          license_url: values.license_url || undefined,
-          website_url: values.website_url || undefined,
+          homepage: values.homepage,
+          license_name: values.license_name,
+          license_url: values.license_url,
+          attribution_text: values.attribution_text,
         });
         toast({ title: 'Datenquelle erstellt' });
       }
@@ -109,19 +140,34 @@ export function DataSourceFormDialog({ open, onOpenChange, source }: DataSourceF
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="z.B. Copernicus Climate Data Store" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="key"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Key</FormLabel>
+                    <FormControl>
+                      <Input placeholder="z.B. copernicus_cds" {...field} disabled={isEditing} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="z.B. Copernicus CDS" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
             <FormField
               control={form.control}
               name="description"
@@ -130,6 +176,19 @@ export function DataSourceFormDialog({ open, onOpenChange, source }: DataSourceF
                   <FormLabel>Beschreibung (optional)</FormLabel>
                   <FormControl>
                     <Textarea placeholder="Kurze Beschreibung der Datenquelle" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="homepage"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Homepage (optional)</FormLabel>
+                  <FormControl>
+                    <Input placeholder="https://..." {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -174,19 +233,6 @@ export function DataSourceFormDialog({ open, onOpenChange, source }: DataSourceF
                       placeholder="z.B. © Copernicus Climate Change Service 2024"
                       {...field}
                     />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="website_url"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Website (optional)</FormLabel>
-                  <FormControl>
-                    <Input placeholder="https://..." {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

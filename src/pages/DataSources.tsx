@@ -71,7 +71,7 @@ function SourceProductsDialog({
               {products.map((product) => (
                 <TableRow key={product.id}>
                   <TableCell className="font-medium">{product.name}</TableCell>
-                  <TableCell>{product.resolution || '–'}</TableCell>
+                  <TableCell>{product.spatial_resolution || '–'}</TableCell>
                   <TableCell>{product.temporal_coverage || '–'}</TableCell>
                   <TableCell>
                     <ImportStatusBadge status={product.latest_import?.status} />

@@ -1,30 +1,23 @@
 import React from 'react';
 import { useRegion } from '@/contexts/RegionContext';
-import { MapPin, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import IndicatorsPanel from '@/components/indicators/IndicatorsPanel';
 import IndicatorMultiSelect from '@/components/indicators/IndicatorMultiSelect';
 import ComparisonSelector from '@/components/indicators/ComparisonSelector';
 import AddressSearch from './AddressSearch';
+import RegionList from './RegionList';
 
 const RegionSidebar: React.FC = () => {
-  const { selectedRegion, setSelectedRegionId, regions } = useRegion();
+  const { selectedRegion, setSelectedRegionId } = useRegion();
 
   return (
     <div className="flex h-full w-72 flex-col border-r border-border bg-card">
       {/* Address Search */}
       <AddressSearch />
 
-      {/* Header */}
-      <div className="shrink-0 border-b border-border p-4">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <MapPin className="h-4 w-4 text-accent" />
-          Regionen
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {regions.length} Region{regions.length !== 1 ? 'en' : ''} geladen
-        </p>
-      </div>
+      {/* Loaded Regions List */}
+      <RegionList />
 
       {/* Selected Region Header */}
       {selectedRegion && (

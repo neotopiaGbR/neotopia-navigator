@@ -9,6 +9,8 @@ export interface Region {
 interface RegionContextType {
   regions: Region[];
   setRegions: (regions: Region[]) => void;
+  removeRegion: (id: string) => void;
+  clearAllRegions: () => void;
   selectedRegionId: string | null;
   setSelectedRegionId: (id: string | null) => void;
   selectedRegion: Region | null;
@@ -40,6 +42,30 @@ export const RegionProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const selectedRegion = regions.find((r) => r.id === selectedRegionId) || null;
   const comparisonRegion = regions.find((r) => r.id === comparisonRegionId) || null;
 
+  // Remove a single region
+  const removeRegion = (id: string) => {
+    // Clear selection if removing selected region
+    if (id === selectedRegionId) {
+      setSelectedRegionId(null);
+      setSelectedYear(null);
+      setAvailableYears([]);
+    }
+    // Clear comparison if removing comparison region
+    if (id === comparisonRegionId) {
+      setComparisonRegionId(null);
+    }
+    setRegions(regions.filter((r) => r.id !== id));
+  };
+
+  // Clear all regions
+  const clearAllRegions = () => {
+    setSelectedRegionId(null);
+    setComparisonRegionId(null);
+    setSelectedYear(null);
+    setAvailableYears([]);
+    setRegions([]);
+  };
+
   // Reset year when region changes
   const handleSetSelectedRegionId = (id: string | null) => {
     if (id !== selectedRegionId) {
@@ -62,6 +88,8 @@ export const RegionProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       value={{
         regions,
         setRegions,
+        removeRegion,
+        clearAllRegions,
         selectedRegionId,
         setSelectedRegionId: handleSetSelectedRegionId,
         selectedRegion,

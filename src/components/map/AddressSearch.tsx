@@ -52,8 +52,11 @@ const AddressSearch: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Nominatim search with debounce
-  const searchNominatim = useCallback(async (searchQuery: string, signal: AbortSignal) => {
+  // Nominatim search with debounce and retry logic
+  const searchNominatim = useCallback(async (searchQuery: string, signal: AbortSignal, retryCount = 0) => {
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY = 1000; // 1 second
+
     if (searchQuery.length < 3) {
       setSuggestions([]);
       return;
@@ -73,18 +76,38 @@ const AddressSearch: React.FC = () => {
         }
       );
 
+      // Handle rate limiting with retry
+      if (response.status === 503) {
+        if (retryCount < MAX_RETRIES) {
+          setError(`Server überlastet, Versuch ${retryCount + 2}/${MAX_RETRIES + 1}…`);
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)));
+          return searchNominatim(searchQuery, signal, retryCount + 1);
+        }
+        throw new Error('SERVICE_OVERLOADED');
+      }
+
       if (!response.ok) {
-        throw new Error('Nominatim request failed');
+        throw new Error('REQUEST_FAILED');
       }
 
       const data: NominatimResult[] = await response.json();
       setSuggestions(data);
       setShowSuggestions(data.length > 0);
+      setError(null);
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
-        setError('Adresssuche fehlgeschlagen');
-        setSuggestions([]);
+      if ((err as Error).name === 'AbortError') {
+        return; // Silently ignore aborted requests
       }
+      
+      const errorMessage = (err as Error).message;
+      if (errorMessage === 'SERVICE_OVERLOADED') {
+        setError('Nominatim überlastet – bitte in einigen Sekunden erneut versuchen');
+      } else if (errorMessage === 'REQUEST_FAILED') {
+        setError('Adresssuche fehlgeschlagen – bitte erneut versuchen');
+      } else {
+        setError('Netzwerkfehler – Internetverbindung prüfen');
+      }
+      setSuggestions([]);
     } finally {
       setIsSearching(false);
     }

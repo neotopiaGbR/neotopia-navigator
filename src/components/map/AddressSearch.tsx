@@ -140,7 +140,8 @@ const AddressSearch: React.FC = () => {
         throw new Error(rpcError.message);
       }
 
-      const result = data as GridResult;
+      // RPC returns array, take first result
+      const result = (data && data.length > 0 ? data[0] : null) as GridResult | null;
       
       if (!result || !result.region_id) {
         throw new Error('No region returned');

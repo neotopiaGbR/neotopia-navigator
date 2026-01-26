@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useRegion } from '@/contexts/RegionContext';
 import {
   ClimateScenario,
   ClimateTimeHorizon,
@@ -19,15 +20,27 @@ interface UseClimateIndicatorsResult {
   error: string | null;
   hasData: boolean;
   refetch: () => void;
+  datasetsUsed: string[];
 }
 
 interface RpcClimateRow {
   indicator_code: string;
+  indicator_name?: string;
   value: number;
+  unit?: string;
   scenario: string | null;
   period_start: number;
   period_end: number;
   is_baseline: boolean;
+  dataset_key?: string;
+  attribution?: string;
+}
+
+interface ClimateApiResponse {
+  indicators: RpcClimateRow[];
+  datasets_used: string[];
+  cached: boolean;
+  computed_at: string;
 }
 
 export function useClimateIndicators(
@@ -35,21 +48,24 @@ export function useClimateIndicators(
   scenario: ClimateScenario,
   timeHorizon: ClimateTimeHorizon
 ): UseClimateIndicatorsResult {
+  const { setDatasetsUsed } = useRegion();
   const [rawData, setRawData] = useState<ClimateIndicatorValue[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchKey, setFetchKey] = useState(0);
+  const [localDatasetsUsed, setLocalDatasetsUsed] = useState<string[]>([]);
 
   const refetch = useCallback(() => setFetchKey((k) => k + 1), []);
 
   // Get time horizon config
   const timeHorizonConfig = CLIMATE_TIME_HORIZONS.find((h) => h.value === timeHorizon);
 
-  // Fetch climate data via Edge Function RPC
+  // Fetch climate data via Edge Function
   useEffect(() => {
     if (!regionId) {
       setRawData([]);
       setError(null);
+      setLocalDatasetsUsed([]);
       return;
     }
 
@@ -60,76 +76,56 @@ export function useClimateIndicators(
         setIsLoading(true);
         setError(null);
 
-        // Call the climate indicators RPC/Edge Function
-        // This handles caching, fetching from CDS, and computing indicators
-        const { data: rpcData, error: rpcError } = await supabase.rpc(
-          'get_or_compute_climate_indicators',
+        // Call the edge function directly
+        const { data: apiData, error: apiError } = await supabase.functions.invoke(
+          'get-climate-indicators',
           {
-            p_region_id: regionId,
-            p_scenario: scenario === 'historical' ? null : scenario,
-            p_period_start: timeHorizonConfig?.periodStart ?? 1991,
-            p_period_end: timeHorizonConfig?.periodEnd ?? 2020,
+            body: {
+              p_region_id: regionId,
+              p_scenario: scenario === 'historical' ? null : scenario,
+              p_period_start: timeHorizonConfig?.periodStart ?? 1991,
+              p_period_end: timeHorizonConfig?.periodEnd ?? 2020,
+            },
           }
         );
 
         if (import.meta.env.DEV) {
-          console.log('[useClimateIndicators] RPC response:', {
+          console.log('[useClimateIndicators] API response:', {
             regionId,
             scenario,
             timeHorizon,
-            data: rpcData,
-            error: rpcError,
+            data: apiData,
+            error: apiError,
           });
         }
 
-        if (rpcError) {
-          // Fallback to legacy RPC if new one doesn't exist
-          if (rpcError.code === '42883' || rpcError.message?.includes('does not exist')) {
-            const { data: legacyData, error: legacyError } = await supabase.rpc(
-              'get_climate_indicators',
-              { p_region_id: regionId }
-            );
-
-            if (legacyError) {
-              if (legacyError.code === '42883') {
-                // No RPC available yet - show empty state
-                if (!cancelled) {
-                  setRawData([]);
-                  setError(null);
-                }
-                return;
-              }
-              throw legacyError;
-            }
-
-            if (!cancelled && legacyData) {
-              const rows = legacyData as RpcClimateRow[];
-              const values: ClimateIndicatorValue[] = rows.map((row) => ({
-                indicator_code: row.indicator_code,
-                value: Number(row.value),
-                scenario: (row.scenario as ClimateScenario) ?? 'historical',
-                period_start: row.period_start,
-                period_end: row.period_end,
-                is_baseline: row.is_baseline,
-              }));
-              setRawData(values);
-            }
-            return;
-          }
-          throw rpcError;
+        if (apiError) {
+          throw apiError;
         }
 
         if (cancelled) return;
 
-        if (!rpcData || (Array.isArray(rpcData) && rpcData.length === 0)) {
-          setRawData([]);
-          return;
+        // Handle the structured response
+        const response = apiData as ClimateApiResponse | RpcClimateRow[];
+        
+        let rows: RpcClimateRow[] = [];
+        let datasets: string[] = [];
+
+        if (Array.isArray(response)) {
+          // Legacy array format
+          rows = response;
+          datasets = ['copernicus_era5_land'];
+        } else if (response && 'indicators' in response) {
+          // New structured format
+          rows = response.indicators || [];
+          datasets = response.datasets_used || [];
         }
 
-        // Handle both array and object response formats
-        const rows: RpcClimateRow[] = Array.isArray(rpcData)
-          ? rpcData
-          : rpcData.indicators || [];
+        if (rows.length === 0) {
+          setRawData([]);
+          setLocalDatasetsUsed([]);
+          return;
+        }
 
         const values: ClimateIndicatorValue[] = rows.map((row) => ({
           indicator_code: row.indicator_code,
@@ -142,6 +138,9 @@ export function useClimateIndicators(
 
         if (!cancelled) {
           setRawData(values);
+          setLocalDatasetsUsed(datasets);
+          // Update global context for attribution panel
+          setDatasetsUsed(datasets);
         }
       } catch (err) {
         if (import.meta.env.DEV) {
@@ -150,6 +149,7 @@ export function useClimateIndicators(
         if (!cancelled) {
           setError('Klimadaten konnten nicht geladen werden. Bitte versuchen Sie es später erneut.');
           setRawData([]);
+          setLocalDatasetsUsed([]);
         }
       } finally {
         if (!cancelled) {
@@ -163,7 +163,7 @@ export function useClimateIndicators(
     return () => {
       cancelled = true;
     };
-  }, [regionId, scenario, timeHorizon, timeHorizonConfig, fetchKey]);
+  }, [regionId, scenario, timeHorizon, timeHorizonConfig, fetchKey, setDatasetsUsed]);
 
   // Process data based on selected scenario and time horizon
   const data = useMemo((): ClimateIndicatorData[] => {
@@ -334,5 +334,5 @@ export function useClimateIndicators(
 
   const hasData = rawData.length > 0;
 
-  return { data, climateAnalog, isLoading, error, hasData, refetch };
+  return { data, climateAnalog, isLoading, error, hasData, refetch, datasetsUsed: localDatasetsUsed };
 }

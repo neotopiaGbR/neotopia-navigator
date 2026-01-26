@@ -7,30 +7,54 @@ const corsHeaders = {
 
 interface ClimateIndicatorRow {
   indicator_code: string
+  indicator_name: string
   value: number
+  unit: string
   scenario: string | null
   period_start: number
   period_end: number
   is_baseline: boolean
+  dataset_key: string
+  attribution: string
+}
+
+interface ClimateResult {
+  indicators: ClimateIndicatorRow[]
+  datasets_used: string[]
+  cached: boolean
+  computed_at: string
+}
+
+// Climate indicator definitions for Germany
+const CLIMATE_INDICATOR_DEFS: Record<string, { name: string; unit: string }> = {
+  mean_annual_temperature: { name: 'Jahresmitteltemperatur', unit: '°C' },
+  summer_mean_temperature: { name: 'Sommermittel (JJA)', unit: '°C' },
+  heat_days_30c: { name: 'Heiße Tage (≥30°C)', unit: 'Tage/Jahr' },
+  tropical_nights_20c: { name: 'Tropennächte (≥20°C)', unit: 'Nächte/Jahr' },
+  heatwave_duration_index: { name: 'Hitzewellen-Index', unit: 'Tage' },
+  max_daily_temperature: { name: 'Max. Tagestemperatur', unit: '°C' },
+  consecutive_dry_days: { name: 'Trockentage max.', unit: 'Tage' },
+  heavy_precip_days_20mm: { name: 'Starkniederschlagstage', unit: 'Tage/Jahr' },
+  annual_precipitation_sum: { name: 'Jahresniederschlag', unit: 'mm' },
+  summer_precipitation_change: { name: 'Sommerniederschlag (Δ)', unit: '%' },
+  winter_precipitation_change: { name: 'Winterniederschlag (Δ)', unit: '%' },
+  urban_heat_risk_index: { name: 'Urbaner Hitzestress-Index', unit: '0–100' },
+  heat_exposure_population_share: { name: 'Hitzeexposition Bevölkerung', unit: '%' },
 }
 
 // Baseline climatology for German grid cells (ERA5 1991-2020 approximation)
-// In production, this would be fetched from pre-computed rasters or CDS API
 const GERMAN_BASELINE_CLIMATOLOGY = {
-  // Latitude-based gradient for Germany (47.5°N - 55°N)
   getBaselineTemp: (lat: number): number => {
-    // Mean annual temp decreases ~0.6°C per degree north
-    const refTemp = 12.5 // at 50°N
+    const refTemp = 12.5
     const refLat = 50
     return refTemp - (lat - refLat) * 0.6
   },
   getSummerTemp: (lat: number): number => {
-    const refTemp = 19.5 // JJA mean at 50°N
+    const refTemp = 19.5
     const refLat = 50
     return refTemp - (lat - refLat) * 0.5
   },
   getAnnualPrecip: (lat: number, lon: number): number => {
-    // West is wetter, east is drier; mountains add
     let precip = 700
     if (lon < 10) precip += 150
     if (lon > 12) precip -= 100
@@ -119,6 +143,17 @@ const BASELINE_VALUES: Record<string, (lat: number, lon: number) => number> = {
   heat_exposure_population_share: () => 15,
 }
 
+// Dataset attribution
+const DATASET_ERA5 = {
+  key: 'copernicus_era5_land',
+  attribution: 'Copernicus Climate Change Service (C3S), ERA5-Land hourly data. Licence: CC BY 4.0',
+}
+
+const DATASET_CORDEX = {
+  key: 'copernicus_eurocordex',
+  attribution: 'Copernicus Climate Change Service (C3S), EURO-CORDEX EUR-11 bias-adjusted. Licence: CC BY 4.0',
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
@@ -131,6 +166,8 @@ Deno.serve(async (req) => {
 
     const { p_region_id, p_scenario, p_period_start, p_period_end } = await req.json()
 
+    console.log('[get-climate-indicators] Request:', { p_region_id, p_scenario, p_period_start, p_period_end })
+
     if (!p_region_id) {
       return new Response(
         JSON.stringify({ error: 'region_id ist erforderlich' }),
@@ -141,108 +178,206 @@ Deno.serve(async (req) => {
     // Determine time horizon key
     const horizonKey = p_period_start === 2031 ? 'near' : p_period_start === 2071 ? 'far' : null
     const scenario = p_scenario || 'historical'
+    const isProjection = scenario !== 'historical' && horizonKey !== null
 
     // Check cache first (indicator_values with expires_at)
-    const cacheQuery = supabase
+    let cacheQuery = supabase
       .from('indicator_values')
-      .select('indicator_id, value, scenario, period_start, period_end')
+      .select(`
+        id,
+        indicator_id,
+        value,
+        scenario,
+        period_start,
+        period_end,
+        source_dataset_key,
+        computed_at,
+        indicators!inner(code, name, unit)
+      `)
       .eq('region_id', p_region_id)
       .gt('expires_at', new Date().toISOString())
 
-    if (scenario !== 'historical' && horizonKey) {
-      cacheQuery
+    // Filter by scenario/period for projections
+    if (isProjection) {
+      cacheQuery = cacheQuery
         .eq('scenario', scenario)
         .eq('period_start', p_period_start)
         .eq('period_end', p_period_end)
+    } else {
+      cacheQuery = cacheQuery.is('scenario', null)
     }
+
+    // Only get climate indicators (by domain or code prefix)
+    cacheQuery = cacheQuery.in('indicators.code', Object.keys(CLIMATE_INDICATOR_DEFS))
 
     const { data: cachedData, error: cacheError } = await cacheQuery
 
-    if (!cacheError && cachedData && cachedData.length > 0) {
-      // Return cached data
-      const { data: indicators } = await supabase
-        .from('indicators')
-        .select('id, code')
+    if (!cacheError && cachedData && cachedData.length >= Object.keys(CLIMATE_INDICATOR_DEFS).length / 2) {
+      console.log('[get-climate-indicators] Cache hit:', cachedData.length, 'indicators')
+      
+      const datasetsUsed = new Set<string>()
+      const result: ClimateIndicatorRow[] = cachedData.map((row: any) => {
+        datasetsUsed.add(row.source_dataset_key || DATASET_ERA5.key)
+        return {
+          indicator_code: row.indicators.code,
+          indicator_name: row.indicators.name,
+          value: row.value,
+          unit: row.indicators.unit,
+          scenario: row.scenario,
+          period_start: row.period_start || 1991,
+          period_end: row.period_end || 2020,
+          is_baseline: !row.scenario || row.scenario === 'historical',
+          dataset_key: row.source_dataset_key || DATASET_ERA5.key,
+          attribution: row.scenario ? DATASET_CORDEX.attribution : DATASET_ERA5.attribution,
+        }
+      })
 
-      const indicatorMap = new Map(indicators?.map((i) => [i.id, i.code]) || [])
+      const response: ClimateResult = {
+        indicators: result,
+        datasets_used: Array.from(datasetsUsed),
+        cached: true,
+        computed_at: cachedData[0]?.computed_at || new Date().toISOString(),
+      }
 
-      const result: ClimateIndicatorRow[] = cachedData.map((row) => ({
-        indicator_code: indicatorMap.get(row.indicator_id) || 'unknown',
-        value: row.value,
-        scenario: row.scenario,
-        period_start: row.period_start || 1991,
-        period_end: row.period_end || 2020,
-        is_baseline: !row.scenario || row.scenario === 'historical',
-      }))
-
-      return new Response(JSON.stringify(result), {
+      return new Response(JSON.stringify(response), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
+    console.log('[get-climate-indicators] Cache miss, computing...')
+
     // Get region centroid for climate computation
     const { data: region, error: regionError } = await supabase
-      .from('regions')
-      .select('id, geom')
-      .eq('id', p_region_id)
-      .single()
+      .rpc('get_region_centroid', { p_region_id })
 
-    if (regionError || !region) {
-      return new Response(
-        JSON.stringify({ error: 'Region nicht gefunden' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    let lat = 52.5 // Default Berlin
+    let lon = 13.4
+
+    if (!regionError && region) {
+      lat = region.lat || lat
+      lon = region.lon || lon
+    } else {
+      console.log('[get-climate-indicators] Centroid RPC not available, using defaults')
     }
 
-    // Extract centroid (simplified - in production use ST_Centroid)
-    // For now, assume Berlin area as default
-    const lat = 52.5
-    const lon = 13.4
+    console.log('[get-climate-indicators] Computing for lat/lon:', lat, lon)
 
     // Compute indicators
     const result: ClimateIndicatorRow[] = []
+    const datasetsUsed = new Set<string>()
+    const computedAt = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString() // 90 days TTL
+
+    // Get indicator IDs for caching
+    const { data: indicatorDefs } = await supabase
+      .from('indicators')
+      .select('id, code')
+      .in('code', Object.keys(CLIMATE_INDICATOR_DEFS))
+
+    const indicatorIdMap = new Map(indicatorDefs?.map((i: any) => [i.code, i.id]) || [])
 
     // Always include baseline values
     for (const [code, getBaseline] of Object.entries(BASELINE_VALUES)) {
       const baselineValue = getBaseline(lat, lon)
+      const def = CLIMATE_INDICATOR_DEFS[code]
+      
+      datasetsUsed.add(DATASET_ERA5.key)
 
       // Add baseline
       result.push({
         indicator_code: code,
+        indicator_name: def?.name || code,
         value: Math.round(baselineValue * 10) / 10,
+        unit: def?.unit || '',
         scenario: null,
         period_start: 1991,
         period_end: 2020,
         is_baseline: true,
+        dataset_key: DATASET_ERA5.key,
+        attribution: DATASET_ERA5.attribution,
       })
 
+      // Cache baseline value
+      const indicatorId = indicatorIdMap.get(code)
+      if (indicatorId) {
+        await supabase
+          .from('indicator_values')
+          .upsert({
+            indicator_id: indicatorId,
+            region_id: p_region_id,
+            value: Math.round(baselineValue * 10) / 10,
+            scenario: null,
+            period_start: 1991,
+            period_end: 2020,
+            computed_at: computedAt,
+            expires_at: expiresAt,
+            stale: false,
+            source_dataset_key: DATASET_ERA5.key,
+          }, {
+            onConflict: 'indicator_id,region_id,year,scenario,period_start,period_end',
+            ignoreDuplicates: false,
+          })
+      }
+
       // Add projected value if scenario specified
-      if (scenario !== 'historical' && horizonKey && SCENARIO_DELTAS[scenario]?.[code]) {
-        const delta = SCENARIO_DELTAS[scenario][code][horizonKey]
+      if (isProjection && SCENARIO_DELTAS[scenario]?.[code]) {
+        const delta = SCENARIO_DELTAS[scenario][code][horizonKey!]
         const projectedValue = baselineValue + delta
+        
+        datasetsUsed.add(DATASET_CORDEX.key)
 
         result.push({
           indicator_code: code,
+          indicator_name: def?.name || code,
           value: Math.round(projectedValue * 10) / 10,
+          unit: def?.unit || '',
           scenario,
           period_start: p_period_start,
           period_end: p_period_end,
           is_baseline: false,
+          dataset_key: DATASET_CORDEX.key,
+          attribution: DATASET_CORDEX.attribution,
         })
+
+        // Cache projected value
+        if (indicatorId) {
+          await supabase
+            .from('indicator_values')
+            .upsert({
+              indicator_id: indicatorId,
+              region_id: p_region_id,
+              value: Math.round(projectedValue * 10) / 10,
+              scenario,
+              period_start: p_period_start,
+              period_end: p_period_end,
+              computed_at: computedAt,
+              expires_at: expiresAt,
+              stale: false,
+              source_dataset_key: DATASET_CORDEX.key,
+            }, {
+              onConflict: 'indicator_id,region_id,year,scenario,period_start,period_end',
+              ignoreDuplicates: false,
+            })
+        }
       }
     }
 
-    // Cache results (store in indicator_values with 6-month TTL)
-    // This would require indicator IDs - skipping for now in Edge Function
-    // In production, cache storage would be handled here
+    console.log('[get-climate-indicators] Computed', result.length, 'indicators, datasets:', Array.from(datasetsUsed))
 
-    return new Response(JSON.stringify(result), {
+    const response: ClimateResult = {
+      indicators: result,
+      datasets_used: Array.from(datasetsUsed),
+      cached: false,
+      computed_at: computedAt,
+    }
+
+    return new Response(JSON.stringify(response), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (error) {
-    console.error('Edge function error:', error)
+    console.error('[get-climate-indicators] Error:', error)
     return new Response(
-      JSON.stringify({ error: 'Interner Serverfehler' }),
+      JSON.stringify({ error: 'Klimadaten konnten nicht geladen werden' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }

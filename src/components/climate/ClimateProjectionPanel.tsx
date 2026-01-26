@@ -28,7 +28,7 @@ const ClimateProjectionPanel: React.FC = () => {
   const [timeHorizon, setTimeHorizon] = useState<ClimateTimeHorizon>('near');
   const [showAttribution, setShowAttribution] = useState(false);
 
-  const { data, climateAnalog, isLoading, error, hasData, refetch } = useClimateIndicators(
+  const { data, climateAnalog, isLoading, error, hasData, refetch, datasetsUsed } = useClimateIndicators(
     selectedRegionId,
     scenario,
     timeHorizon

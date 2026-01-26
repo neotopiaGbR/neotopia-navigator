@@ -12,7 +12,7 @@ const RegionSidebar: React.FC = () => {
   const { selectedRegion, setSelectedRegionId } = useRegion();
 
   return (
-    <div className="flex h-full w-72 flex-col border-r border-border bg-card">
+    <div className="flex h-full w-80 flex-col border-r border-border bg-card">
       {/* Address Search */}
       <AddressSearch />
 

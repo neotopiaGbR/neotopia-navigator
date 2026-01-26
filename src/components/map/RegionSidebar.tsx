@@ -4,6 +4,7 @@ import { MapPin, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import IndicatorsPanel from '@/components/indicators/IndicatorsPanel';
 import IndicatorMultiSelect from '@/components/indicators/IndicatorMultiSelect';
+import ComparisonSelector from '@/components/indicators/ComparisonSelector';
 
 const RegionSidebar: React.FC = () => {
   const { selectedRegion, setSelectedRegionId, regions } = useRegion();
@@ -44,6 +45,9 @@ const RegionSidebar: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Comparison Selector */}
+      <ComparisonSelector />
 
       {/* Indicator Multi-Select */}
       <IndicatorMultiSelect />

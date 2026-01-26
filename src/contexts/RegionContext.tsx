@@ -18,6 +18,12 @@ interface RegionContextType {
   setSelectedYear: (year: number | null) => void;
   availableYears: number[];
   setAvailableYears: (years: number[]) => void;
+  // Comparison mode
+  comparisonMode: boolean;
+  setComparisonMode: (enabled: boolean) => void;
+  comparisonRegionId: string | null;
+  setComparisonRegionId: (id: string | null) => void;
+  comparisonRegion: Region | null;
 }
 
 const RegionContext = createContext<RegionContextType | undefined>(undefined);
@@ -28,8 +34,11 @@ export const RegionProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [hoveredRegionId, setHoveredRegionId] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
   const [availableYears, setAvailableYears] = useState<number[]>([]);
+  const [comparisonMode, setComparisonMode] = useState(false);
+  const [comparisonRegionId, setComparisonRegionId] = useState<string | null>(null);
 
   const selectedRegion = regions.find((r) => r.id === selectedRegionId) || null;
+  const comparisonRegion = regions.find((r) => r.id === comparisonRegionId) || null;
 
   // Reset year when region changes
   const handleSetSelectedRegionId = (id: string | null) => {
@@ -38,6 +47,14 @@ export const RegionProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       setAvailableYears([]);
     }
     setSelectedRegionId(id);
+  };
+
+  // Clear comparison when disabling
+  const handleSetComparisonMode = (enabled: boolean) => {
+    setComparisonMode(enabled);
+    if (!enabled) {
+      setComparisonRegionId(null);
+    }
   };
 
   return (
@@ -54,6 +71,11 @@ export const RegionProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setSelectedYear,
         availableYears,
         setAvailableYears,
+        comparisonMode,
+        setComparisonMode: handleSetComparisonMode,
+        comparisonRegionId,
+        setComparisonRegionId,
+        comparisonRegion,
       }}
     >
       {children}

@@ -13,6 +13,8 @@ import Admin from "./pages/Admin";
 import DataSources from "./pages/DataSources";
 import DataProducts from "./pages/DataProducts";
 import Attribution from "./pages/Attribution";
+import AdminImports from "./pages/AdminImports";
+import AdminAttribution from "./pages/AdminAttribution";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -45,6 +47,22 @@ const App = () => (
               } 
             />
             <Route 
+              path="/admin/imports" 
+              element={
+                <AdminRoute>
+                  <AdminImports />
+                </AdminRoute>
+              } 
+            />
+            <Route 
+              path="/admin/attribution" 
+              element={
+                <AdminRoute>
+                  <AdminAttribution />
+                </AdminRoute>
+              }
+            />
+            <Route
               path="/data-sources" 
               element={
                 <ProtectedRoute>

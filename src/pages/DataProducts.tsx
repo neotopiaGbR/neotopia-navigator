@@ -192,7 +192,7 @@ export default function DataProductsPage() {
                         )}
                       </TableCell>
                       <TableCell>{product.source?.name || '–'}</TableCell>
-                      <TableCell>{product.resolution || '–'}</TableCell>
+                      <TableCell>{product.spatial_resolution || '–'}</TableCell>
                       <TableCell>{product.temporal_coverage || '–'}</TableCell>
                       <TableCell>{product.update_frequency || '–'}</TableCell>
                       <TableCell>

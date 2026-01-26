@@ -94,9 +94,9 @@ export default function AttributionPage() {
                               <span>{source.license_name}</span>
                             )}
                           </span>
-                          {source.website_url && (
+                          {source.homepage && (
                             <a
-                              href={source.website_url}
+                              href={source.homepage}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="inline-flex items-center gap-1 text-primary hover:underline print:text-foreground"
@@ -116,10 +116,10 @@ export default function AttributionPage() {
                             {products.map((product) => (
                               <li key={product.id}>
                                 <span className="font-medium">{product.name}</span>
-                                {product.resolution && (
+                                {product.spatial_resolution && (
                                   <span className="text-muted-foreground">
                                     {' '}
-                                    — {product.resolution}
+                                    — {product.spatial_resolution}
                                   </span>
                                 )}
                                 {product.temporal_coverage && (

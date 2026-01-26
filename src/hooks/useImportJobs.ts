@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import type { ImportJob, CreateImportJobInput, ImportJobStatus } from '@/types/dataModule';
+import type { ImportJob, ImportJobStatus } from '@/types/dataModule';
 
 export function useImportJobs(productId?: string) {
   return useQuery({
@@ -30,7 +30,7 @@ export function useCreateImportJob() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (input: CreateImportJobInput): Promise<ImportJob> => {
+    mutationFn: async (input: { product_id: string; scope: string }): Promise<ImportJob> => {
       const { data, error } = await supabase
         .from('import_jobs')
         .insert({

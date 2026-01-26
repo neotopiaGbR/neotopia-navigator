@@ -5,12 +5,16 @@ import { Button } from '@/components/ui/button';
 import IndicatorsPanel from '@/components/indicators/IndicatorsPanel';
 import IndicatorMultiSelect from '@/components/indicators/IndicatorMultiSelect';
 import ComparisonSelector from '@/components/indicators/ComparisonSelector';
+import AddressSearch from './AddressSearch';
 
 const RegionSidebar: React.FC = () => {
   const { selectedRegion, setSelectedRegionId, regions } = useRegion();
 
   return (
     <div className="flex h-full w-72 flex-col border-r border-border bg-card">
+      {/* Address Search */}
+      <AddressSearch />
+
       {/* Header */}
       <div className="shrink-0 border-b border-border p-4">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">

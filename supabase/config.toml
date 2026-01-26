@@ -15,3 +15,6 @@ verify_jwt = false
 
 [functions.resolve-indicators]
 verify_jwt = false
+
+[functions.get-climate-indicators]
+verify_jwt = false

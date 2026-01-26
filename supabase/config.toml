@@ -1,2 +1,17 @@
 [functions.admin-users]
 verify_jwt = false
+
+[functions.compute-demography]
+verify_jwt = false
+
+[functions.compute-landuse]
+verify_jwt = false
+
+[functions.compute-airquality]
+verify_jwt = false
+
+[functions.compute-osm]
+verify_jwt = false
+
+[functions.resolve-indicators]
+verify_jwt = false

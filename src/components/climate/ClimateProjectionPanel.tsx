@@ -7,13 +7,11 @@ import ClimateTimeHorizonSelector from './ClimateTimeHorizonSelector';
 import ClimateIndicatorCard from './ClimateIndicatorCard';
 import ClimateAnalogCard from './ClimateAnalogCard';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
-import { Thermometer, CloudSun, Info, Satellite } from 'lucide-react';
+import { Thermometer, CloudSun, Info } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 const ClimateProjectionPanel: React.FC = () => {
-  const { selectedRegion, selectedRegionId, showLstLayer, setShowLstLayer } = useRegion();
+  const { selectedRegion, selectedRegionId } = useRegion();
   
   const [scenario, setScenario] = useState<ClimateScenario>('ssp245');
   const [timeHorizon, setTimeHorizon] = useState<ClimateTimeHorizon>('2031-2060');
@@ -95,22 +93,6 @@ const ClimateProjectionPanel: React.FC = () => {
           onChange={setTimeHorizon}
           disabled={scenario === 'baseline'}
         />
-        
-        {/* LST Layer Toggle */}
-        <div className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2">
-          <div className="flex items-center gap-2">
-            <Satellite className="h-4 w-4 text-orange-400" />
-            <Label htmlFor="lst-toggle" className="cursor-pointer text-xs font-medium">
-              Städtische Wärmeinseln (Satellit)
-            </Label>
-          </div>
-          <Switch
-            id="lst-toggle"
-            checked={showLstLayer}
-            onCheckedChange={setShowLstLayer}
-            className="data-[state=checked]:bg-orange-500"
-          />
-        </div>
       </div>
 
       {/* Content */}

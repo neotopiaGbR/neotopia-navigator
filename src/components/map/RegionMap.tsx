@@ -54,7 +54,6 @@ const RegionMap: React.FC = () => {
     setSelectedRegionId,
     hoveredRegionId,
     setHoveredRegionId,
-    showLstLayer,
   } = useRegion();
 
   // Fetch regions from Supabase with timeout protection
@@ -283,53 +282,6 @@ const RegionMap: React.FC = () => {
     }
   }, [selectedRegionId, hoveredRegionId]);
 
-  // LST layer visibility
-  useEffect(() => {
-    if (!map.current || !mapReady) return;
-
-    const LST_SOURCE_ID = 'lst-source';
-    const LST_LAYER_ID = 'lst-layer';
-
-    if (showLstLayer) {
-      // Add LST layer if not exists
-      if (!map.current.getSource(LST_SOURCE_ID)) {
-        // Using Copernicus Land Surface Temperature WMS service
-        // This is a publicly available WMS layer for LST data
-        map.current.addSource(LST_SOURCE_ID, {
-          type: 'raster',
-          tiles: [
-            // Using a heat-styled raster tile showing temperature anomalies
-            // Copernicus Climate Data Store provides LST data
-            'https://wmts.geo.admin.ch/1.0.0/ch.bafu.landesforstinventar-waldmischungsgrad/default/current/3857/{z}/{x}/{y}.png'
-          ],
-          tileSize: 256,
-          attribution: '&copy; Sentinel-3 LST / Copernicus',
-        });
-
-        map.current.addLayer(
-          {
-            id: LST_LAYER_ID,
-            type: 'raster',
-            source: LST_SOURCE_ID,
-            paint: {
-              'raster-opacity': 0.6,
-              'raster-hue-rotate': 30, // Shift toward warmer colors
-              'raster-saturation': 0.3,
-            },
-          },
-          'regions-fill' // Add below regions layer
-        );
-      }
-    } else {
-      // Remove LST layer if exists
-      if (map.current.getLayer(LST_LAYER_ID)) {
-        map.current.removeLayer(LST_LAYER_ID);
-      }
-      if (map.current.getSource(LST_SOURCE_ID)) {
-        map.current.removeSource(LST_SOURCE_ID);
-      }
-    }
-  }, [showLstLayer, mapReady]);
   // Mouse interactions
   useEffect(() => {
     if (!map.current || !mapReady) return;

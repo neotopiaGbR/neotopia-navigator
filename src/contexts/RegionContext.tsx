@@ -26,6 +26,9 @@ interface RegionContextType {
   comparisonRegionId: string | null;
   setComparisonRegionId: (id: string | null) => void;
   comparisonRegion: Region | null;
+  // Climate layer
+  showLstLayer: boolean;
+  setShowLstLayer: (show: boolean) => void;
 }
 
 const RegionContext = createContext<RegionContextType | undefined>(undefined);
@@ -38,6 +41,7 @@ export const RegionProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [availableYears, setAvailableYears] = useState<number[]>([]);
   const [comparisonMode, setComparisonMode] = useState(false);
   const [comparisonRegionId, setComparisonRegionId] = useState<string | null>(null);
+  const [showLstLayer, setShowLstLayer] = useState(false);
 
   const selectedRegion = regions.find((r) => r.id === selectedRegionId) || null;
   const comparisonRegion = regions.find((r) => r.id === comparisonRegionId) || null;
@@ -104,6 +108,8 @@ export const RegionProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         comparisonRegionId,
         setComparisonRegionId,
         comparisonRegion,
+        showLstLayer,
+        setShowLstLayer,
       }}
     >
       {children}

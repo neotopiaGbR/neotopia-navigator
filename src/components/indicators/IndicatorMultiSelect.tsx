@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Check, ChevronsUpDown, Search, Loader2 } from 'lucide-react';
+import { ChevronsUpDown, Search, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -9,36 +9,79 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { useAllIndicators, IndicatorOption } from '@/hooks/useAllIndicators';
+import { useAllIndicators, IndicatorsByCategory } from '@/hooks/useAllIndicators';
 import { useIndicatorSelection } from '@/hooks/useIndicatorSelection';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 const IndicatorMultiSelect: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   
-  const { indicators, isLoading, error } = useAllIndicators();
+  const { indicators, indicatorsByCategory, isLoading, error } = useAllIndicators();
   const { selectedCodes, toggleCode, selectAll, deselectAll, isSelected } = useIndicatorSelection();
 
-  const filteredIndicators = useMemo(() => {
-    if (!searchQuery.trim()) return indicators;
+  // Filter indicators based on search
+  const filteredByCategory = useMemo(() => {
+    if (!searchQuery.trim()) return indicatorsByCategory;
+    
     const query = searchQuery.toLowerCase();
-    return indicators.filter(
-      (ind) =>
-        ind.name.toLowerCase().includes(query) ||
-        ind.code.toLowerCase().includes(query)
-    );
-  }, [indicators, searchQuery]);
+    const filtered: IndicatorsByCategory[] = [];
+    
+    for (const group of indicatorsByCategory) {
+      const matchingIndicators = group.indicators.filter(
+        (ind) =>
+          ind.name.toLowerCase().includes(query) ||
+          ind.code.toLowerCase().includes(query)
+      );
+      if (matchingIndicators.length > 0) {
+        filtered.push({
+          category: group.category,
+          indicators: matchingIndicators,
+        });
+      }
+    }
+    return filtered;
+  }, [indicatorsByCategory, searchQuery]);
+
+  // Expand all categories when searching
+  React.useEffect(() => {
+    if (searchQuery.trim()) {
+      setExpandedCategories(new Set(filteredByCategory.map((g) => g.category)));
+    }
+  }, [searchQuery, filteredByCategory]);
 
   const allCodes = useMemo(() => indicators.map((i) => i.code), [indicators]);
   const allSelected = indicators.length > 0 && selectedCodes.size === indicators.length;
   const noneSelected = selectedCodes.size === 0;
 
-  const handleSelectAll = () => {
-    if (allSelected) {
-      deselectAll();
-    } else {
-      selectAll(allCodes);
+  const toggleCategory = (category: string) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  };
+
+  const selectAllInCategory = (categoryIndicators: { code: string }[]) => {
+    const codes = categoryIndicators.map((i) => i.code);
+    const newSelection = new Set(selectedCodes);
+    for (const code of codes) {
+      newSelection.add(code);
     }
+    selectAll(Array.from(newSelection));
+  };
+
+  const getCategorySelectionState = (categoryIndicators: { code: string }[]) => {
+    const codes = categoryIndicators.map((i) => i.code);
+    const selectedCount = codes.filter((c) => selectedCodes.has(c)).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === codes.length) return 'all';
+    return 'partial';
   };
 
   return (
@@ -67,7 +110,7 @@ const IndicatorMultiSelect: React.FC = () => {
         </PopoverTrigger>
         
         <PopoverContent 
-          className="w-72 p-0 bg-popover border-border z-50" 
+          className="w-80 p-0 bg-popover border-border z-50" 
           align="start"
           sideOffset={4}
         >
@@ -120,35 +163,89 @@ const IndicatorMultiSelect: React.FC = () => {
             </div>
           )}
 
-          {/* Indicator List */}
+          {/* Grouped Indicator List */}
           {!isLoading && !error && (
-            <ScrollArea className="h-64">
-              <div className="p-2">
-                {filteredIndicators.length === 0 ? (
+            <ScrollArea className="h-72">
+              <div className="p-1">
+                {filteredByCategory.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-4">
                     Keine Indikatoren gefunden
                   </p>
                 ) : (
-                  filteredIndicators.map((indicator) => (
-                    <label
-                      key={indicator.code}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-sm hover:bg-muted/50 cursor-pointer"
-                    >
-                      <Checkbox
-                        checked={isSelected(indicator.code)}
-                        onCheckedChange={() => toggleCode(indicator.code)}
-                        className="h-4 w-4"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm truncate text-foreground">
-                          {indicator.name}
-                        </p>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {indicator.code} · {indicator.unit}
-                        </p>
-                      </div>
-                    </label>
-                  ))
+                  filteredByCategory.map((group) => {
+                    const isExpanded = expandedCategories.has(group.category);
+                    const selectionState = getCategorySelectionState(group.indicators);
+                    
+                    return (
+                      <Collapsible
+                        key={group.category}
+                        open={isExpanded}
+                        onOpenChange={() => toggleCategory(group.category)}
+                      >
+                        <div className="flex items-center gap-1 px-1 py-1">
+                          <CollapsibleTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 hover:bg-muted/50"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                              )}
+                            </Button>
+                          </CollapsibleTrigger>
+                          
+                          <span className="flex-1 text-xs font-semibold uppercase tracking-wide text-accent">
+                            {group.category}
+                          </span>
+                          
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              selectAllInCategory(group.indicators);
+                            }}
+                            disabled={selectionState === 'all'}
+                          >
+                            Alle
+                          </Button>
+                          
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {group.indicators.filter((i) => selectedCodes.has(i.code)).length}/{group.indicators.length}
+                          </span>
+                        </div>
+                        
+                        <CollapsibleContent>
+                          <div className="ml-2 border-l border-border/50 pl-2">
+                            {group.indicators.map((indicator) => (
+                              <label
+                                key={indicator.code}
+                                className="flex items-center gap-2 px-2 py-1.5 rounded-sm hover:bg-muted/50 cursor-pointer"
+                              >
+                                <Checkbox
+                                  checked={isSelected(indicator.code)}
+                                  onCheckedChange={() => toggleCode(indicator.code)}
+                                  className="h-4 w-4"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm truncate text-foreground">
+                                    {indicator.name}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground truncate">
+                                    {indicator.code} · {indicator.unit}
+                                  </p>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    );
+                  })
                 )}
               </div>
             </ScrollArea>

@@ -1,14 +1,31 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
 export interface IndicatorOption {
   code: string;
   name: string;
   unit: string;
+  category: string | null;
 }
+
+export interface IndicatorsByCategory {
+  category: string;
+  indicators: IndicatorOption[];
+}
+
+// Category display order
+const CATEGORY_ORDER = [
+  'Demografie',
+  'Geografie',
+  'Landnutzung',
+  'Klima',
+  'Umwelt',
+  'Sonstiges',
+];
 
 interface UseAllIndicatorsResult {
   indicators: IndicatorOption[];
+  indicatorsByCategory: IndicatorsByCategory[];
   isLoading: boolean;
   error: string | null;
 }
@@ -28,7 +45,7 @@ export function useAllIndicators(): UseAllIndicatorsResult {
 
         const { data, error: queryError } = await supabase
           .from('indicators')
-          .select('code, name, unit')
+          .select('code, name, unit, category')
           .order('name');
 
         if (import.meta.env.DEV) {
@@ -62,5 +79,38 @@ export function useAllIndicators(): UseAllIndicatorsResult {
     };
   }, []);
 
-  return { indicators, isLoading, error };
+  // Group indicators by category with proper ordering
+  const indicatorsByCategory = useMemo(() => {
+    const categoryMap = new Map<string, IndicatorOption[]>();
+
+    for (const ind of indicators) {
+      const cat = ind.category || 'Sonstiges';
+      if (!categoryMap.has(cat)) {
+        categoryMap.set(cat, []);
+      }
+      categoryMap.get(cat)!.push(ind);
+    }
+
+    // Sort categories by predefined order
+    const sorted: IndicatorsByCategory[] = [];
+    
+    for (const cat of CATEGORY_ORDER) {
+      if (categoryMap.has(cat)) {
+        sorted.push({
+          category: cat,
+          indicators: categoryMap.get(cat)!,
+        });
+        categoryMap.delete(cat);
+      }
+    }
+
+    // Add any remaining categories not in the predefined order
+    for (const [cat, inds] of categoryMap) {
+      sorted.push({ category: cat, indicators: inds });
+    }
+
+    return sorted;
+  }, [indicators]);
+
+  return { indicators, indicatorsByCategory, isLoading, error };
 }

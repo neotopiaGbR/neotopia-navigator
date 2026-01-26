@@ -1,15 +1,18 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useRegion } from '@/contexts/RegionContext';
-import { X } from 'lucide-react';
+import { X, BarChart3, Thermometer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import IndicatorsPanel from '@/components/indicators/IndicatorsPanel';
 import IndicatorMultiSelect from '@/components/indicators/IndicatorMultiSelect';
 import ComparisonSelector from '@/components/indicators/ComparisonSelector';
+import ClimateProjectionPanel from '@/components/climate/ClimateProjectionPanel';
 import AddressSearch from './AddressSearch';
 import RegionList from './RegionList';
 
 const RegionSidebar: React.FC = () => {
   const { selectedRegion, setSelectedRegionId } = useRegion();
+  const [activeTab, setActiveTab] = useState<'indicators' | 'climate'>('indicators');
 
   return (
     <div className="flex h-full w-80 flex-col border-r border-border bg-card">
@@ -43,17 +46,39 @@ const RegionSidebar: React.FC = () => {
         </div>
       )}
 
-      {/* Comparison Selector */}
-      <ComparisonSelector />
+      {/* Tabs for Indicators vs Climate */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'indicators' | 'climate')} className="flex flex-1 flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-border px-4 pt-2">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="indicators" className="gap-1.5 text-xs">
+              <BarChart3 className="h-3.5 w-3.5" />
+              Indikatoren
+            </TabsTrigger>
+            <TabsTrigger value="climate" className="gap-1.5 text-xs">
+              <Thermometer className="h-3.5 w-3.5" />
+              Klima
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
-      {/* Indicator Multi-Select */}
-      <IndicatorMultiSelect />
+        <TabsContent value="indicators" className="mt-0 flex flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+          {/* Comparison Selector */}
+          <ComparisonSelector />
 
-      {/* Indicators Panel */}
-      <IndicatorsPanel
-        regionId={selectedRegion?.id ?? null}
-        regionName={selectedRegion?.name ?? null}
-      />
+          {/* Indicator Multi-Select */}
+          <IndicatorMultiSelect />
+
+          {/* Indicators Panel */}
+          <IndicatorsPanel
+            regionId={selectedRegion?.id ?? null}
+            regionName={selectedRegion?.name ?? null}
+          />
+        </TabsContent>
+
+        <TabsContent value="climate" className="mt-0 flex flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+          <ClimateProjectionPanel />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

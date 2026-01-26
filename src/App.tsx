@@ -10,6 +10,9 @@ import Login from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
 import Admin from "./pages/Admin";
+import DataSources from "./pages/DataSources";
+import DataProducts from "./pages/DataProducts";
+import Attribution from "./pages/Attribution";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -39,6 +42,30 @@ const App = () => (
                 <AdminRoute>
                   <Admin />
                 </AdminRoute>
+              } 
+            />
+            <Route 
+              path="/data-sources" 
+              element={
+                <ProtectedRoute>
+                  <DataSources />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/data-products" 
+              element={
+                <ProtectedRoute>
+                  <DataProducts />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/attribution" 
+              element={
+                <ProtectedRoute>
+                  <Attribution />
+                </ProtectedRoute>
               } 
             />
             <Route path="*" element={<NotFound />} />

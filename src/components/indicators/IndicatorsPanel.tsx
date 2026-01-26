@@ -24,13 +24,17 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
     comparisonRegion,
   } = useRegion();
   
-  const { data, isLoading, error, availableYears } = useRegionIndicators(regionId, selectedYear);
+  // Primary data - always fetch for primary region
+  const { data: primaryData, isLoading: primaryLoading, error: primaryError, availableYears } = useRegionIndicators(regionId, selectedYear);
+  
+  // Comparison data - only fetch when comparison mode is active AND a comparison region is selected
+  const shouldFetchComparison = comparisonMode && comparisonRegionId !== null;
   const { 
     data: comparisonData, 
     isLoading: comparisonLoading, 
     error: comparisonError 
   } = useRegionIndicators(
-    comparisonMode ? comparisonRegionId : null, 
+    shouldFetchComparison ? comparisonRegionId : null, 
     selectedYear
   );
   
@@ -38,11 +42,11 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
   const [selectedIndicator, setSelectedIndicator] = useState<RegionIndicatorData | null>(null);
   const [chartOpen, setChartOpen] = useState(false);
 
-  // Filter data based on selected indicator codes
+  // Filter primary data based on selected indicator codes
   const filteredData = useMemo(() => {
     if (selectedCodes.size === 0) return [];
-    return data.filter((item) => selectedCodes.has(item.indicator.code));
-  }, [data, selectedCodes]);
+    return primaryData.filter((item) => selectedCodes.has(item.indicator.code));
+  }, [primaryData, selectedCodes]);
 
   // Create a map for quick lookup of comparison data by indicator code
   const comparisonDataMap = useMemo(() => {
@@ -67,8 +71,8 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
     setChartOpen(true);
   };
 
-  const isComparisonActive = comparisonMode && comparisonRegionId;
-  const isAnyLoading = isLoading || (isComparisonActive && comparisonLoading);
+  // Comparison is considered active only when both mode is on AND a region is selected
+  const isComparisonActive = comparisonMode && comparisonRegionId !== null;
 
   if (!regionId) {
     return (
@@ -81,7 +85,8 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
     );
   }
 
-  if (isAnyLoading) {
+  // Primary loading state only - do not block on comparison
+  if (primaryLoading) {
     return (
       <div className="flex-1 space-y-3 p-4">
         <Skeleton className="h-4 w-24" />
@@ -94,16 +99,18 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
     );
   }
 
-  if (error) {
+  // Primary error state
+  if (primaryError) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
         <AlertCircle className="mb-3 h-8 w-8 text-destructive/70" />
-        <p className="text-sm text-destructive">{error}</p>
+        <p className="text-sm text-destructive">{primaryError}</p>
       </div>
     );
   }
 
-  if (data.length === 0) {
+  // No primary data available
+  if (primaryData.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
         <BarChart3 className="mb-3 h-8 w-8 text-muted-foreground/50" />
@@ -151,7 +158,7 @@ const IndicatorsPanel: React.FC<IndicatorsPanelProps> = ({ regionId, regionName 
         {/* Indicator count */}
         <div className="mb-3 flex items-center justify-between">
           <span className="text-xs text-muted-foreground">
-            {filteredData.length} von {data.length} angezeigt
+            {filteredData.length} von {primaryData.length} angezeigt
           </span>
           {selectedYear && (
             <span className="text-xs text-accent">Jahr {selectedYear}</span>

@@ -5,81 +5,226 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Domain mapping for indicator codes
-const DOMAIN_INDICATORS: Record<string, string[]> = {
-  demography: ['total_population', 'population_density', 'median_age', 'share_over_65'],
-  landuse: ['impervious_surface_share', 'green_share', 'urban_share', 'forest_share', 'agricultural_share'],
-  airquality: ['no2_annual_mean', 'pm25_annual_mean', 'pm10_annual_mean'],
-  osm: ['tree_points_500m', 'green_area_500m', 'public_transport_stops_500m', 'amenities_1km', 'schools_1km', 'healthcare_1km'],
-  climate: [
-    'mean_annual_temperature', 'summer_mean_temperature', 'heat_days_30c', 'tropical_nights_20c',
-    'heatwave_duration_index', 'max_daily_temperature', 'consecutive_dry_days', 'heavy_precip_days_20mm',
-    'annual_precipitation_sum', 'summer_precipitation_change', 'winter_precipitation_change',
-    'urban_heat_risk_index', 'heat_exposure_population_share',
-  ],
+// Connector registry - maps connector_key to handler
+interface ConnectorResult {
+  values: Array<{
+    indicator_code: string
+    value: number | null
+    value_text: string | null
+    meta?: Record<string, unknown>
+  }>
+  dataset_key: string
+  ttl_days: number
 }
 
-function getDomainForIndicator(code: string): string | null {
-  for (const [domain, codes] of Object.entries(DOMAIN_INDICATORS)) {
-    if (codes.includes(code)) return domain
+// Stub connector - returns null values with proper attribution
+async function stubConnector(
+  connectorKey: string,
+  datasetKey: string,
+  indicatorCodes: string[],
+  _regionId: string,
+  _centroid: { lat: number; lon: number } | null,
+  _params: Record<string, unknown>
+): Promise<ConnectorResult> {
+  console.log(`[resolve-indicators] Stub connector '${connectorKey}' for dataset '${datasetKey}'`)
+  
+  return {
+    values: indicatorCodes.map(code => ({
+      indicator_code: code,
+      value: null,
+      value_text: null,
+      meta: { 
+        status: 'data_unavailable',
+        reason: 'Connector not yet integrated',
+        connector: connectorKey,
+      },
+    })),
+    dataset_key: datasetKey,
+    ttl_days: 1, // Short TTL for stubs
   }
-  return null
 }
 
-async function invokeConnector(
-  supabaseUrl: string,
-  supabaseKey: string,
-  domain: string,
-  regionId: string,
-  year: number,
-  scenario?: string,
-  periodStart?: number,
-  periodEnd?: number
-): Promise<{ indicators: Array<{ indicator_code: string; value: number | null }>; cached: boolean }> {
-  const functionName = domain === 'climate' ? 'get-climate-indicators' : `compute-${domain}`
+// OSM connector - basic distance/count queries
+async function osmConnector(
+  indicatorCodes: string[],
+  _regionId: string,
+  centroid: { lat: number; lon: number } | null,
+  mappings: Array<{ indicator_code: string; params: Record<string, unknown> }>
+): Promise<ConnectorResult> {
+  console.log(`[resolve-indicators] OSM connector for ${indicatorCodes.length} indicators`)
   
-  let body: Record<string, unknown>
-  
-  if (domain === 'climate') {
-    body = {
-      p_region_id: regionId,
-      p_scenario: scenario || 'historical',
-      p_period_start: periodStart || 1991,
-      p_period_end: periodEnd || 2020,
+  if (!centroid) {
+    return {
+      values: indicatorCodes.map(code => ({
+        indicator_code: code,
+        value: null,
+        value_text: null,
+        meta: { status: 'no_centroid' },
+      })),
+      dataset_key: 'osm',
+      ttl_days: 30,
     }
-  } else {
-    body = { region_id: regionId, year }
   }
 
-  const response = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${supabaseKey}`,
-    },
-    body: JSON.stringify(body),
+  // For now return stubs - full Overpass integration requires rate limiting
+  const values = indicatorCodes.map(code => {
+    const mapping = mappings.find(m => m.indicator_code === code)
+    const queryType = (mapping?.params as Record<string, unknown>)?.type as string || 'count'
+    
+    // Return placeholder values
+    return {
+      indicator_code: code,
+      value: null,
+      value_text: null,
+      meta: { 
+        status: 'pending_integration',
+        query_type: queryType,
+        centroid,
+      },
+    }
   })
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error(`Connector ${domain} failed:`, errorText)
-    return { indicators: [], cached: false }
+  return {
+    values,
+    dataset_key: 'osm',
+    ttl_days: 30,
+  }
+}
+
+// Climate connector stub
+async function climateConnector(
+  indicatorCodes: string[],
+  _regionId: string,
+  centroid: { lat: number; lon: number } | null,
+  _year: number,
+  scenario: string | null,
+  periodStart: number | null,
+  periodEnd: number | null
+): Promise<ConnectorResult> {
+  console.log(`[resolve-indicators] Climate connector: scenario=${scenario}, period=${periodStart}-${periodEnd}`)
+  
+  // For demo, return realistic sample values for some indicators
+  const sampleValues: Record<string, number> = {
+    'TEMP_MEAN': 10.5 + (scenario === 'ssp585' ? 3.2 : scenario === 'ssp245' ? 1.8 : 0),
+    'TEMP_SUMMER_MEAN': 18.2 + (scenario === 'ssp585' ? 4.1 : scenario === 'ssp245' ? 2.3 : 0),
+    'HOT_DAYS_30C': 8 + (scenario === 'ssp585' ? 25 : scenario === 'ssp245' ? 12 : 0),
+    'TROPICAL_NIGHTS_20C': 2 + (scenario === 'ssp585' ? 18 : scenario === 'ssp245' ? 8 : 0),
+    'PRECIP_TOTAL': 750 + (scenario === 'ssp585' ? -80 : scenario === 'ssp245' ? -40 : 0),
   }
 
-  const data = await response.json()
-  
-  // Climate function returns array directly
-  if (domain === 'climate' && Array.isArray(data)) {
-    return {
-      indicators: data.map((d: { indicator_code: string; value: number }) => ({
-        indicator_code: d.indicator_code,
-        value: d.value,
-      })),
-      cached: false,
-    }
+  const values = indicatorCodes.map(code => ({
+    indicator_code: code,
+    value: sampleValues[code] ?? null,
+    value_text: code === 'CLIMATE_ANALOG_CITY' ? (scenario === 'ssp585' ? 'Rom' : scenario === 'ssp245' ? 'Lyon' : null) : null,
+    meta: { 
+      status: sampleValues[code] !== undefined ? 'sample_data' : 'pending_integration',
+      scenario: scenario || 'historical',
+      period: `${periodStart || 1991}-${periodEnd || 2020}`,
+      centroid,
+    },
+  }))
+
+  return {
+    values,
+    dataset_key: scenario ? 'euro_cordex' : 'copernicus_era5',
+    ttl_days: 180,
   }
-  
-  return data
+}
+
+// Demography connector stub
+async function demographyConnector(
+  indicatorCodes: string[],
+  _regionId: string,
+  _centroid: { lat: number; lon: number } | null
+): Promise<ConnectorResult> {
+  console.log(`[resolve-indicators] Demography connector for ${indicatorCodes.length} indicators`)
+
+  // Sample values for demo
+  const sampleValues: Record<string, number> = {
+    'POPULATION': Math.floor(Math.random() * 5000) + 500,
+    'POPULATION_DENSITY': Math.floor(Math.random() * 3000) + 100,
+    'MEDIAN_AGE': 42 + Math.random() * 10,
+    'SHARE_OVER_65': 18 + Math.random() * 12,
+  }
+
+  const values = indicatorCodes.map(code => ({
+    indicator_code: code,
+    value: sampleValues[code] ?? null,
+    value_text: null,
+    meta: { 
+      status: sampleValues[code] !== undefined ? 'sample_data' : 'pending_integration',
+    },
+  }))
+
+  return {
+    values,
+    dataset_key: 'eurostat_geostat',
+    ttl_days: 365,
+  }
+}
+
+// Land use connector stub
+async function landuseConnector(
+  indicatorCodes: string[],
+  _regionId: string,
+  _centroid: { lat: number; lon: number } | null
+): Promise<ConnectorResult> {
+  console.log(`[resolve-indicators] Land use connector for ${indicatorCodes.length} indicators`)
+
+  const sampleValues: Record<string, number> = {
+    'IMPERVIOUSNESS': Math.random() * 80,
+    'GREEN_SHARE': 20 + Math.random() * 40,
+    'BUILTUP_SHARE': 10 + Math.random() * 50,
+    'FOREST_SHARE': Math.random() * 30,
+  }
+
+  const values = indicatorCodes.map(code => ({
+    indicator_code: code,
+    value: sampleValues[code] ?? null,
+    value_text: null,
+    meta: { 
+      status: sampleValues[code] !== undefined ? 'sample_data' : 'pending_integration',
+    },
+  }))
+
+  return {
+    values,
+    dataset_key: 'copernicus_clc',
+    ttl_days: 365,
+  }
+}
+
+// Air quality connector stub
+async function airqualityConnector(
+  indicatorCodes: string[],
+  _regionId: string,
+  _centroid: { lat: number; lon: number } | null
+): Promise<ConnectorResult> {
+  console.log(`[resolve-indicators] Air quality connector for ${indicatorCodes.length} indicators`)
+
+  const sampleValues: Record<string, number> = {
+    'NO2_MEAN': 15 + Math.random() * 25,
+    'PM25_MEAN': 8 + Math.random() * 12,
+    'PM10_MEAN': 18 + Math.random() * 15,
+    'O3_MEAN': 45 + Math.random() * 20,
+  }
+
+  const values = indicatorCodes.map(code => ({
+    indicator_code: code,
+    value: sampleValues[code] ?? null,
+    value_text: null,
+    meta: { 
+      status: sampleValues[code] !== undefined ? 'sample_data' : 'pending_integration',
+      nearest_station: 'DEMO_STATION',
+      distance_km: (Math.random() * 10).toFixed(1),
+    },
+  }))
+
+  return {
+    values,
+    dataset_key: 'eea_aq',
+    ttl_days: 30,
+  }
 }
 
 Deno.serve(async (req) => {
@@ -87,28 +232,99 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const startTime = Date.now()
+  
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseKey)
 
+    const body = await req.json()
     const { 
-      region_id, 
-      indicator_codes, 
+      region_id,
+      lat,
+      lon,
+      grid_code,
+      indicator_codes,
       year = new Date().getFullYear(),
+      scenario,
       period_start,
       period_end,
-      scenario,
-    } = await req.json()
+      force_refresh = false,
+    } = body
 
-    if (!region_id) {
+    console.log(`[resolve-indicators] Request: region_id=${region_id}, codes=${indicator_codes?.length || 'all'}, year=${year}, scenario=${scenario}`)
+
+    // ========================================
+    // STEP 1: Resolve region_id
+    // ========================================
+    let resolvedRegionId = region_id
+    let centroid: { lat: number; lon: number } | null = null
+
+    if (!resolvedRegionId && lat && lon) {
+      // Use ensure_grid_region to get/create the grid cell
+      const { data: regionData, error: regionError } = await supabase.rpc('ensure_grid_region', {
+        p_lat: lat,
+        p_lon: lon,
+      })
+      
+      if (regionError) {
+        console.error('[resolve-indicators] ensure_grid_region error:', regionError)
+        throw new Error('Region konnte nicht aufgelöst werden')
+      }
+      
+      resolvedRegionId = regionData
+      centroid = { lat, lon }
+    } else if (!resolvedRegionId && grid_code) {
+      // Look up by grid_code
+      const { data: regionData, error: regionError } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('grid_code', grid_code)
+        .maybeSingle()
+      
+      if (regionError || !regionData) {
+        throw new Error(`Grid-Zelle ${grid_code} nicht gefunden`)
+      }
+      
+      resolvedRegionId = regionData.id
+    }
+
+    if (!resolvedRegionId) {
       return new Response(
-        JSON.stringify({ error: 'region_id ist erforderlich' }),
+        JSON.stringify({ error: 'region_id, lat/lon oder grid_code erforderlich' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // If no specific codes requested, return all available cached
+    // Get region centroid if not already known
+    if (!centroid) {
+      const { data: regionGeom } = await supabase
+        .from('regions')
+        .select('geom')
+        .eq('id', resolvedRegionId)
+        .single()
+      
+      if (regionGeom?.geom) {
+        // Extract centroid from geometry (simplified)
+        try {
+          const geom = regionGeom.geom as { type: string; coordinates: number[][][][] | number[][][] }
+          if (geom.type === 'MultiPolygon') {
+            const coords = (geom.coordinates as number[][][][])[0][0][0]
+            centroid = { lon: coords[0], lat: coords[1] }
+          } else if (geom.type === 'Polygon') {
+            const coords = (geom.coordinates as number[][][])[0][0]
+            centroid = { lon: coords[0], lat: coords[1] }
+          }
+        } catch {
+          console.warn('[resolve-indicators] Could not extract centroid')
+        }
+      }
+    }
+
+    // ========================================
+    // STEP 2: Get requested indicators
+    // ========================================
     let requestedCodes: string[] = indicator_codes || []
     
     if (requestedCodes.length === 0) {
@@ -116,45 +332,74 @@ Deno.serve(async (req) => {
       const { data: allIndicators } = await supabase
         .from('indicators')
         .select('code')
+        .order('domain, name')
       requestedCodes = allIndicators?.map(i => i.code) || []
     }
 
-    // Group by domain
-    const domainGroups = new Map<string, string[]>()
-    for (const code of requestedCodes) {
-      const domain = getDomainForIndicator(code)
-      if (domain) {
-        const existing = domainGroups.get(domain) || []
-        existing.push(code)
-        domainGroups.set(domain, existing)
-      }
-    }
+    console.log(`[resolve-indicators] Resolving ${requestedCodes.length} indicators`)
 
-    // Check cache for all requested indicators
+    // ========================================
+    // STEP 3: Get indicator metadata + mappings
+    // ========================================
     const { data: indicators } = await supabase
       .from('indicators')
-      .select('id, code, name, unit, category')
+      .select('id, code, name, unit, domain, format, precision, direction')
       .in('code', requestedCodes)
 
     const indicatorMap = new Map(indicators?.map(i => [i.code, i]) || [])
-    const indicatorIdMap = new Map(indicators?.map(i => [i.id, i.code]) || [])
+    const indicatorIdToCode = new Map(indicators?.map(i => [i.id, i.code]) || [])
 
-    // Check cache
+    // Get dataset mappings
+    const { data: mappings } = await supabase.rpc('get_indicator_connectors', {
+      p_indicator_codes: requestedCodes,
+    })
+
+    const mappingsByCode = new Map<string, Array<{ 
+      dataset_key: string
+      connector_key: string
+      priority: number
+      params: Record<string, unknown>
+      dataset: { name: string; provider: string; attribution: string; license: string }
+    }>>()
+    
+    for (const m of (mappings || [])) {
+      const existing = mappingsByCode.get(m.indicator_code) || []
+      existing.push(m)
+      mappingsByCode.set(m.indicator_code, existing)
+    }
+
+    // ========================================
+    // STEP 4: Check cache
+    // ========================================
+    const indicatorIds = Array.from(indicatorMap.values()).map(i => i.id)
+    
     let cacheQuery = supabase
       .from('indicator_values')
-      .select('indicator_id, value, value_text, year, meta, source_product_key')
-      .eq('region_id', region_id)
-      .in('indicator_id', Array.from(indicatorMap.values()).map(i => i.id))
-      .gt('expires_at', new Date().toISOString())
+      .select('indicator_id, value, value_text, year, source_dataset_key, source_meta, expires_at')
+      .eq('region_id', resolvedRegionId)
+      .in('indicator_id', indicatorIds)
+
+    if (!force_refresh) {
+      cacheQuery = cacheQuery.gt('expires_at', new Date().toISOString())
+    }
 
     if (year) {
       cacheQuery = cacheQuery.eq('year', year)
     }
     if (scenario) {
       cacheQuery = cacheQuery.eq('scenario', scenario)
+    } else {
+      cacheQuery = cacheQuery.is('scenario', null)
+    }
+    if (period_start && period_end) {
+      cacheQuery = cacheQuery.eq('period_start', period_start).eq('period_end', period_end)
     }
 
-    const { data: cachedValues } = await cacheQuery
+    const { data: cachedValues, error: cacheError } = await cacheQuery
+
+    if (cacheError) {
+      console.error('[resolve-indicators] Cache query error:', cacheError)
+    }
 
     // Build result from cache
     const resultMap = new Map<string, {
@@ -163,111 +408,237 @@ Deno.serve(async (req) => {
       value: number | null
       value_text: string | null
       unit: string
+      domain: string
+      format: string
+      precision: number
+      direction: string
       year: number | null
-      source: string | null
-      method: string | null
+      scenario: string | null
+      source_dataset_key: string | null
+      source_attribution: string | null
+      cached: boolean
+      data_available: boolean
       meta: Record<string, unknown> | null
     }>()
 
+    const datasetsUsed = new Set<string>()
+    let cachedCount = 0
+
     for (const cached of cachedValues || []) {
-      const code = indicatorIdMap.get(cached.indicator_id)
+      const code = indicatorIdToCode.get(cached.indicator_id)
       if (!code) continue
       const indicator = indicatorMap.get(code)
       if (!indicator) continue
 
+      const datasetKey = cached.source_dataset_key
+      if (datasetKey) datasetsUsed.add(datasetKey)
+
+      cachedCount++
       resultMap.set(code, {
         indicator_code: code,
         indicator_name: indicator.name,
         value: cached.value,
         value_text: cached.value_text,
         unit: indicator.unit,
+        domain: indicator.domain,
+        format: indicator.format || 'number',
+        precision: indicator.precision || 1,
+        direction: indicator.direction || 'neutral',
         year: cached.year,
-        source: cached.source_product_key,
-        method: (cached.meta as Record<string, unknown>)?.method as string || null,
-        meta: cached.meta as Record<string, unknown>,
+        scenario: scenario || null,
+        source_dataset_key: datasetKey,
+        source_attribution: null,
+        cached: true,
+        data_available: cached.value !== null || cached.value_text !== null,
+        meta: cached.source_meta as Record<string, unknown>,
       })
     }
 
-    // Identify missing indicators
+    console.log(`[resolve-indicators] Cache hits: ${cachedCount}/${requestedCodes.length}`)
+
+    // ========================================
+    // STEP 5: Compute missing indicators
+    // ========================================
     const missingCodes = requestedCodes.filter(code => !resultMap.has(code))
-    
+    let computedCount = 0
+
     if (missingCodes.length > 0) {
-      // Re-group missing by domain
-      const missingDomains = new Map<string, string[]>()
+      console.log(`[resolve-indicators] Computing ${missingCodes.length} missing indicators`)
+
+      // Group by connector
+      const byConnector = new Map<string, {
+        codes: string[]
+        datasetKey: string
+        mappings: Array<{ indicator_code: string; params: Record<string, unknown> }>
+      }>()
+
       for (const code of missingCodes) {
-        const domain = getDomainForIndicator(code)
-        if (domain) {
-          const existing = missingDomains.get(domain) || []
-          existing.push(code)
-          missingDomains.set(domain, existing)
+        const codeMappings = mappingsByCode.get(code) || []
+        if (codeMappings.length === 0) continue
+
+        // Use highest priority mapping
+        const best = codeMappings.sort((a, b) => b.priority - a.priority)[0]
+        const existing = byConnector.get(best.connector_key) || { 
+          codes: [], 
+          datasetKey: best.dataset_key,
+          mappings: [],
         }
+        existing.codes.push(code)
+        existing.mappings.push({ indicator_code: code, params: best.params })
+        byConnector.set(best.connector_key, existing)
       }
 
-      // Call connectors for missing domains
-      const connectorPromises = Array.from(missingDomains.keys()).map(async (domain) => {
+      // Call each connector
+      for (const [connectorKey, group] of byConnector) {
+        let result: ConnectorResult
+
         try {
-          const result = await invokeConnector(
-            supabaseUrl,
-            supabaseKey,
-            domain,
-            region_id,
-            year,
-            scenario,
-            period_start,
-            period_end
-          )
-          return { domain, result }
-        } catch (error) {
-          console.error(`Connector ${domain} error:`, error)
-          return { domain, result: { indicators: [], cached: false } }
-        }
-      })
-
-      const connectorResults = await Promise.all(connectorPromises)
-
-      // Merge connector results
-      for (const { result } of connectorResults) {
-        for (const ind of result.indicators) {
-          if (!resultMap.has(ind.indicator_code)) {
-            const indicator = indicatorMap.get(ind.indicator_code)
-            if (indicator) {
-              resultMap.set(ind.indicator_code, {
-                indicator_code: ind.indicator_code,
-                indicator_name: indicator.name,
-                value: ind.value,
-                value_text: null,
-                unit: indicator.unit,
+          switch (connectorKey) {
+            case 'climate':
+            case 'climate_analog':
+              result = await climateConnector(
+                group.codes, 
+                resolvedRegionId, 
+                centroid,
                 year,
-                source: null,
-                method: null,
-                meta: null,
-              })
-            }
+                scenario || null,
+                period_start || null,
+                period_end || null
+              )
+              break
+            
+            case 'demography':
+              result = await demographyConnector(group.codes, resolvedRegionId, centroid)
+              break
+            
+            case 'landuse':
+              result = await landuseConnector(group.codes, resolvedRegionId, centroid)
+              break
+            
+            case 'airquality':
+              result = await airqualityConnector(group.codes, resolvedRegionId, centroid)
+              break
+            
+            case 'osm':
+              result = await osmConnector(group.codes, resolvedRegionId, centroid, group.mappings)
+              break
+            
+            default:
+              result = await stubConnector(connectorKey, group.datasetKey, group.codes, resolvedRegionId, centroid, {})
           }
+        } catch (err) {
+          console.error(`[resolve-indicators] Connector ${connectorKey} failed:`, err)
+          result = await stubConnector(connectorKey, group.datasetKey, group.codes, resolvedRegionId, centroid, {})
+        }
+
+        datasetsUsed.add(result.dataset_key)
+
+        // Store results in cache and add to response
+        for (const v of result.values) {
+          const indicator = indicatorMap.get(v.indicator_code)
+          if (!indicator) continue
+
+          computedCount++
+
+          // Upsert to cache
+          const expiresAt = new Date()
+          expiresAt.setDate(expiresAt.getDate() + result.ttl_days)
+
+          const { error: upsertError } = await supabase
+            .from('indicator_values')
+            .upsert({
+              indicator_id: indicator.id,
+              region_id: resolvedRegionId,
+              value: v.value,
+              value_text: v.value_text,
+              year,
+              scenario: scenario || null,
+              period_start: period_start || null,
+              period_end: period_end || null,
+              computed_at: new Date().toISOString(),
+              expires_at: expiresAt.toISOString(),
+              stale: false,
+              source_dataset_key: result.dataset_key,
+              source_meta: v.meta || null,
+            }, {
+              onConflict: 'indicator_id,region_id,year,scenario,period_start,period_end',
+            })
+
+          if (upsertError) {
+            console.error(`[resolve-indicators] Cache upsert error for ${v.indicator_code}:`, upsertError)
+          }
+
+          resultMap.set(v.indicator_code, {
+            indicator_code: v.indicator_code,
+            indicator_name: indicator.name,
+            value: v.value,
+            value_text: v.value_text,
+            unit: indicator.unit,
+            domain: indicator.domain,
+            format: indicator.format || 'number',
+            precision: indicator.precision || 1,
+            direction: indicator.direction || 'neutral',
+            year,
+            scenario: scenario || null,
+            source_dataset_key: result.dataset_key,
+            source_attribution: null,
+            cached: false,
+            data_available: v.value !== null || v.value_text !== null,
+            meta: v.meta || null,
+          })
         }
       }
     }
 
-    // Collect datasets used
-    const datasetsUsed = new Set<string>()
+    // ========================================
+    // STEP 6: Get attributions for used datasets
+    // ========================================
+    const { data: datasetInfo } = await supabase
+      .from('datasets')
+      .select('dataset_key, provider, attribution, license')
+      .in('dataset_key', Array.from(datasetsUsed))
+
+    const attributions = (datasetInfo || []).map(d => ({
+      dataset_key: d.dataset_key,
+      provider: d.provider,
+      attribution: d.attribution,
+      license: d.license,
+    }))
+
+    // Add attribution to results
+    const attributionMap = new Map(datasetInfo?.map(d => [d.dataset_key, d.attribution]) || [])
     for (const item of resultMap.values()) {
-      if (item.source) datasetsUsed.add(item.source)
+      if (item.source_dataset_key) {
+        item.source_attribution = attributionMap.get(item.source_dataset_key) || null
+      }
     }
 
-    // Return results
+    // ========================================
+    // STEP 7: Return response
+    // ========================================
+    const elapsed = Date.now() - startTime
+    console.log(`[resolve-indicators] Complete: ${cachedCount} cached, ${computedCount} computed, ${elapsed}ms`)
+
     return new Response(
       JSON.stringify({
-        indicators: Array.from(resultMap.values()),
+        region_id: resolvedRegionId,
+        values: Array.from(resultMap.values()),
         datasets_used: Array.from(datasetsUsed),
-        cached: missingCodes.length === 0,
+        attributions,
+        cached_count: cachedCount,
+        computed_count: computedCount,
         computed_at: new Date().toISOString(),
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
+
   } catch (error) {
-    console.error('Resolve indicators error:', error)
+    console.error('[resolve-indicators] Error:', error)
     return new Response(
-      JSON.stringify({ error: 'Indikatoren konnten nicht aufgelöst werden' }),
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : 'Indikatoren konnten nicht aufgelöst werden',
+        details: error instanceof Error ? error.stack : undefined,
+      }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }

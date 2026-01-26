@@ -1,18 +1,21 @@
 import React, { useState } from 'react';
 import { useRegion } from '@/contexts/RegionContext';
-import { X, BarChart3, Thermometer } from 'lucide-react';
+import { X, BarChart3, Thermometer, Database } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import IndicatorsPanel from '@/components/indicators/IndicatorsPanel';
 import IndicatorMultiSelect from '@/components/indicators/IndicatorMultiSelect';
 import ComparisonSelector from '@/components/indicators/ComparisonSelector';
 import ClimateProjectionPanel from '@/components/climate/ClimateProjectionPanel';
+import { DataSourcesPanel } from '@/components/data/DataSourcesPanel';
 import AddressSearch from './AddressSearch';
 import RegionList from './RegionList';
 
+type SidebarTab = 'indicators' | 'climate' | 'sources';
+
 const RegionSidebar: React.FC = () => {
-  const { selectedRegion, setSelectedRegionId } = useRegion();
-  const [activeTab, setActiveTab] = useState<'indicators' | 'climate'>('indicators');
+  const { selectedRegion, setSelectedRegionId, datasetsUsed } = useRegion();
+  const [activeTab, setActiveTab] = useState<SidebarTab>('indicators');
 
   return (
     <div className="flex h-full w-80 flex-col border-r border-border bg-card">
@@ -46,10 +49,10 @@ const RegionSidebar: React.FC = () => {
         </div>
       )}
 
-      {/* Tabs for Indicators vs Climate */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'indicators' | 'climate')} className="flex flex-1 flex-col overflow-hidden">
+      {/* Tabs for Indicators, Climate, Sources */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SidebarTab)} className="flex flex-1 flex-col overflow-hidden">
         <div className="shrink-0 border-b border-border px-4 pt-2">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="indicators" className="gap-1.5 text-xs">
               <BarChart3 className="h-3.5 w-3.5" />
               Indikatoren
@@ -57,6 +60,10 @@ const RegionSidebar: React.FC = () => {
             <TabsTrigger value="climate" className="gap-1.5 text-xs">
               <Thermometer className="h-3.5 w-3.5" />
               Klima
+            </TabsTrigger>
+            <TabsTrigger value="sources" className="gap-1.5 text-xs">
+              <Database className="h-3.5 w-3.5" />
+              Quellen
             </TabsTrigger>
           </TabsList>
         </div>
@@ -77,6 +84,10 @@ const RegionSidebar: React.FC = () => {
 
         <TabsContent value="climate" className="mt-0 flex flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
           <ClimateProjectionPanel />
+        </TabsContent>
+
+        <TabsContent value="sources" className="mt-0 flex flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+          <DataSourcesPanel datasetsUsed={datasetsUsed} />
         </TabsContent>
       </Tabs>
     </div>

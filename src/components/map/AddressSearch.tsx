@@ -132,8 +132,8 @@ const AddressSearch: React.FC = () => {
 
     try {
       const { data, error: rpcError } = await supabase.rpc('ensure_grid_region', {
-        lat,
-        lon,
+        p_lat: lat,
+        p_lon: lon,
       });
 
       if (rpcError) {

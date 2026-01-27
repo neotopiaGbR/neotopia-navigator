@@ -76,7 +76,7 @@ export const CLIMATE_TIME_HORIZONS: ClimateTimeHorizonOption[] = [
 ];
 
 // Climate Indicator Categories
-export type ClimateIndicatorCategory = 'temperature' | 'heat' | 'extremes' | 'precipitation' | 'urban' | 'analog';
+export type ClimateIndicatorCategory = 'temperature' | 'heat' | 'extremes' | 'precipitation' | 'drought' | 'urban' | 'analog';
 
 // Full Climate Indicator Definition
 export interface ClimateIndicatorDefinition {
@@ -219,8 +219,42 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
   },
   // PRECIPITATION
   {
-    code: 'annual_precipitation_sum',
+    code: 'precip_annual',
     name: 'Jahresniederschlag',
+    unit: 'mm/Jahr',
+    category: 'precipitation',
+    description: 'Gesamtniederschlag pro Jahr',
+    higherIsBetter: true,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: 'mm',
+  },
+  {
+    code: 'precip_intense_20mm',
+    name: 'Starkniederschlagstage (≥20mm)',
+    unit: 'Tage/Jahr',
+    category: 'precipitation',
+    description: 'Tage mit Niederschlag ≥ 20mm',
+    higherIsBetter: false,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: 'Tage',
+  },
+  {
+    code: 'dry_days_consecutive',
+    name: 'Max. Trockenperiode',
+    unit: 'Tage',
+    category: 'drought',
+    description: 'Max. aufeinanderfolgende Tage mit < 1mm Niederschlag',
+    higherIsBetter: false,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: 'Tage',
+  },
+  // LEGACY PRECIPITATION INDICATORS (keep for backward compatibility)
+  {
+    code: 'annual_precipitation_sum',
+    name: 'Jahresniederschlag (alt)',
     unit: 'mm',
     category: 'precipitation',
     description: 'Gesamtniederschlag pro Jahr',
@@ -248,6 +282,28 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     higherIsBetter: true,
     source: 'derived',
     showDelta: false,
+  },
+  {
+    code: 'heavy_precip_days_20mm',
+    name: 'Starkniederschlagstage (alt)',
+    unit: 'Tage/Jahr',
+    category: 'extremes',
+    description: 'Tage mit Niederschlag ≥ 20mm',
+    higherIsBetter: false,
+    source: 'cordex',
+    showDelta: true,
+    deltaUnit: 'Tage',
+  },
+  {
+    code: 'consecutive_dry_days',
+    name: 'Aufeinanderfolgende Trockentage (alt)',
+    unit: 'Tage',
+    category: 'extremes',
+    description: 'Max. Anzahl aufeinanderfolgender Tage ohne Niederschlag (< 1mm)',
+    higherIsBetter: false,
+    source: 'cordex',
+    showDelta: true,
+    deltaUnit: 'Tage',
   },
   // URBAN HEAT / EXPOSURE
   {
@@ -335,6 +391,7 @@ export const CLIMATE_CATEGORY_LABELS: Record<ClimateIndicatorCategory, string> =
   heat: 'Hitze & Nächte',
   extremes: 'Extreme',
   precipitation: 'Niederschlag',
+  drought: 'Trockenheit',
   urban: 'Urbane Hitze',
   analog: 'Klimaanalogie',
 };

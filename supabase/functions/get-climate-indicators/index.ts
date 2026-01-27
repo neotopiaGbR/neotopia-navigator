@@ -49,6 +49,15 @@ const HEAT_INDICATOR_CODES = [
 
 type HeatIndicatorCode = typeof HEAT_INDICATOR_CODES[number];
 
+// Precipitation indicator codes
+const PRECIP_INDICATOR_CODES = [
+  "precip_annual",
+  "precip_intense_20mm",
+  "dry_days_consecutive",
+] as const;
+
+type PrecipIndicatorCode = typeof PRECIP_INDICATOR_CODES[number];
+
 // ──────────────────────────────────────────────────────────────────────────────
 // RESPONSE HELPERS
 // ──────────────────────────────────────────────────────────────────────────────
@@ -236,6 +245,10 @@ const FALLBACK_INDICATORS: Record<string, IndicatorMeta> = {
   tropical_nights_20c: { id: "tropical_nights_20c_fallback", code: "tropical_nights_20c", unit: "nights/year", ttlDays: 180 },
   summer_days_25c: { id: "summer_days_25c_fallback", code: "summer_days_25c", unit: "days/year", ttlDays: 180 },
   heat_wave_days: { id: "heat_wave_days_fallback", code: "heat_wave_days", unit: "days/year", ttlDays: 180 },
+  // Precipitation indicators
+  precip_annual: { id: "precip_annual_fallback", code: "precip_annual", unit: "mm/year", ttlDays: 180 },
+  precip_intense_20mm: { id: "precip_intense_20mm_fallback", code: "precip_intense_20mm", unit: "days/year", ttlDays: 180 },
+  dry_days_consecutive: { id: "dry_days_consecutive_fallback", code: "dry_days_consecutive", unit: "days", ttlDays: 180 },
 };
 
 async function getIndicatorMeta(
@@ -489,6 +502,7 @@ interface DailyClimateData {
   tempMax: number[];
   tempMin: number[];
   tempMean: number[];
+  precip: number[];
 }
 
 async function fetchDailyClimateData(
@@ -502,7 +516,7 @@ async function fetchDailyClimateData(
     longitude: lon.toString(),
     start_date: `${startYear}-01-01`,
     end_date: `${endYear}-12-31`,
-    daily: "temperature_2m_max,temperature_2m_min,temperature_2m_mean",
+    daily: "temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum",
     timezone: "UTC",
   });
 
@@ -532,6 +546,7 @@ async function fetchDailyClimateData(
       tempMax: (daily.temperature_2m_max ?? []).map(toNumber).filter((v: number | null): v is number => v !== null),
       tempMin: (daily.temperature_2m_min ?? []).map(toNumber).filter((v: number | null): v is number => v !== null),
       tempMean: (daily.temperature_2m_mean ?? []).map(toNumber).filter((v: number | null): v is number => v !== null),
+      precip: (daily.precipitation_sum ?? []).map(toNumber).filter((v: number | null): v is number => v !== null),
     };
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
@@ -551,6 +566,12 @@ interface HeatIndicatorValues {
   summer_days_25c: number;
   heat_wave_days: number;
   temp_mean: number;
+}
+
+interface PrecipIndicatorValues {
+  precip_annual: number;
+  precip_intense_20mm: number;
+  dry_days_consecutive: number;
 }
 
 function computeHeatIndicators(data: DailyClimateData): HeatIndicatorValues {
@@ -608,6 +629,79 @@ function computeHeatIndicators(data: DailyClimateData): HeatIndicatorValues {
   };
 }
 
+function computePrecipIndicators(data: DailyClimateData): PrecipIndicatorValues {
+  const { dates, precip } = data;
+  
+  if (precip.length === 0) {
+    return {
+      precip_annual: 0,
+      precip_intense_20mm: 0,
+      dry_days_consecutive: 0,
+    };
+  }
+
+  // Group data by year
+  const yearlyData: Map<number, number[]> = new Map();
+  for (let i = 0; i < dates.length && i < precip.length; i++) {
+    const year = parseInt(dates[i].substring(0, 4), 10);
+    if (!yearlyData.has(year)) {
+      yearlyData.set(year, []);
+    }
+    yearlyData.get(year)!.push(precip[i]);
+  }
+
+  const annualSums: number[] = [];
+  const annualIntenseDays: number[] = [];
+  const annualMaxDryStreak: number[] = [];
+
+  for (const [, dailyPrecip] of yearlyData) {
+    // Annual precipitation sum
+    const yearSum = dailyPrecip.reduce((a, b) => a + b, 0);
+    annualSums.push(yearSum);
+
+    // Intense precipitation days (>= 20mm)
+    let intenseDays = 0;
+    for (const p of dailyPrecip) {
+      if (p >= 20) intenseDays++;
+    }
+    annualIntenseDays.push(intenseDays);
+
+    // Max consecutive dry days (< 1mm)
+    let maxDryStreak = 0;
+    let currentDryStreak = 0;
+    for (const p of dailyPrecip) {
+      if (p < 1) {
+        currentDryStreak++;
+        if (currentDryStreak > maxDryStreak) {
+          maxDryStreak = currentDryStreak;
+        }
+      } else {
+        currentDryStreak = 0;
+      }
+    }
+    annualMaxDryStreak.push(maxDryStreak);
+  }
+
+  // Calculate means
+  const meanAnnualPrecip = annualSums.length > 0 
+    ? annualSums.reduce((a, b) => a + b, 0) / annualSums.length 
+    : 0;
+  
+  const meanIntenseDays = annualIntenseDays.length > 0 
+    ? annualIntenseDays.reduce((a, b) => a + b, 0) / annualIntenseDays.length 
+    : 0;
+  
+  const meanMaxDryStreak = annualMaxDryStreak.length > 0 
+    ? annualMaxDryStreak.reduce((a, b) => a + b, 0) / annualMaxDryStreak.length 
+    : 0;
+
+  return {
+    precip_annual: Math.round(meanAnnualPrecip),
+    precip_intense_20mm: Math.round(meanIntenseDays * 10) / 10,
+    dry_days_consecutive: Math.round(meanMaxDryStreak * 10) / 10,
+  };
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // SCENARIO WARMING ESTIMATES (IPCC AR6)
 // ──────────────────────────────────────────────────────────────────────────────
@@ -618,6 +712,10 @@ interface ScenarioWarming {
   tropicalNightsDelta: number;
   summerDaysDelta: number;
   heatWaveDaysDelta: number;
+  // Precipitation changes
+  precipAnnualDelta: number; // percentage change
+  precipIntenseDelta: number; // additional days/year
+  dryDaysConsecutiveDelta: number; // additional days
 }
 
 function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEnd: number): ScenarioWarming {
@@ -640,18 +738,46 @@ function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEn
     ssp585: { hotDays: 6, tropicalNights: 5, summerDays: 10, heatWaveDays: 4 },
   };
 
+  // Precipitation change estimates (based on IPCC AR6)
+  // Summer: slight decrease in Central Europe, Winter: increase
+  // Net annual: slight change with more intense events
+  const precipScaling: Record<SspScenario, { 
+    annualPctNear: number; annualPctFar: number; 
+    intenseDaysNear: number; intenseDaysFar: number;
+    dryStreakNear: number; dryStreakFar: number;
+  }> = {
+    ssp126: { annualPctNear: -1, annualPctFar: -2, intenseDaysNear: 0.5, intenseDaysFar: 1, dryStreakNear: 2, dryStreakFar: 3 },
+    ssp245: { annualPctNear: -2, annualPctFar: -5, intenseDaysNear: 1, intenseDaysFar: 2, dryStreakNear: 3, dryStreakFar: 5 },
+    ssp370: { annualPctNear: -3, annualPctFar: -8, intenseDaysNear: 1.5, intenseDaysFar: 3, dryStreakNear: 4, dryStreakFar: 8 },
+    ssp585: { annualPctNear: -4, annualPctFar: -10, intenseDaysNear: 2, intenseDaysFar: 4, dryStreakNear: 5, dryStreakFar: 12 },
+  };
+
   const tempData = tempWarming[scenario];
   const scaling = heatScaling[scenario];
+  const precipData = precipScaling[scenario];
   
-  // Interpolate temperature warming
+  // Interpolate based on mid-year
   let tempDelta: number;
+  let precipAnnualDelta: number;
+  let precipIntenseDelta: number;
+  let dryDaysConsecutiveDelta: number;
+
   if (midYear <= 2045) {
     tempDelta = tempData.near;
+    precipAnnualDelta = precipData.annualPctNear;
+    precipIntenseDelta = precipData.intenseDaysNear;
+    dryDaysConsecutiveDelta = precipData.dryStreakNear;
   } else if (midYear >= 2085) {
     tempDelta = tempData.far;
+    precipAnnualDelta = precipData.annualPctFar;
+    precipIntenseDelta = precipData.intenseDaysFar;
+    dryDaysConsecutiveDelta = precipData.dryStreakFar;
   } else {
     const t = (midYear - 2045) / (2085 - 2045);
     tempDelta = tempData.near + t * (tempData.far - tempData.near);
+    precipAnnualDelta = precipData.annualPctNear + t * (precipData.annualPctFar - precipData.annualPctNear);
+    precipIntenseDelta = precipData.intenseDaysNear + t * (precipData.intenseDaysFar - precipData.intenseDaysNear);
+    dryDaysConsecutiveDelta = precipData.dryStreakNear + t * (precipData.dryStreakFar - precipData.dryStreakNear);
   }
 
   // Calculate heat indicator deltas based on temperature change
@@ -661,6 +787,10 @@ function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEn
     tropicalNightsDelta: Math.round(tempDelta * scaling.tropicalNights * 10) / 10,
     summerDaysDelta: Math.round(tempDelta * scaling.summerDays * 10) / 10,
     heatWaveDaysDelta: Math.round(tempDelta * scaling.heatWaveDays * 10) / 10,
+    // Precipitation deltas
+    precipAnnualDelta: Math.round(precipAnnualDelta * 10) / 10,
+    precipIntenseDelta: Math.round(precipIntenseDelta * 10) / 10,
+    dryDaysConsecutiveDelta: Math.round(dryDaysConsecutiveDelta * 10) / 10,
   };
 }
 
@@ -744,12 +874,17 @@ Deno.serve(async (req) => {
   const baselineValues = computeHeatIndicators(climateData);
   console.log(`[get-climate-indicators] Baseline computed:`, baselineValues);
 
+  // Compute baseline precipitation indicators
+  const baselinePrecipValues = computePrecipIndicators(climateData);
+  console.log(`[get-climate-indicators] Baseline precip computed:`, baselinePrecipValues);
+
   // Get indicator metadata for all indicators
   const allIndicatorCodes = [
     "temp_mean_annual",
     "temp_mean_projection",
     "temp_delta_vs_baseline",
     ...HEAT_INDICATOR_CODES,
+    ...PRECIP_INDICATOR_CODES,
   ];
   const indicatorMeta = await getMultipleIndicatorMeta(supabaseUrl, anonKey, authHeader, allIndicatorCodes);
 
@@ -769,7 +904,14 @@ Deno.serve(async (req) => {
       heat_wave_days: Math.round((baselineValues.heat_wave_days + warming.heatWaveDaysDelta) * 10) / 10,
     };
 
-    console.log(`[get-climate-indicators] Projection computed for ${scenario}:`, projectedValues);
+    // Precipitation projections (apply percentage change for annual, absolute for others)
+    const projectedPrecipValues = {
+      precip_annual: Math.round(baselinePrecipValues.precip_annual * (1 + warming.precipAnnualDelta / 100)),
+      precip_intense_20mm: Math.round((baselinePrecipValues.precip_intense_20mm + warming.precipIntenseDelta) * 10) / 10,
+      dry_days_consecutive: Math.round((baselinePrecipValues.dry_days_consecutive + warming.dryDaysConsecutiveDelta) * 10) / 10,
+    };
+
+    console.log(`[get-climate-indicators] Projection computed for ${scenario}:`, projectedValues, projectedPrecipValues);
 
     // Build response indicators
     const indicators = [
@@ -899,6 +1041,75 @@ Deno.serve(async (req) => {
         is_baseline: false,
         dataset_key: DATASET_KEY_CMIP6,
       },
+      // Precipitation: Annual sum
+      {
+        indicator_code: "precip_annual",
+        indicator_name: "Jahresniederschlag",
+        value: baselinePrecipValues.precip_annual,
+        unit: "mm/year",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "precip_annual",
+        indicator_name: "Jahresniederschlag",
+        value: projectedPrecipValues.precip_annual,
+        unit: "mm/year",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Precipitation: Intense days
+      {
+        indicator_code: "precip_intense_20mm",
+        indicator_name: "Starkniederschlagstage (≥20mm)",
+        value: baselinePrecipValues.precip_intense_20mm,
+        unit: "days/year",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "precip_intense_20mm",
+        indicator_name: "Starkniederschlagstage (≥20mm)",
+        value: projectedPrecipValues.precip_intense_20mm,
+        unit: "days/year",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Precipitation: Consecutive dry days
+      {
+        indicator_code: "dry_days_consecutive",
+        indicator_name: "Max. Trockenperiode (<1mm)",
+        value: baselinePrecipValues.dry_days_consecutive,
+        unit: "days",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "dry_days_consecutive",
+        indicator_name: "Max. Trockenperiode (<1mm)",
+        value: projectedPrecipValues.dry_days_consecutive,
+        unit: "days",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
     ];
 
     // Cache results (best effort, in parallel)
@@ -1009,6 +1220,40 @@ Deno.serve(async (req) => {
       indicator_name: "Hitzewellentage",
       value: baselineValues.heat_wave_days,
       unit: "days/year",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    // Precipitation baseline indicators
+    {
+      indicator_code: "precip_annual",
+      indicator_name: "Jahresniederschlag",
+      value: baselinePrecipValues.precip_annual,
+      unit: "mm/year",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "precip_intense_20mm",
+      indicator_name: "Starkniederschlagstage (≥20mm)",
+      value: baselinePrecipValues.precip_intense_20mm,
+      unit: "days/year",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "dry_days_consecutive",
+      indicator_name: "Max. Trockenperiode (<1mm)",
+      value: baselinePrecipValues.dry_days_consecutive,
+      unit: "days",
       scenario: BASELINE_SCENARIO,
       period_start: BASELINE_PERIOD_START,
       period_end: BASELINE_PERIOD_END,

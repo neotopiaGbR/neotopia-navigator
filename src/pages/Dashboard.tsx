@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { RegionProvider } from '@/contexts/RegionContext';
+import { MapLayersProvider } from '@/components/map/MapLayersContext';
 import { Button } from '@/components/ui/button';
 import { Shield, LogOut } from 'lucide-react';
 import RegionMap from '@/components/map/RegionMap';
@@ -65,7 +66,9 @@ const DashboardContent = () => {
 const Dashboard = () => {
   return (
     <RegionProvider>
-      <DashboardContent />
+      <MapLayersProvider>
+        <DashboardContent />
+      </MapLayersProvider>
     </RegionProvider>
   );
 };

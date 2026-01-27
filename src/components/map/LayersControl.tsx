@@ -1,0 +1,323 @@
+import React, { useState } from 'react';
+import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
+import { useMapLayers, BasemapType } from './MapLayersContext';
+
+interface BasemapOption {
+  id: BasemapType;
+  label: string;
+  icon: React.ReactNode;
+  available: boolean;
+}
+
+const BASEMAP_OPTIONS: BasemapOption[] = [
+  { id: 'map', label: 'Karte', icon: <Map className="h-4 w-4" />, available: true },
+  { id: 'satellite', label: 'Satellit', icon: <Satellite className="h-4 w-4" />, available: true },
+  { id: 'terrain', label: 'Gelände', icon: <Mountain className="h-4 w-4" />, available: false },
+];
+
+const OVERLAY_INFO = {
+  ecostress: {
+    name: 'Hitze-Hotspots (ECOSTRESS LST)',
+    description: 'Oberflächentemperatur aus NASA ECOSTRESS (~70m Auflösung)',
+    attribution: 'NASA LP DAAC / ECOSTRESS',
+    doi: 'https://doi.org/10.5067/ECOSTRESS/ECO_L2T_LSTE.002',
+    legendLabel: 'Oberflächentemperatur (°C)',
+    legendColors: [
+      { color: '#313695', label: '< 20°C' },
+      { color: '#4575b4', label: '25°C' },
+      { color: '#74add1', label: '30°C' },
+      { color: '#abd9e9', label: '35°C' },
+      { color: '#fee090', label: '40°C' },
+      { color: '#fdae61', label: '45°C' },
+      { color: '#f46d43', label: '50°C' },
+      { color: '#d73027', label: '> 55°C' },
+    ],
+  },
+  floodRisk: {
+    name: 'Hochwasser-Risiko (RP100)',
+    description: 'Überschwemmungsgefährdung mit 100-jährlicher Wiederkehrperiode',
+    attribution: 'JRC / Copernicus Emergency Management Service',
+    doi: 'https://data.jrc.ec.europa.eu/collection/id-0054',
+    legendLabel: 'Wassertiefe (m)',
+    legendColors: [
+      { color: '#c6dbef', label: '0.1 m' },
+      { color: '#9ecae1', label: '0.5 m' },
+      { color: '#6baed6', label: '1.0 m' },
+      { color: '#4292c6', label: '2.0 m' },
+      { color: '#2171b5', label: '3.0 m' },
+      { color: '#08519c', label: '> 5.0 m' },
+    ],
+    disclaimer: 'Indikative Risikodarstellung. Für amtliche Hochwasserkarten lokale Behörden konsultieren.',
+  },
+};
+
+const LayersControl: React.FC = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const {
+    basemap,
+    overlays,
+    setBasemap,
+    toggleOverlay,
+    setOverlayOpacity,
+  } = useMapLayers();
+
+  return (
+    <div className="absolute right-3 top-3 z-10">
+      {/* Layers Button */}
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => setIsOpen(!isOpen)}
+        className={cn(
+          'bg-background/90 backdrop-blur-sm border border-border shadow-lg',
+          isOpen && 'bg-accent text-accent-foreground'
+        )}
+      >
+        <Layers className="h-4 w-4 mr-1" />
+        Ebenen
+      </Button>
+
+      {/* Layers Panel */}
+      {isOpen && (
+        <div className="absolute right-0 top-10 w-80 bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
+            <h3 className="text-sm font-semibold text-foreground">Kartenebenen</h3>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setIsOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="p-4 space-y-6 max-h-[70vh] overflow-y-auto">
+            {/* Basemap Section */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Basiskarte
+              </h4>
+              <div className="grid grid-cols-3 gap-2">
+                {BASEMAP_OPTIONS.map((option) => (
+                  <Tooltip key={option.id}>
+                    <TooltipTrigger asChild>
+                      <button
+                        disabled={!option.available}
+                        onClick={() => option.available && setBasemap(option.id)}
+                        className={cn(
+                          'flex flex-col items-center gap-1 p-2 rounded-md border transition-all',
+                          option.available
+                            ? 'hover:bg-accent/50 cursor-pointer'
+                            : 'opacity-50 cursor-not-allowed',
+                          basemap === option.id
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border bg-background/50'
+                        )}
+                      >
+                        {option.icon}
+                        <span className="text-xs">{option.label}</span>
+                      </button>
+                    </TooltipTrigger>
+                    {!option.available && (
+                      <TooltipContent>
+                        <p>Demnächst verfügbar</p>
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                ))}
+              </div>
+            </div>
+
+            {/* Overlays Section */}
+            <div className="space-y-4">
+              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Overlays
+              </h4>
+
+              {/* ECOSTRESS Overlay */}
+              <OverlayControl
+                id="ecostress"
+                icon={<Flame className="h-4 w-4 text-orange-500" />}
+                info={OVERLAY_INFO.ecostress}
+                config={overlays.ecostress}
+                onToggle={() => toggleOverlay('ecostress')}
+                onOpacityChange={(val) => setOverlayOpacity('ecostress', val)}
+              />
+
+              {/* Flood Risk Overlay */}
+              <OverlayControl
+                id="floodRisk"
+                icon={<Droplets className="h-4 w-4 text-blue-500" />}
+                info={OVERLAY_INFO.floodRisk}
+                config={overlays.floodRisk}
+                onToggle={() => toggleOverlay('floodRisk')}
+                onOpacityChange={(val) => setOverlayOpacity('floodRisk', val)}
+              />
+            </div>
+
+            {/* Attribution Footer */}
+            <div className="pt-3 border-t border-border">
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Basiskarte: © CARTO / OpenStreetMap
+                {overlays.ecostress.enabled && (
+                  <>
+                    <br />
+                    ECOSTRESS: {OVERLAY_INFO.ecostress.attribution}
+                  </>
+                )}
+                {overlays.floodRisk.enabled && (
+                  <>
+                    <br />
+                    Hochwasser: {OVERLAY_INFO.floodRisk.attribution}
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface OverlayControlProps {
+  id: 'ecostress' | 'floodRisk';
+  icon: React.ReactNode;
+  info: typeof OVERLAY_INFO.ecostress | typeof OVERLAY_INFO.floodRisk;
+  config: {
+    enabled: boolean;
+    opacity: number;
+    loading: boolean;
+    error: string | null;
+    lastUpdated: string | null;
+    metadata: Record<string, unknown>;
+  };
+  onToggle: () => void;
+  onOpacityChange: (value: number) => void;
+}
+
+const OverlayControl: React.FC<OverlayControlProps> = ({
+  id,
+  icon,
+  info,
+  config,
+  onToggle,
+  onOpacityChange,
+}) => {
+  const [showLegend, setShowLegend] = useState(false);
+
+  return (
+    <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+      {/* Header Row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {icon}
+          <span className="text-sm font-medium">{info.name}</span>
+        </div>
+        <Switch checked={config.enabled} onCheckedChange={onToggle} />
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-muted-foreground">{info.description}</p>
+
+      {/* Error State */}
+      {config.error && (
+        <div className="flex items-center gap-2 p-2 rounded bg-destructive/10 text-destructive text-xs">
+          <AlertCircle className="h-3 w-3 shrink-0" />
+          <span>{config.error}</span>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {config.loading && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="h-3 w-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          <span>Lade Daten...</span>
+        </div>
+      )}
+
+      {/* Controls (when enabled) */}
+      {config.enabled && !config.loading && (
+        <div className="space-y-3 pt-2">
+          {/* Opacity Slider */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Deckkraft</span>
+              <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
+            </div>
+            <Slider
+              value={[config.opacity]}
+              min={0}
+              max={100}
+              step={5}
+              onValueChange={([val]) => onOpacityChange(val)}
+              className="w-full"
+            />
+          </div>
+
+          {/* Legend Toggle */}
+          <button
+            onClick={() => setShowLegend(!showLegend)}
+            className="flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <Info className="h-3 w-3" />
+            {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+          </button>
+
+          {/* Legend */}
+          {showLegend && (
+            <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+              <span className="text-xs font-medium">{info.legendLabel}</span>
+              <div className="flex flex-wrap gap-1">
+                {info.legendColors.map((item, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <div
+                      className="w-4 h-3 rounded-sm border border-border/50"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+              {'disclaimer' in info && (
+                <p className="text-[10px] text-muted-foreground/80 italic mt-1">
+                  {info.disclaimer}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Timestamp */}
+          {config.lastUpdated && (
+            <p className="text-[10px] text-muted-foreground">
+              Aktualisiert:{' '}
+              {new Date(config.lastUpdated).toLocaleDateString('de-DE', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </p>
+          )}
+
+          {/* Acquisition datetime for ECOSTRESS */}
+          {id === 'ecostress' && config.metadata?.acquisitionDatetime && (
+            <p className="text-[10px] text-muted-foreground">
+              Aufnahme: {String(config.metadata.acquisitionDatetime)}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default LayersControl;

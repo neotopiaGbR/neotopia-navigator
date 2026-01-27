@@ -116,13 +116,24 @@ function getServiceRoleKey(): string | null {
 async function restJson<T>(
   url: string,
   init: RequestInit,
-  serviceRoleKey: string
+  serviceRoleKey: string,
+  userAuthHeader?: string | null
 ): Promise<{ data: T; status: number } | { error: string; status: number; body?: string }>
 {
   const headers = new Headers(init.headers);
   // For signing-key projects: use service role key in apikey header ONLY
   headers.set("apikey", serviceRoleKey);
-  // DO NOT set Authorization header - service role key is not a JWT
+
+  // IMPORTANT:
+  // If we omit Authorization entirely, some clients/proxies can end up forwarding
+  // the (non-JWT) API key as a bearer token to PostgREST, triggering:
+  //   PGRST301 Expected 3 parts in JWT; got 1
+  // To prevent that, forward the *incoming user JWT* when available.
+  headers.delete("authorization");
+  headers.delete("Authorization");
+  if (userAuthHeader && userAuthHeader.startsWith("Bearer ")) {
+    headers.set("Authorization", userAuthHeader);
+  }
   
   const res = await fetch(url, { ...init, headers });
   const status = res.status;
@@ -185,7 +196,8 @@ async function fetchAnnualMeanTempC(
 async function getRegionCentroid(
   regionId: string,
   supabaseUrl: string,
-  serviceRoleKey: string
+  serviceRoleKey: string,
+  userAuthHeader?: string | null
 ): Promise<{ lat: number; lon: number }>
 {
   const url = new URL(`${supabaseUrl}/rest/v1/regions`);
@@ -196,7 +208,8 @@ async function getRegionCentroid(
   const res = await restJson<Array<{ centroid: unknown; geom: unknown }>>(
     url.toString(),
     { method: "GET" },
-    serviceRoleKey
+    serviceRoleKey,
+    userAuthHeader
   );
 
   if ("error" in res) {
@@ -273,8 +286,11 @@ Deno.serve(async (req) => {
 
   const nowIso = new Date().toISOString();
 
+  // Forward the caller's JWT to internal PostgREST calls (see restJson note above)
+  const userAuthHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
+
   try {
-    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, serviceRoleKey);
+    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, serviceRoleKey, userAuthHeader);
     const { lat, lon } = centroid;
 
     // indicators registry
@@ -282,7 +298,12 @@ Deno.serve(async (req) => {
     indUrl.searchParams.set("select", "id,code,unit,default_ttl_days");
     indUrl.searchParams.set("code", `in.(${indicatorCodes.join(",")})`);
 
-    const indRes = await restJson<IndicatorMetaRow[]>(indUrl.toString(), { method: "GET" }, serviceRoleKey);
+    const indRes = await restJson<IndicatorMetaRow[]>(
+      indUrl.toString(),
+      { method: "GET" },
+      serviceRoleKey,
+      userAuthHeader
+    );
     if ("error" in indRes) {
       return json({ error: `Indicator registry lookup failed: ${indRes.body ?? indRes.error}` }, 500);
     }
@@ -307,7 +328,12 @@ Deno.serve(async (req) => {
     cacheUrl.searchParams.set("period_start", "is.null");
     cacheUrl.searchParams.set("period_end", "is.null");
 
-    const cacheRes = await restJson<any[]>(cacheUrl.toString(), { method: "GET" }, serviceRoleKey);
+    const cacheRes = await restJson<any[]>(
+      cacheUrl.toString(),
+      { method: "GET" },
+      serviceRoleKey,
+      userAuthHeader
+    );
     const cachedRows = "error" in cacheRes ? [] : cacheRes.data || [];
     const cachedByIndicatorId = new Map<string, any>(cachedRows.map((r) => [r.indicator_id, r]));
 
@@ -398,6 +424,9 @@ Deno.serve(async (req) => {
         method: "POST",
         headers: {
           apikey: serviceRoleKey,
+          ...(userAuthHeader && userAuthHeader.startsWith("Bearer ")
+            ? { Authorization: userAuthHeader }
+            : {}),
           "Content-Type": "application/json",
           Prefer: "resolution=merge-duplicates,return=minimal",
         },
@@ -428,7 +457,8 @@ Deno.serve(async (req) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ p_indicator_codes: indicatorCodes }),
       },
-      serviceRoleKey
+      serviceRoleKey,
+      userAuthHeader
     );
 
     const attribution = "error" in rpcRes

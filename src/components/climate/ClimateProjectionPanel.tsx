@@ -30,7 +30,7 @@ import { Thermometer, CloudSun, Info, RefreshCw, ExternalLink, AlertTriangle } f
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
-const CATEGORY_ORDER: ClimateIndicatorCategory[] = ['temperature', 'heat', 'precipitation', 'drought', 'extremes', 'urban'];
+const CATEGORY_ORDER: ClimateIndicatorCategory[] = ['temperature', 'heat', 'thermal', 'energy', 'precipitation', 'drought', 'extremes', 'urban'];
 
 const ClimateProjectionPanel: React.FC = () => {
   const { selectedRegion, selectedRegionId } = useRegion();
@@ -53,6 +53,8 @@ const ClimateProjectionPanel: React.FC = () => {
       extremes: [],
       precipitation: [],
       drought: [],
+      thermal: [],
+      energy: [],
       urban: [],
       analog: [],
     };

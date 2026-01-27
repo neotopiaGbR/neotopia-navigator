@@ -76,7 +76,7 @@ export const CLIMATE_TIME_HORIZONS: ClimateTimeHorizonOption[] = [
 ];
 
 // Climate Indicator Categories
-export type ClimateIndicatorCategory = 'temperature' | 'heat' | 'extremes' | 'precipitation' | 'drought' | 'urban' | 'analog';
+export type ClimateIndicatorCategory = 'temperature' | 'heat' | 'extremes' | 'precipitation' | 'drought' | 'thermal' | 'energy' | 'urban' | 'analog';
 
 // Full Climate Indicator Definition
 export interface ClimateIndicatorDefinition {
@@ -305,6 +305,52 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     showDelta: true,
     deltaUnit: 'Tage',
   },
+  // THERMAL STRESS INDICATORS
+  {
+    code: 'utci_mean_summer',
+    name: 'UTCI Sommer',
+    unit: '°C',
+    category: 'thermal',
+    description: 'Universal Thermal Climate Index – Sommermittel (JJA). Repräsentiert thermischen Stress.',
+    higherIsBetter: false,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: '°C',
+  },
+  {
+    code: 'pet_mean_summer',
+    name: 'PET Sommer',
+    unit: '°C',
+    category: 'thermal',
+    description: 'Physiologically Equivalent Temperature – Sommermittel (JJA). Thermischer Komfortindex.',
+    higherIsBetter: false,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: '°C',
+  },
+  // ENERGY DEMAND INDICATORS
+  {
+    code: 'cooling_degree_days',
+    name: 'Kühlgradtage (CDD)',
+    unit: '°C·d/Jahr',
+    category: 'energy',
+    description: 'Summe der Tage mit Tagesmittel > 18°C × Differenz zu 18°C. Indikator für Kühlbedarf.',
+    higherIsBetter: false,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: '°C·d',
+  },
+  {
+    code: 'heating_degree_days',
+    name: 'Heizgradtage (HDD)',
+    unit: '°C·d/Jahr',
+    category: 'energy',
+    description: 'Summe der Tage mit Tagesmittel < 15°C × Differenz zu 15°C. Indikator für Heizbedarf.',
+    higherIsBetter: true,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: '°C·d',
+  },
   // URBAN HEAT / EXPOSURE
   {
     code: 'urban_heat_risk_index',
@@ -392,6 +438,8 @@ export const CLIMATE_CATEGORY_LABELS: Record<ClimateIndicatorCategory, string> =
   extremes: 'Extreme',
   precipitation: 'Niederschlag',
   drought: 'Trockenheit',
+  thermal: 'Thermischer Stress',
+  energy: 'Energiebedarf',
   urban: 'Urbane Hitze',
   analog: 'Klimaanalogie',
 };

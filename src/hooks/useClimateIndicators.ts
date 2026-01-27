@@ -97,6 +97,8 @@ export function useClimateIndicators(
     }
 
     let cancelled = false;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const load = async () => {
       try {
@@ -106,17 +108,14 @@ export function useClimateIndicators(
         const lastFullYear = new Date().getFullYear() - 1;
         const requestedIndicatorCodes = ['temp_mean_annual'];
 
-        // Call the edge function directly
+        // Call the edge function with abort signal
         const { data: apiData, error: apiError } = await supabase.functions.invoke(
           'get-climate-indicators',
           {
             body: {
-              // New, explicit contract
               region_id: regionId,
               indicator_codes: requestedIndicatorCodes,
               year: lastFullYear,
-
-              // Backwards compatibility with existing function params
               p_region_id: regionId,
               p_scenario: scenario === 'historical' ? null : scenario,
               p_period_start: timeHorizonConfig?.periodStart ?? 1991,
@@ -124,6 +123,10 @@ export function useClimateIndicators(
             },
           }
         );
+
+        clearTimeout(timeoutId);
+
+        if (cancelled) return;
 
         if (import.meta.env.DEV) {
           console.log('[useClimateIndicators] API response:', {
@@ -176,10 +179,9 @@ export function useClimateIndicators(
           datasets = (response.datasets_used || ['copernicus_era5_land']) as string[];
         }
 
-        if (rows.length === 0) {
-          setRawData([]);
-          setLocalDatasetsUsed([]);
-          return;
+        // Validate response shape - must have indicators array
+        if (!Array.isArray(rows)) {
+          throw new Error('Keine Klimadaten verfügbar.');
         }
 
         const values: ClimateIndicatorValue[] = rows.map((row) => ({
@@ -191,22 +193,28 @@ export function useClimateIndicators(
           is_baseline: row.is_baseline,
         }));
 
-        if (!cancelled) {
-          setRawData(values);
-          setLocalDatasetsUsed(datasets);
-          // Update global context for attribution panel
-          setDatasetsUsed(datasets);
-        }
+        setRawData(values);
+        setLocalDatasetsUsed(datasets);
+        setDatasetsUsed(datasets);
       } catch (err) {
+        clearTimeout(timeoutId);
+        if (cancelled) return;
+        
         if (import.meta.env.DEV) {
           console.error('[useClimateIndicators] Error:', err);
         }
-        if (!cancelled) {
-          setError(toEdgeFnErrorMessage(err));
-          setRawData([]);
-          setLocalDatasetsUsed([]);
-        }
+        
+        // Handle abort/timeout specifically
+        const isAbort = err instanceof Error && err.name === 'AbortError';
+        const errorMessage = isAbort
+          ? 'Klimadaten konnten nicht geladen werden. Bitte später erneut versuchen.'
+          : toEdgeFnErrorMessage(err);
+        
+        setError(errorMessage);
+        setRawData([]);
+        setLocalDatasetsUsed([]);
       } finally {
+        clearTimeout(timeoutId);
         if (!cancelled) {
           setIsLoading(false);
         }
@@ -217,6 +225,8 @@ export function useClimateIndicators(
 
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
     };
   }, [regionId, scenario, timeHorizon, timeHorizonConfig, fetchKey, setDatasetsUsed]);
 

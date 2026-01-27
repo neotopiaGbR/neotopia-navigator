@@ -36,6 +36,9 @@ interface FloodRiskResponse {
   status: 'ok' | 'error';
   layers?: FloodRiskLayer[];
   error?: string;
+  message?: string;
+  default_return_period?: number;
+  available_return_periods?: number[];
 }
 
 const DEBOUNCE_MS = 500;
@@ -193,11 +196,19 @@ export function useMapOverlays() {
         return;
       }
 
+      // Check if we got layers
+      if (!response.layers || response.layers.length === 0) {
+        setOverlayError('floodRisk', response.message || 'Keine Hochwasser-Layer verfügbar');
+        return;
+      }
+
       lastFetchRef.current.floodRisk = fetchKey;
       setOverlayMetadata('floodRisk', {
         layers: response.layers,
-        selectedReturnPeriod: 100,
+        selectedReturnPeriod: response.default_return_period || 100,
+        message: response.message,
       });
+      console.log('[useMapOverlays] Flood risk layers loaded:', response.layers.length);
       setOverlayLoading('floodRisk', false);
     } catch (err) {
       console.error('[useMapOverlays] Flood risk error:', err);

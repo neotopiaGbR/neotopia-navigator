@@ -248,13 +248,14 @@ const RegionMap: React.FC = () => {
   const updateOverlays = useCallback(() => {
     if (!map.current) return;
 
-    // Handle Flood Risk WMS overlay
+    // Handle Flood Risk overlay (WMS or XYZ)
     const floodLayerId = 'flood-risk-overlay';
     const floodSourceId = 'flood-risk-source';
 
     if (overlays.floodRisk.enabled && overlays.floodRisk.metadata?.layers) {
       const layers = overlays.floodRisk.metadata.layers as any[];
-      const activeLayer = layers.find((l) => l.type === 'wms' || l.type === 'xyz');
+      // Prefer WMS, then XYZ
+      const activeLayer = layers.find((l) => l.type === 'wms') || layers.find((l) => l.type === 'xyz' || l.key?.includes('gsw'));
       
       if (activeLayer) {
         // Remove existing if present
@@ -265,26 +266,30 @@ const RegionMap: React.FC = () => {
           map.current.removeSource(floodSourceId);
         }
 
-        if (activeLayer.type === 'wms') {
-          // Add WMS source
-          map.current.addSource(floodSourceId, {
-            type: 'raster',
-            tiles: [
-              `${activeLayer.url}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=${activeLayer.layer_name}&STYLES=&FORMAT=image/png&TRANSPARENT=true&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256`,
-            ],
-            tileSize: 256,
-            attribution: activeLayer.attribution,
-          });
-        } else if (activeLayer.type === 'xyz') {
-          map.current.addSource(floodSourceId, {
-            type: 'raster',
-            tiles: [activeLayer.url],
-            tileSize: 256,
-            attribution: activeLayer.attribution,
-          });
+        let tilesUrl: string;
+        
+        if (activeLayer.type === 'wms' && activeLayer.layer_name) {
+          // WMS source
+          tilesUrl = `${activeLayer.url}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=${activeLayer.layer_name}&STYLES=&FORMAT=image/png&TRANSPARENT=true&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256`;
+        } else if (activeLayer.key === 'jrc_gsw_occurrence') {
+          // JRC Global Surface Water - special XYZ pattern
+          tilesUrl = `${activeLayer.url}/{z}/{x}/{y}.png`;
+        } else {
+          // Generic XYZ
+          tilesUrl = activeLayer.url.includes('{z}') 
+            ? activeLayer.url 
+            : `${activeLayer.url}/{z}/{x}/{y}.png`;
         }
 
+        map.current.addSource(floodSourceId, {
+          type: 'raster',
+          tiles: [tilesUrl],
+          tileSize: 256,
+          attribution: activeLayer.attribution,
+        });
+
         // Add layer below regions
+        const insertBeforeLayer = map.current.getLayer('regions-fill') ? 'regions-fill' : undefined;
         map.current.addLayer(
           {
             id: floodLayerId,
@@ -294,8 +299,10 @@ const RegionMap: React.FC = () => {
               'raster-opacity': overlays.floodRisk.opacity / 100,
             },
           },
-          'regions-fill' // Insert below regions
+          insertBeforeLayer
         );
+        
+        devLog('FLOOD_LAYER_ADDED', { key: activeLayer.key, url: tilesUrl });
       }
     } else {
       // Remove flood overlay if disabled
@@ -307,13 +314,17 @@ const RegionMap: React.FC = () => {
       }
     }
 
-    // Handle ECOSTRESS overlay (placeholder - full COG rendering requires deck.gl)
-    // For now, show a message that COG rendering is being prepared
+    // Handle ECOSTRESS overlay
+    // Note: Full COG rendering would require deck.gl; for now show data availability in panel
     const ecostressLayerId = 'ecostress-overlay';
     if (overlays.ecostress.enabled && overlays.ecostress.metadata?.cogUrl) {
-      devLog('ECOSTRESS_COG', { url: overlays.ecostress.metadata.cogUrl });
-      // TODO: Implement deck.gl GeoTIFFLayer for COG rendering
-      // For now, the overlay panel shows the data availability
+      devLog('ECOSTRESS_COG', { 
+        url: overlays.ecostress.metadata.cogUrl,
+        datetime: overlays.ecostress.metadata.acquisitionDatetime,
+        note: 'COG rendering requires additional setup (deck.gl or titiler proxy). Data is available.'
+      });
+      // The overlay panel shows acquisition datetime and data availability
+      // Full tile rendering can be implemented with deck.gl GeoTIFFLayer or a titiler endpoint
     }
   }, [overlays]);
 

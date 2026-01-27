@@ -46,13 +46,14 @@ export function DataSourcesPanel({ datasetsUsed }: DataSourcesPanelProps) {
         <div className="space-y-3">
           {usedDatasets.map((dataset) => (
             <div
-              key={dataset.dataset_key}
+              key={dataset.key}
               className="rounded-lg border border-border bg-card p-3 transition-colors hover:bg-muted/30"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <h4 className="truncate font-medium text-sm">{dataset.source}</h4>
-                  <code className="text-xs text-muted-foreground">{dataset.dataset_key}</code>
+                  <h4 className="truncate font-medium text-sm">{dataset.name}</h4>
+                  <p className="text-xs text-muted-foreground">{dataset.provider}</p>
+                  <code className="text-xs text-muted-foreground/70">{dataset.key}</code>
                 </div>
                 {dataset.url && (
                   <a
@@ -75,30 +76,24 @@ export function DataSourcesPanel({ datasetsUsed }: DataSourcesPanelProps) {
                 <Badge variant="outline" className="text-xs">
                   {dataset.license}
                 </Badge>
-                {dataset.coverage && (
+                {dataset.geographic_coverage && (
                   <Badge variant="secondary" className="text-xs">
                     <MapPin className="mr-1 h-3 w-3" />
-                    {dataset.coverage}
+                    {dataset.geographic_coverage}
                   </Badge>
                 )}
-                {dataset.update_cycle && (
+                {dataset.update_frequency && (
                   <Badge variant="secondary" className="text-xs">
                     <Clock className="mr-1 h-3 w-3" />
-                    {dataset.update_cycle}
+                    {dataset.update_frequency}
                   </Badge>
                 )}
               </div>
 
-              {dataset.license_url && (
-                <a
-                  href={dataset.license_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  Lizenztext
-                  <ExternalLink className="h-3 w-3" />
-                </a>
+              {dataset.notes && (
+                <p className="mt-2 text-xs text-muted-foreground/80 italic">
+                  {dataset.notes}
+                </p>
               )}
             </div>
           ))}

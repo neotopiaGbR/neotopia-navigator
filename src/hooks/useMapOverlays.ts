@@ -54,8 +54,16 @@ export function useMapOverlays() {
 
   // Fetch ECOSTRESS data when overlay is enabled
   const fetchEcostress = useCallback(async () => {
-    if (!selectedRegion?.geom) {
-      setOverlayError('ecostress', 'Keine Region ausgewählt');
+    if (!selectedRegion) {
+      // Only show error if overlay is enabled but no region selected
+      if (overlays.ecostress.enabled) {
+        setOverlayError('ecostress', 'Keine Region ausgewählt');
+      }
+      return;
+    }
+    
+    if (!selectedRegion.geom) {
+      setOverlayError('ecostress', 'Region-Geometrie nicht verfügbar');
       return;
     }
 
@@ -124,12 +132,20 @@ export function useMapOverlays() {
         err instanceof Error ? err.message : 'Fehler beim Laden der ECOSTRESS-Daten'
       );
     }
-  }, [selectedRegion, setOverlayLoading, setOverlayError, setOverlayMetadata]);
+  }, [selectedRegion, overlays.ecostress.enabled, setOverlayLoading, setOverlayError, setOverlayMetadata]);
 
   // Fetch Flood Risk layers when overlay is enabled
   const fetchFloodRisk = useCallback(async () => {
-    if (!selectedRegion?.geom) {
-      setOverlayError('floodRisk', 'Keine Region ausgewählt');
+    if (!selectedRegion) {
+      // Only show error if overlay is enabled but no region selected
+      if (overlays.floodRisk.enabled) {
+        setOverlayError('floodRisk', 'Keine Region ausgewählt');
+      }
+      return;
+    }
+
+    if (!selectedRegion.geom) {
+      setOverlayError('floodRisk', 'Region-Geometrie nicht verfügbar');
       return;
     }
 
@@ -178,7 +194,12 @@ export function useMapOverlays() {
         err instanceof Error ? err.message : 'Fehler beim Laden der Hochwasser-Daten'
       );
     }
-  }, [selectedRegion, setOverlayLoading, setOverlayError, setOverlayMetadata]);
+  }, [selectedRegion, overlays.floodRisk.enabled, setOverlayLoading, setOverlayError, setOverlayMetadata]);
+
+  // Reset cache when region changes
+  useEffect(() => {
+    lastFetchRef.current = {};
+  }, [selectedRegion?.id]);
 
   // Effect for ECOSTRESS overlay
   useEffect(() => {

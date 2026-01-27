@@ -173,17 +173,38 @@ Deno.serve(async (req) => {
 
     const bestGranule = sortedGranules[0];
     
-    // Find COG/TIFF link
+    // Find COG/TIFF link - exclude auxiliary files (water, cloud, QC, EmisWB)
     const dataLinks = bestGranule.links.filter(
       (link) => link.rel === 'http://esipfed.org/ns/fedsearch/1.1/data#' ||
-                link.href.includes('.tif') ||
-                link.href.includes('LSTE')
+                link.href.includes('.tif')
     );
 
-    const lstLink = dataLinks.find((l) => l.href.includes('LST') || l.href.includes('LSTE'));
+    // Find the actual LST file - must end with _LST.tif and NOT be water/cloud/QC/EmisWB
+    const lstLink = dataLinks.find((l) => {
+      const href = l.href.toLowerCase();
+      const isLstFile = href.endsWith('_lst.tif') || href.includes('_lst_');
+      const isAuxFile = href.includes('_water') || href.includes('_cloud') || 
+                        href.includes('_qc') || href.includes('_emiswb') ||
+                        href.includes('_emis1') || href.includes('_emis2') ||
+                        href.includes('_emis3') || href.includes('_emis4') ||
+                        href.includes('_emis5');
+      return isLstFile && !isAuxFile;
+    });
+    
+    // If no specific LST file found, try broader match but still exclude auxiliary files
+    const fallbackLstLink = !lstLink ? dataLinks.find((l) => {
+      const href = l.href.toLowerCase();
+      const hasLste = href.includes('lste') && href.endsWith('.tif');
+      const isAuxFile = href.includes('_water') || href.includes('_cloud') || 
+                        href.includes('_qc') || href.includes('_emiswb') ||
+                        href.includes('_emis');
+      return hasLste && !isAuxFile;
+    }) : null;
+    
+    const finalLstLink = lstLink || fallbackLstLink;
     const cloudMaskLink = dataLinks.find((l) => l.href.includes('QC') || l.href.includes('cloud'));
 
-    if (!lstLink && !hasAuth) {
+    if (!finalLstLink && !hasAuth) {
       return new Response(
         JSON.stringify({
           status: 'auth_required',
@@ -195,9 +216,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Construct COG URL (LP DAAC direct access or via S3)
-    // For unauthenticated access, we'll use the STAC browser URL pattern
-    const cogUrl = lstLink?.href || `https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/ECO_L2T_LSTE.002/${bestGranule.id}`;
+    // Construct COG URL - use detected LST file or build expected path
+    const cogUrl = finalLstLink?.href || `https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/ECO_L2T_LSTE.002/${bestGranule.id}/${bestGranule.id}_LST.tif`;
+    
+    console.log('[ECOSTRESS] Selected COG URL:', cogUrl);
     
     // Cache the result
     try {

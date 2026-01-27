@@ -92,28 +92,38 @@ function parsePoint(value: unknown): { lat: number; lon: number } | null {
   return null;
 }
 
-function getDbKey(): string | null {
-  // Prefer server-side secret key; fallback to anon/publishable if secret not present.
-  return (
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
-    Deno.env.get("SUPABASE_ANON_KEY") ||
-    null
-  );
-}
-
 function getSupabaseUrl(): string | null {
   return Deno.env.get("SUPABASE_URL") || null;
 }
 
+function getAnonKey(): string | null {
+  return Deno.env.get("SUPABASE_ANON_KEY") || null;
+}
+
+function getServiceRoleKey(): string | null {
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || null;
+}
+
+/**
+ * Make authenticated REST calls to PostgREST.
+ * 
+ * For Supabase projects with signing keys (sb_publishable_* / sb_secret_*):
+ * - apikey header: use the anon/publishable key
+ * - Authorization header: use Bearer <service_role_key> for elevated access
+ * 
+ * The service role key bypasses RLS, which is what we need for server-side operations.
+ */
 async function restJson<T>(
   url: string,
   init: RequestInit,
-  apikey: string
+  anonKey: string,
+  serviceRoleKey: string
 ): Promise<{ data: T; status: number } | { error: string; status: number; body?: string }>
 {
   const headers = new Headers(init.headers);
-  headers.set("apikey", apikey);
-  // DO NOT set Authorization here (see header note at top).
+  headers.set("apikey", anonKey);
+  headers.set("Authorization", `Bearer ${serviceRoleKey}`);
+  
   const res = await fetch(url, { ...init, headers });
   const status = res.status;
   const text = await res.text();
@@ -175,7 +185,8 @@ async function fetchAnnualMeanTempC(
 async function getRegionCentroid(
   regionId: string,
   supabaseUrl: string,
-  apikey: string
+  anonKey: string,
+  serviceRoleKey: string
 ): Promise<{ lat: number; lon: number }>
 {
   const url = new URL(`${supabaseUrl}/rest/v1/regions`);
@@ -186,7 +197,8 @@ async function getRegionCentroid(
   const res = await restJson<Array<{ centroid: unknown; geom: unknown }>>(
     url.toString(),
     { method: "GET" },
-    apikey
+    anonKey,
+    serviceRoleKey
   );
 
   if ("error" in res) {
@@ -234,9 +246,11 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = getSupabaseUrl();
-  const apikey = getDbKey();
-  if (!supabaseUrl || !apikey) {
-    return json({ error: "Server configuration error" }, 500);
+  const anonKey = getAnonKey();
+  const serviceRoleKey = getServiceRoleKey();
+  
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    return json({ error: "Server configuration error: missing env vars" }, 500);
   }
 
   let body: any;
@@ -263,7 +277,7 @@ Deno.serve(async (req) => {
   const nowIso = new Date().toISOString();
 
   try {
-    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, apikey);
+    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, anonKey, serviceRoleKey);
     const { lat, lon } = centroid;
 
     // indicators registry
@@ -271,7 +285,7 @@ Deno.serve(async (req) => {
     indUrl.searchParams.set("select", "id,code,unit,default_ttl_days");
     indUrl.searchParams.set("code", `in.(${indicatorCodes.join(",")})`);
 
-    const indRes = await restJson<IndicatorMetaRow[]>(indUrl.toString(), { method: "GET" }, apikey);
+    const indRes = await restJson<IndicatorMetaRow[]>(indUrl.toString(), { method: "GET" }, anonKey, serviceRoleKey);
     if ("error" in indRes) {
       return json({ error: `Indicator registry lookup failed: ${indRes.body ?? indRes.error}` }, 500);
     }
@@ -296,7 +310,7 @@ Deno.serve(async (req) => {
     cacheUrl.searchParams.set("period_start", "is.null");
     cacheUrl.searchParams.set("period_end", "is.null");
 
-    const cacheRes = await restJson<any[]>(cacheUrl.toString(), { method: "GET" }, apikey);
+    const cacheRes = await restJson<any[]>(cacheUrl.toString(), { method: "GET" }, anonKey, serviceRoleKey);
     const cachedRows = "error" in cacheRes ? [] : cacheRes.data || [];
     const cachedByIndicatorId = new Map<string, any>(cachedRows.map((r) => [r.indicator_id, r]));
 
@@ -386,7 +400,8 @@ Deno.serve(async (req) => {
       const upRes = await fetch(upsertUrl.toString(), {
         method: "POST",
         headers: {
-          apikey,
+          apikey: anonKey,
+          Authorization: `Bearer ${serviceRoleKey}`,
           "Content-Type": "application/json",
           Prefer: "resolution=merge-duplicates,return=minimal",
         },
@@ -417,7 +432,8 @@ Deno.serve(async (req) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ p_indicator_codes: indicatorCodes }),
       },
-      apikey
+      anonKey,
+      serviceRoleKey
     );
 
     const attribution = "error" in rpcRes

@@ -67,7 +67,7 @@ const LayersControl: React.FC = () => {
   } = useMapLayers();
 
   return (
-    <div className="absolute right-3 top-3 z-10">
+    <div className="absolute left-3 bottom-8 z-10">
       {/* Layers Button */}
       <Button
         variant="secondary"
@@ -84,7 +84,7 @@ const LayersControl: React.FC = () => {
 
       {/* Layers Panel */}
       {isOpen && (
-        <div className="absolute right-0 top-10 w-80 bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden">
+        <div className="absolute left-0 bottom-10 w-80 bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
             <h3 className="text-sm font-semibold text-foreground">Kartenebenen</h3>

@@ -314,17 +314,57 @@ const RegionMap: React.FC = () => {
       }
     }
 
-    // Handle ECOSTRESS overlay
-    // Note: Full COG rendering would require deck.gl; for now show data availability in panel
+    // Handle ECOSTRESS LST overlay (server-side COG tiles)
     const ecostressLayerId = 'ecostress-overlay';
+    const ecostressSourceId = 'ecostress-source';
+    
     if (overlays.ecostress.enabled && overlays.ecostress.metadata?.cogUrl) {
-      devLog('ECOSTRESS_COG', { 
-        url: overlays.ecostress.metadata.cogUrl,
-        datetime: overlays.ecostress.metadata.acquisitionDatetime,
-        note: 'COG rendering requires additional setup (deck.gl or titiler proxy). Data is available.'
+      // Remove existing if present
+      if (map.current.getLayer(ecostressLayerId)) {
+        map.current.removeLayer(ecostressLayerId);
+      }
+      if (map.current.getSource(ecostressSourceId)) {
+        map.current.removeSource(ecostressSourceId);
+      }
+      
+      // Build tile URL using our Edge Function proxy
+      const cogUrl = encodeURIComponent(overlays.ecostress.metadata.cogUrl as string);
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://bxchawikvnvxzerlsffs.supabase.co';
+      const tileUrl = `${supabaseUrl}/functions/v1/ecostress-tiles?z={z}&x={x}&y={y}&cog_url=${cogUrl}`;
+      
+      map.current.addSource(ecostressSourceId, {
+        type: 'raster',
+        tiles: [tileUrl],
+        tileSize: 256,
+        attribution: 'NASA LP DAAC / ECOSTRESS',
       });
-      // The overlay panel shows acquisition datetime and data availability
-      // Full tile rendering can be implemented with deck.gl GeoTIFFLayer or a titiler endpoint
+      
+      // Add layer below regions
+      const insertBeforeLayer = map.current.getLayer('regions-fill') ? 'regions-fill' : undefined;
+      map.current.addLayer(
+        {
+          id: ecostressLayerId,
+          type: 'raster',
+          source: ecostressSourceId,
+          paint: {
+            'raster-opacity': overlays.ecostress.opacity / 100,
+          },
+        },
+        insertBeforeLayer
+      );
+      
+      devLog('ECOSTRESS_LAYER_ADDED', { 
+        cogUrl: overlays.ecostress.metadata.cogUrl,
+        datetime: overlays.ecostress.metadata.acquisitionDatetime,
+      });
+    } else {
+      // Remove ECOSTRESS overlay if disabled
+      if (map.current.getLayer(ecostressLayerId)) {
+        map.current.removeLayer(ecostressLayerId);
+      }
+      if (map.current.getSource(ecostressSourceId)) {
+        map.current.removeSource(ecostressSourceId);
+      }
     }
   }, [overlays]);
 
@@ -344,7 +384,7 @@ const RegionMap: React.FC = () => {
     } else {
       map.current.once('style.load', updateOverlays);
     }
-  }, [mapReady, overlays.floodRisk.enabled, overlays.floodRisk.opacity, overlays.floodRisk.metadata, overlays.ecostress.enabled, overlays.ecostress.metadata, updateOverlays]);
+  }, [mapReady, overlays.floodRisk.enabled, overlays.floodRisk.opacity, overlays.floodRisk.metadata, overlays.ecostress.enabled, overlays.ecostress.opacity, overlays.ecostress.metadata, updateOverlays]);
 
   // Update paint properties when selection/hover changes
   useEffect(() => {

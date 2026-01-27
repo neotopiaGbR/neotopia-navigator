@@ -27,5 +27,8 @@ verify_jwt = false
 [functions.ecostress-latest-tile]
 verify_jwt = false
 
+[functions.ecostress-tiles]
+verify_jwt = false
+
 [functions.get-flood-risk-layers]
 verify_jwt = false

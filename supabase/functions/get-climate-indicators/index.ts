@@ -58,6 +58,16 @@ const PRECIP_INDICATOR_CODES = [
 
 type PrecipIndicatorCode = typeof PRECIP_INDICATOR_CODES[number];
 
+// Thermal/Energy indicator codes
+const THERMAL_ENERGY_INDICATOR_CODES = [
+  "utci_mean_summer",
+  "pet_mean_summer",
+  "cooling_degree_days",
+  "heating_degree_days",
+] as const;
+
+type ThermalEnergyIndicatorCode = typeof THERMAL_ENERGY_INDICATOR_CODES[number];
+
 // ──────────────────────────────────────────────────────────────────────────────
 // RESPONSE HELPERS
 // ──────────────────────────────────────────────────────────────────────────────
@@ -249,6 +259,11 @@ const FALLBACK_INDICATORS: Record<string, IndicatorMeta> = {
   precip_annual: { id: "precip_annual_fallback", code: "precip_annual", unit: "mm/year", ttlDays: 180 },
   precip_intense_20mm: { id: "precip_intense_20mm_fallback", code: "precip_intense_20mm", unit: "days/year", ttlDays: 180 },
   dry_days_consecutive: { id: "dry_days_consecutive_fallback", code: "dry_days_consecutive", unit: "days", ttlDays: 180 },
+  // Thermal/Energy indicators
+  utci_mean_summer: { id: "utci_mean_summer_fallback", code: "utci_mean_summer", unit: "°C", ttlDays: 180 },
+  pet_mean_summer: { id: "pet_mean_summer_fallback", code: "pet_mean_summer", unit: "°C", ttlDays: 180 },
+  cooling_degree_days: { id: "cooling_degree_days_fallback", code: "cooling_degree_days", unit: "°C·d/Jahr", ttlDays: 180 },
+  heating_degree_days: { id: "heating_degree_days_fallback", code: "heating_degree_days", unit: "°C·d/Jahr", ttlDays: 180 },
 };
 
 async function getIndicatorMeta(
@@ -574,6 +589,13 @@ interface PrecipIndicatorValues {
   dry_days_consecutive: number;
 }
 
+interface ThermalEnergyIndicatorValues {
+  utci_mean_summer: number;
+  pet_mean_summer: number;
+  cooling_degree_days: number;
+  heating_degree_days: number;
+}
+
 function computeHeatIndicators(data: DailyClimateData): HeatIndicatorValues {
   const { tempMax, tempMin, tempMean } = data;
   const numYears = Math.max(1, Math.round(tempMax.length / 365));
@@ -703,6 +725,138 @@ function computePrecipIndicators(data: DailyClimateData): PrecipIndicatorValues 
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// THERMAL/ENERGY INDICATOR COMPUTATIONS
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute thermal stress and energy demand indicators from daily climate data.
+ * 
+ * UTCI (Universal Thermal Climate Index):
+ * - Approximated using summer mean temperature with humidity/wind adjustments
+ * - Represents perceived thermal stress on humans
+ * 
+ * PET (Physiologically Equivalent Temperature):
+ * - Approximated as summer mean with slight offset for radiation effects
+ * - Standard thermal comfort index
+ * 
+ * Cooling Degree Days (CDD):
+ * - Sum of (T_mean - 18) for all days where T_mean > 18°C
+ * 
+ * Heating Degree Days (HDD):
+ * - Sum of (15 - T_mean) for all days where T_mean < 15°C
+ */
+function computeThermalEnergyIndicators(data: DailyClimateData): ThermalEnergyIndicatorValues {
+  const { dates, tempMean, tempMax, tempMin } = data;
+  
+  if (tempMean.length === 0) {
+    return {
+      utci_mean_summer: 0,
+      pet_mean_summer: 0,
+      cooling_degree_days: 0,
+      heating_degree_days: 0,
+    };
+  }
+
+  // Group data by year for proper averaging
+  const yearlyData: Map<number, { tempMean: number[]; tempMax: number[]; tempMin: number[]; months: number[] }> = new Map();
+  
+  for (let i = 0; i < dates.length && i < tempMean.length; i++) {
+    const dateStr = dates[i];
+    const year = parseInt(dateStr.substring(0, 4), 10);
+    const month = parseInt(dateStr.substring(5, 7), 10);
+    
+    if (!yearlyData.has(year)) {
+      yearlyData.set(year, { tempMean: [], tempMax: [], tempMin: [], months: [] });
+    }
+    const yearData = yearlyData.get(year)!;
+    yearData.tempMean.push(tempMean[i]);
+    if (i < tempMax.length) yearData.tempMax.push(tempMax[i]);
+    if (i < tempMin.length) yearData.tempMin.push(tempMin[i]);
+    yearData.months.push(month);
+  }
+
+  const annualCDD: number[] = [];
+  const annualHDD: number[] = [];
+  const annualUTCI: number[] = [];
+  const annualPET: number[] = [];
+
+  for (const [, yearData] of yearlyData) {
+    const { tempMean: temps, tempMax: maxTemps, months } = yearData;
+    
+    // CDD: sum of (T - 18) for T > 18
+    let cdd = 0;
+    for (const t of temps) {
+      if (t > 18) {
+        cdd += (t - 18);
+      }
+    }
+    annualCDD.push(Math.round(cdd));
+
+    // HDD: sum of (15 - T) for T < 15
+    let hdd = 0;
+    for (const t of temps) {
+      if (t < 15) {
+        hdd += (15 - t);
+      }
+    }
+    annualHDD.push(Math.round(hdd));
+
+    // Summer months (JJA: June=6, July=7, August=8)
+    const summerTemps: number[] = [];
+    const summerMaxTemps: number[] = [];
+    for (let i = 0; i < temps.length; i++) {
+      if (months[i] >= 6 && months[i] <= 8) {
+        summerTemps.push(temps[i]);
+        if (i < maxTemps.length) summerMaxTemps.push(maxTemps[i]);
+      }
+    }
+
+    if (summerTemps.length > 0) {
+      const summerMean = summerTemps.reduce((a, b) => a + b, 0) / summerTemps.length;
+      const summerMaxMean = summerMaxTemps.length > 0 
+        ? summerMaxTemps.reduce((a, b) => a + b, 0) / summerMaxTemps.length 
+        : summerMean + 5;
+
+      // UTCI approximation: 
+      // UTCI ≈ Ta + 0.5 * (Tmax - Ta) + humidity/wind adjustment
+      // Simplified: use mean + 0.3 * (max - mean) for Central European conditions
+      const utci = summerMean + 0.3 * (summerMaxMean - summerMean);
+      annualUTCI.push(Math.round(utci * 10) / 10);
+
+      // PET approximation:
+      // PET ≈ Ta + radiation effect (slightly higher than Ta in summer)
+      // Simplified: summer mean + 1-2°C for typical Central European conditions
+      const pet = summerMean + 1.5;
+      annualPET.push(Math.round(pet * 10) / 10);
+    }
+  }
+
+  // Calculate means
+  const meanCDD = annualCDD.length > 0 
+    ? annualCDD.reduce((a, b) => a + b, 0) / annualCDD.length 
+    : 0;
+  
+  const meanHDD = annualHDD.length > 0 
+    ? annualHDD.reduce((a, b) => a + b, 0) / annualHDD.length 
+    : 0;
+  
+  const meanUTCI = annualUTCI.length > 0 
+    ? annualUTCI.reduce((a, b) => a + b, 0) / annualUTCI.length 
+    : 0;
+  
+  const meanPET = annualPET.length > 0 
+    ? annualPET.reduce((a, b) => a + b, 0) / annualPET.length 
+    : 0;
+
+  return {
+    utci_mean_summer: Math.round(meanUTCI * 10) / 10,
+    pet_mean_summer: Math.round(meanPET * 10) / 10,
+    cooling_degree_days: Math.round(meanCDD),
+    heating_degree_days: Math.round(meanHDD),
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // SCENARIO WARMING ESTIMATES (IPCC AR6)
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -716,6 +870,11 @@ interface ScenarioWarming {
   precipAnnualDelta: number; // percentage change
   precipIntenseDelta: number; // additional days/year
   dryDaysConsecutiveDelta: number; // additional days
+  // Thermal/Energy changes
+  utciDelta: number; // °C change
+  petDelta: number; // °C change
+  cddDelta: number; // °C·d/year change
+  hddDelta: number; // °C·d/year change (negative = decrease)
 }
 
 function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEnd: number): ScenarioWarming {
@@ -780,6 +939,21 @@ function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEn
     dryDaysConsecutiveDelta = precipData.dryStreakNear + t * (precipData.dryStreakFar - precipData.dryStreakNear);
   }
 
+  // Thermal/Energy scaling (based on temperature delta)
+  // UTCI and PET scale roughly 1:1 with temperature in summer
+  // CDD increases ~40-60 °C·d per 1°C warming (more days above threshold + higher excess)
+  // HDD decreases ~40-60 °C·d per 1°C warming (fewer days below threshold)
+  const thermalEnergyScaling: Record<SspScenario, {
+    utci: number; pet: number; cddPerDegree: number; hddPerDegree: number;
+  }> = {
+    ssp126: { utci: 1.0, pet: 1.0, cddPerDegree: 40, hddPerDegree: -45 },
+    ssp245: { utci: 1.1, pet: 1.1, cddPerDegree: 50, hddPerDegree: -50 },
+    ssp370: { utci: 1.2, pet: 1.2, cddPerDegree: 55, hddPerDegree: -55 },
+    ssp585: { utci: 1.3, pet: 1.3, cddPerDegree: 60, hddPerDegree: -60 },
+  };
+  
+  const thermalData = thermalEnergyScaling[scenario];
+
   // Calculate heat indicator deltas based on temperature change
   return {
     tempDelta,
@@ -791,6 +965,11 @@ function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEn
     precipAnnualDelta: Math.round(precipAnnualDelta * 10) / 10,
     precipIntenseDelta: Math.round(precipIntenseDelta * 10) / 10,
     dryDaysConsecutiveDelta: Math.round(dryDaysConsecutiveDelta * 10) / 10,
+    // Thermal/Energy deltas
+    utciDelta: Math.round(tempDelta * thermalData.utci * 10) / 10,
+    petDelta: Math.round(tempDelta * thermalData.pet * 10) / 10,
+    cddDelta: Math.round(tempDelta * thermalData.cddPerDegree),
+    hddDelta: Math.round(tempDelta * thermalData.hddPerDegree),
   };
 }
 
@@ -878,6 +1057,10 @@ Deno.serve(async (req) => {
   const baselinePrecipValues = computePrecipIndicators(climateData);
   console.log(`[get-climate-indicators] Baseline precip computed:`, baselinePrecipValues);
 
+  // Compute baseline thermal/energy indicators
+  const baselineThermalValues = computeThermalEnergyIndicators(climateData);
+  console.log(`[get-climate-indicators] Baseline thermal/energy computed:`, baselineThermalValues);
+
   // Get indicator metadata for all indicators
   const allIndicatorCodes = [
     "temp_mean_annual",
@@ -885,6 +1068,7 @@ Deno.serve(async (req) => {
     "temp_delta_vs_baseline",
     ...HEAT_INDICATOR_CODES,
     ...PRECIP_INDICATOR_CODES,
+    ...THERMAL_ENERGY_INDICATOR_CODES,
   ];
   const indicatorMeta = await getMultipleIndicatorMeta(supabaseUrl, anonKey, authHeader, allIndicatorCodes);
 
@@ -911,7 +1095,15 @@ Deno.serve(async (req) => {
       dry_days_consecutive: Math.round((baselinePrecipValues.dry_days_consecutive + warming.dryDaysConsecutiveDelta) * 10) / 10,
     };
 
-    console.log(`[get-climate-indicators] Projection computed for ${scenario}:`, projectedValues, projectedPrecipValues);
+    // Thermal/Energy projections
+    const projectedThermalValues = {
+      utci_mean_summer: Math.round((baselineThermalValues.utci_mean_summer + warming.utciDelta) * 10) / 10,
+      pet_mean_summer: Math.round((baselineThermalValues.pet_mean_summer + warming.petDelta) * 10) / 10,
+      cooling_degree_days: Math.round(baselineThermalValues.cooling_degree_days + warming.cddDelta),
+      heating_degree_days: Math.round(baselineThermalValues.heating_degree_days + warming.hddDelta),
+    };
+
+    console.log(`[get-climate-indicators] Projection computed for ${scenario}:`, projectedValues, projectedPrecipValues, projectedThermalValues);
 
     // Build response indicators
     const indicators = [
@@ -1110,6 +1302,98 @@ Deno.serve(async (req) => {
         is_baseline: false,
         dataset_key: DATASET_KEY_CMIP6,
       },
+      // Thermal Stress: UTCI
+      {
+        indicator_code: "utci_mean_summer",
+        indicator_name: "UTCI Sommer (Mittel)",
+        value: baselineThermalValues.utci_mean_summer,
+        unit: "°C",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "utci_mean_summer",
+        indicator_name: "UTCI Sommer (Mittel)",
+        value: projectedThermalValues.utci_mean_summer,
+        unit: "°C",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Thermal Stress: PET
+      {
+        indicator_code: "pet_mean_summer",
+        indicator_name: "PET Sommer (Mittel)",
+        value: baselineThermalValues.pet_mean_summer,
+        unit: "°C",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "pet_mean_summer",
+        indicator_name: "PET Sommer (Mittel)",
+        value: projectedThermalValues.pet_mean_summer,
+        unit: "°C",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Energy: Cooling Degree Days
+      {
+        indicator_code: "cooling_degree_days",
+        indicator_name: "Kühlgradtage (CDD)",
+        value: baselineThermalValues.cooling_degree_days,
+        unit: "°C·d/Jahr",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "cooling_degree_days",
+        indicator_name: "Kühlgradtage (CDD)",
+        value: projectedThermalValues.cooling_degree_days,
+        unit: "°C·d/Jahr",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Energy: Heating Degree Days
+      {
+        indicator_code: "heating_degree_days",
+        indicator_name: "Heizgradtage (HDD)",
+        value: baselineThermalValues.heating_degree_days,
+        unit: "°C·d/Jahr",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "heating_degree_days",
+        indicator_name: "Heizgradtage (HDD)",
+        value: projectedThermalValues.heating_degree_days,
+        unit: "°C·d/Jahr",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
     ];
 
     // Cache results (best effort, in parallel)
@@ -1254,6 +1538,52 @@ Deno.serve(async (req) => {
       indicator_name: "Max. Trockenperiode (<1mm)",
       value: baselinePrecipValues.dry_days_consecutive,
       unit: "days",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    // Thermal Stress baseline indicators
+    {
+      indicator_code: "utci_mean_summer",
+      indicator_name: "UTCI Sommer (Mittel)",
+      value: baselineThermalValues.utci_mean_summer,
+      unit: "°C",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "pet_mean_summer",
+      indicator_name: "PET Sommer (Mittel)",
+      value: baselineThermalValues.pet_mean_summer,
+      unit: "°C",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    // Energy baseline indicators
+    {
+      indicator_code: "cooling_degree_days",
+      indicator_name: "Kühlgradtage (CDD)",
+      value: baselineThermalValues.cooling_degree_days,
+      unit: "°C·d/Jahr",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "heating_degree_days",
+      indicator_name: "Heizgradtage (HDD)",
+      value: baselineThermalValues.heating_degree_days,
+      unit: "°C·d/Jahr",
       scenario: BASELINE_SCENARIO,
       period_start: BASELINE_PERIOD_START,
       period_end: BASELINE_PERIOD_END,

@@ -93,7 +93,7 @@ export interface ClimateIndicatorDefinition {
 
 // Complete Climate Indicator Catalog
 export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
-  // TEMPERATURE
+  // TEMPERATURE - BASELINE
   {
     code: 'temp_mean_annual',
     name: 'Jahresmitteltemperatur',
@@ -104,6 +104,28 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     source: 'era5',
     showDelta: true,
     deltaUnit: '°C',
+  },
+  // TEMPERATURE - PROJECTIONS (returned by edge function for projection mode)
+  {
+    code: 'temp_mean_projection',
+    name: 'Proj. Jahresmitteltemperatur',
+    unit: '°C',
+    category: 'temperature',
+    description: 'Projizierte durchschnittliche Jahrestemperatur für den gewählten Zeitraum',
+    higherIsBetter: false,
+    source: 'cordex',
+    showDelta: true,
+    deltaUnit: '°C',
+  },
+  {
+    code: 'temp_delta_vs_baseline',
+    name: 'Erwärmung vs. Baseline',
+    unit: '°C',
+    category: 'temperature',
+    description: 'Temperaturänderung gegenüber der Referenzperiode 1991–2020',
+    higherIsBetter: false,
+    source: 'cordex',
+    showDelta: false,
   },
   {
     code: 'summer_mean_temperature',
@@ -341,10 +363,11 @@ export const CLIMATE_DATA_ATTRIBUTION = {
     url: 'https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-land',
   },
   projections: {
-    source: 'Copernicus Climate Change Service (C3S)',
-    dataset: 'EURO-CORDEX EUR-11 (bias-adjusted)',
+    source: 'Open-Meteo Climate API',
+    dataset: 'CMIP6 climate projections (IPCC AR6 scenarios)',
     scenarios: ['SSP1-2.6', 'SSP2-4.5', 'SSP3-7.0', 'SSP5-8.5'],
     license: 'CC BY 4.0',
-    url: 'https://cds.climate.copernicus.eu/cdsapp#!/dataset/projections-cordex-domains-single-levels',
+    url: 'https://open-meteo.com/en/docs/climate-api',
+    note: 'Projected values based on IPCC AR6 scenario warming estimates',
   },
 };

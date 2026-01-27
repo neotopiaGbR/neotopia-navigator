@@ -1,13 +1,14 @@
 /**
  * useClimateIndicators Hook
  * 
- * STABLE VERSION - Full audit completed
+ * PRODUCTION VERSION - Full projection support
  * 
  * This hook:
  * 1. Fetches climate indicators from get-climate-indicators edge function
- * 2. Handles all response formats (indicators array, values array, legacy)
- * 3. Never leaves loading state hanging (guaranteed finally block)
- * 4. Shows clear error messages on failure
+ * 2. Supports both baseline (ERA5) and projection (CMIP6) modes
+ * 3. Handles all response formats (indicators array, values array, legacy)
+ * 4. Never leaves loading state hanging (guaranteed finally block)
+ * 5. Shows clear error messages on failure
  */
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
@@ -57,11 +58,24 @@ interface StructuredResponse {
   computed_at?: string;
   error?: string;
   stage?: string;
+  debug?: {
+    baselineMean?: number;
+    projectedMean?: number;
+    delta?: number;
+  };
+  attribution?: {
+    provider?: string;
+    dataset?: string;
+    license?: string;
+    url?: string;
+    note?: string;
+  };
 }
 
 function parseApiResponse(apiData: unknown): { rows: ApiIndicatorRow[]; datasets: string[] } {
   // Handle null/undefined
   if (!apiData) {
+    console.warn('[useClimateIndicators] Empty API response');
     return { rows: [], datasets: [] };
   }
 
@@ -76,6 +90,11 @@ function parseApiResponse(apiData: unknown): { rows: ApiIndicatorRow[]; datasets
   // Check for error in response
   if (response.error) {
     throw new Error(response.error);
+  }
+
+  // Log debug info if present
+  if (response.debug) {
+    console.log('[useClimateIndicators] Projection debug:', response.debug);
   }
 
   // Try indicators array first (new format)
@@ -95,6 +114,7 @@ function parseApiResponse(apiData: unknown): { rows: ApiIndicatorRow[]; datasets
   }
 
   // No data found
+  console.warn('[useClimateIndicators] No indicator data in response:', response);
   return { rows: [], datasets: [] };
 }
 
@@ -180,29 +200,41 @@ export function useClimateIndicators(
 
       try {
         const lastFullYear = new Date().getFullYear() - 1;
+        
+        // Determine if this is a projection request
+        const isProjection = scenario !== 'historical' && timeHorizon !== 'baseline';
+        
+        console.log(`[useClimateIndicators] Fetching: scenario=${scenario}, timeHorizon=${timeHorizon}, isProjection=${isProjection}`);
 
-        // Call edge function
+        // Call edge function with appropriate parameters
         const { data: apiData, error: apiError } = await supabase.functions.invoke(
           'get-climate-indicators',
           {
             body: {
               region_id: regionId,
               p_region_id: regionId,
-              indicator_codes: ['temp_mean_annual'],
               year: lastFullYear,
-              p_scenario: scenario === 'historical' ? null : scenario,
-              p_period_start: timeHorizonConfig?.periodStart ?? 1991,
-              p_period_end: timeHorizonConfig?.periodEnd ?? 2020,
+              // Projection parameters
+              p_scenario: isProjection ? scenario : null,
+              scenario: isProjection ? scenario : null,
+              p_period_start: isProjection ? timeHorizonConfig?.periodStart : null,
+              p_period_end: isProjection ? timeHorizonConfig?.periodEnd : null,
+              period_start: isProjection ? timeHorizonConfig?.periodStart : null,
+              period_end: isProjection ? timeHorizonConfig?.periodEnd : null,
             },
           }
         );
 
         if (cancelled) return;
 
-        // Log in development
-        if (import.meta.env.DEV) {
-          console.log('[useClimateIndicators] Response:', { apiData, apiError });
-        }
+        // Log response
+        console.log('[useClimateIndicators] Response:', { 
+          apiData, 
+          apiError,
+          isProjection,
+          scenario,
+          timeHorizon 
+        });
 
         // Handle API error
         if (apiError) {
@@ -260,60 +292,105 @@ export function useClimateIndicators(
     if (rawData.length === 0) return [];
     if (!timeHorizonConfig) return [];
 
-    return CLIMATE_INDICATORS.filter((ind) => ind.category !== 'analog')
-      .map((indicator) => {
-        // Find baseline value (historical, 1991-2020)
-        const baselineRow = rawData.find(
-          (v) =>
-            v.indicator_code === indicator.code &&
-            (v.is_baseline || v.scenario === 'historical')
-        );
-        const baselineValue = baselineRow?.value ?? null;
+    const isProjection = scenario !== 'historical' && timeHorizon !== 'baseline';
 
-        // For baseline scenario/horizon, projected = baseline
-        let projectedValue: number | null = null;
-        if (scenario === 'historical' || timeHorizon === 'baseline') {
-          projectedValue = baselineValue;
-        } else {
-          // Find projected value for selected scenario and time horizon
-          const projectedRow = rawData.find(
-            (v) =>
-              v.indicator_code === indicator.code &&
-              v.scenario === scenario &&
-              v.period_start === timeHorizonConfig.periodStart &&
-              v.period_end === timeHorizonConfig.periodEnd
-          );
-          projectedValue = projectedRow?.value ?? null;
+    // Map raw data to UI format
+    const result: ClimateIndicatorData[] = [];
+
+    // Find baseline value from raw data
+    const baselineRow = rawData.find(
+      (v) => v.indicator_code === 'temp_mean_annual' && (v.is_baseline || v.scenario === 'historical')
+    );
+    const baselineValue = baselineRow?.value ?? null;
+
+    // Find projection values from raw data
+    const projectionRow = rawData.find(
+      (v) => v.indicator_code === 'temp_mean_projection' && v.scenario === scenario
+    );
+    const deltaRow = rawData.find(
+      (v) => v.indicator_code === 'temp_delta_vs_baseline' && v.scenario === scenario
+    );
+
+    // Get the temperature indicator definition
+    const tempIndicator = CLIMATE_INDICATORS.find((ind) => ind.code === 'temp_mean_annual');
+
+    if (tempIndicator) {
+      let projectedValue: number | null = null;
+      let absoluteChange: number | null = null;
+      let relativeChange: number | null = null;
+
+      if (isProjection) {
+        // Use projection data
+        projectedValue = projectionRow?.value ?? null;
+        absoluteChange = deltaRow?.value ?? null;
+        
+        // Calculate relative change if we have both values
+        if (absoluteChange !== null && baselineValue !== null && baselineValue !== 0) {
+          relativeChange = (absoluteChange / Math.abs(baselineValue)) * 100;
         }
+      } else {
+        // Baseline mode - projected = baseline
+        projectedValue = baselineValue;
+      }
 
-        // Calculate changes
-        let absoluteChange: number | null = null;
-        let relativeChange: number | null = null;
-
-        if (
-          baselineValue !== null &&
-          projectedValue !== null &&
-          scenario !== 'historical' &&
-          timeHorizon !== 'baseline'
-        ) {
-          absoluteChange = projectedValue - baselineValue;
-          if (baselineValue !== 0) {
-            relativeChange = (absoluteChange / Math.abs(baselineValue)) * 100;
-          }
-        }
-
-        return {
-          indicator,
+      // Only add if we have data
+      if (baselineValue !== null || projectedValue !== null) {
+        result.push({
+          indicator: tempIndicator,
           baselineValue,
           projectedValue,
           absoluteChange,
           relativeChange,
           scenario,
           timeHorizon,
-        };
-      })
-      // Only show indicators that have at least one real value
-      .filter((row) => row.baselineValue !== null || row.projectedValue !== null);
+        });
+      }
+    }
+
+    // Also process other indicators from CLIMATE_INDICATORS if they have data
+    for (const indicator of CLIMATE_INDICATORS) {
+      if (indicator.code === 'temp_mean_annual') continue; // Already handled
+      if (indicator.category === 'analog') continue; // Skip analog indicators
+
+      const indicatorBaselineRow = rawData.find(
+        (v) => v.indicator_code === indicator.code && (v.is_baseline || v.scenario === 'historical')
+      );
+      const indicatorBaselineValue = indicatorBaselineRow?.value ?? null;
+
+      const indicatorProjectedRow = rawData.find(
+        (v) => v.indicator_code === indicator.code && v.scenario === scenario && !v.is_baseline
+      );
+
+      let projectedValue: number | null = null;
+      let absoluteChange: number | null = null;
+      let relativeChange: number | null = null;
+
+      if (isProjection && indicatorProjectedRow) {
+        projectedValue = indicatorProjectedRow.value;
+        if (indicatorBaselineValue !== null && projectedValue !== null) {
+          absoluteChange = projectedValue - indicatorBaselineValue;
+          if (indicatorBaselineValue !== 0) {
+            relativeChange = (absoluteChange / Math.abs(indicatorBaselineValue)) * 100;
+          }
+        }
+      } else {
+        projectedValue = indicatorBaselineValue;
+      }
+
+      if (indicatorBaselineValue !== null || projectedValue !== null) {
+        result.push({
+          indicator,
+          baselineValue: indicatorBaselineValue,
+          projectedValue,
+          absoluteChange,
+          relativeChange,
+          scenario,
+          timeHorizon,
+        });
+      }
+    }
+
+    return result;
   }, [rawData, scenario, timeHorizon, timeHorizonConfig]);
 
   // Calculate climate analog based on projected summer temperature

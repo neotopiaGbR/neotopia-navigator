@@ -10,6 +10,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import * as GeoTIFF from 'https://esm.sh/geotiff@2.1.3';
+import * as pako from 'https://esm.sh/pako@2.1.0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -91,8 +92,7 @@ function tileToBounds(z: number, x: number, y: number): { west: number; south: n
  * Uses a minimal PNG encoder for Deno
  */
 async function createPNG(width: number, height: number, rgba: Uint8ClampedArray): Promise<Uint8Array> {
-  // Use pako for zlib compression
-  const pako = await import('https://esm.sh/pako@2.1.0');
+  // Use pako for zlib compression (static import to avoid runtime network imports in Edge)
   
   // PNG signature
   const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);

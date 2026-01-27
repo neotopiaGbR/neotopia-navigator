@@ -107,33 +107,29 @@ function getServiceRoleKey(): string | null {
 /**
  * Make authenticated REST calls to PostgREST.
  * 
- * For Supabase projects with signing keys (sb_publishable_* / sb_secret_*):
- * - Use ONLY the `apikey` header with the service role key
- * - Do NOT use Authorization header (service role key is not a JWT)
+ * SIGNING-KEY PROJECT FIX (sb_publishable_* / sb_secret_*):
+ * - apikey header: Must be ANON_KEY (publishable) - PostgREST validates this as JWT path
+ * - Authorization header: Must be user's JWT for RLS, OR use service role key in a special way
  * 
- * The service role key in apikey header bypasses RLS.
+ * The service_role key (sb_secret_*) is NOT a JWT and cannot be used in Authorization header.
+ * For server-side calls that need to bypass RLS, we use the user's JWT + RLS policies that allow it,
+ * OR we call via the Supabase JS client which handles this correctly.
+ * 
+ * Workaround: Use ANON_KEY in apikey + user's JWT in Authorization.
+ * This means RLS policies apply. If RLS blocks access, we need to adjust policies.
  */
 async function restJson<T>(
   url: string,
   init: RequestInit,
-  serviceRoleKey: string,
-  userAuthHeader?: string | null
+  anonKey: string,
+  userAuthHeader: string
 ): Promise<{ data: T; status: number } | { error: string; status: number; body?: string }>
 {
   const headers = new Headers(init.headers);
-  // For signing-key projects: use service role key in apikey header ONLY
-  headers.set("apikey", serviceRoleKey);
-
-  // IMPORTANT:
-  // If we omit Authorization entirely, some clients/proxies can end up forwarding
-  // the (non-JWT) API key as a bearer token to PostgREST, triggering:
-  //   PGRST301 Expected 3 parts in JWT; got 1
-  // To prevent that, forward the *incoming user JWT* when available.
-  headers.delete("authorization");
-  headers.delete("Authorization");
-  if (userAuthHeader && userAuthHeader.startsWith("Bearer ")) {
-    headers.set("Authorization", userAuthHeader);
-  }
+  // Use anon/publishable key - PostgREST expects this to be a valid JWT or known key
+  headers.set("apikey", anonKey);
+  // Forward the user's JWT for authentication
+  headers.set("Authorization", userAuthHeader);
   
   const res = await fetch(url, { ...init, headers });
   const status = res.status;
@@ -196,8 +192,8 @@ async function fetchAnnualMeanTempC(
 async function getRegionCentroid(
   regionId: string,
   supabaseUrl: string,
-  serviceRoleKey: string,
-  userAuthHeader?: string | null
+  anonKey: string,
+  userAuthHeader: string
 ): Promise<{ lat: number; lon: number }>
 {
   const url = new URL(`${supabaseUrl}/rest/v1/regions`);
@@ -208,7 +204,7 @@ async function getRegionCentroid(
   const res = await restJson<Array<{ centroid: unknown; geom: unknown }>>(
     url.toString(),
     { method: "GET" },
-    serviceRoleKey,
+    anonKey,
     userAuthHeader
   );
 
@@ -257,10 +253,17 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = getSupabaseUrl();
-  const serviceRoleKey = getServiceRoleKey();
+  const anonKey = getAnonKey();
   
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!supabaseUrl || !anonKey) {
     return json({ error: "Server configuration error: missing env vars" }, 500);
+  }
+
+  // Forward the caller's JWT to internal PostgREST calls
+  // With signing-key projects, we use anonKey in apikey header + user JWT in Authorization
+  const userAuthHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
+  if (!userAuthHeader || !userAuthHeader.startsWith("Bearer ")) {
+    return json({ error: "Missing or invalid Authorization header" }, 401);
   }
 
   let body: any;
@@ -286,11 +289,8 @@ Deno.serve(async (req) => {
 
   const nowIso = new Date().toISOString();
 
-  // Forward the caller's JWT to internal PostgREST calls (see restJson note above)
-  const userAuthHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
-
   try {
-    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, serviceRoleKey, userAuthHeader);
+    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, anonKey, userAuthHeader);
     const { lat, lon } = centroid;
 
     // indicators registry
@@ -301,7 +301,7 @@ Deno.serve(async (req) => {
     const indRes = await restJson<IndicatorMetaRow[]>(
       indUrl.toString(),
       { method: "GET" },
-      serviceRoleKey,
+      anonKey,
       userAuthHeader
     );
     if ("error" in indRes) {
@@ -331,7 +331,7 @@ Deno.serve(async (req) => {
     const cacheRes = await restJson<any[]>(
       cacheUrl.toString(),
       { method: "GET" },
-      serviceRoleKey,
+      anonKey,
       userAuthHeader
     );
     const cachedRows = "error" in cacheRes ? [] : cacheRes.data || [];
@@ -423,10 +423,8 @@ Deno.serve(async (req) => {
       const upRes = await fetch(upsertUrl.toString(), {
         method: "POST",
         headers: {
-          apikey: serviceRoleKey,
-          ...(userAuthHeader && userAuthHeader.startsWith("Bearer ")
-            ? { Authorization: userAuthHeader }
-            : {}),
+          apikey: anonKey,
+          Authorization: userAuthHeader,
           "Content-Type": "application/json",
           Prefer: "resolution=merge-duplicates,return=minimal",
         },
@@ -457,7 +455,7 @@ Deno.serve(async (req) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ p_indicator_codes: indicatorCodes }),
       },
-      serviceRoleKey,
+      anonKey,
       userAuthHeader
     );
 

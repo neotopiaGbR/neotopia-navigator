@@ -6,15 +6,9 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-// Climate indicator definitions
-const CLIMATE_INDICATORS = [
-  { code: 'mean_annual_temperature', name: 'Jahresmitteltemperatur', unit: '°C' },
-  { code: 'summer_mean_temperature', name: 'Sommermittel (JJA)', unit: '°C' },
-  { code: 'heat_days_30c', name: 'Heiße Tage (≥30°C)', unit: 'Tage/Jahr' },
-  { code: 'tropical_nights_20c', name: 'Tropennächte (≥20°C)', unit: 'Nächte/Jahr' },
-  { code: 'max_daily_temperature', name: 'Max. Tagestemperatur', unit: '°C' },
-  { code: 'annual_precipitation_sum', name: 'Jahresniederschlag', unit: 'mm' },
-]
+// We only guarantee one real indicator end-to-end right now.
+// Do NOT change indicator definitions in the DB; this function uses the registry via indicators.code.
+const DEFAULT_INDICATOR_CODES = ['temp_mean_annual']
 
 // Open-Meteo Archive API (ERA5-Land data, free, no API key)
 const OPEN_METEO_ARCHIVE_URL = 'https://archive-api.open-meteo.com/v1/archive'
@@ -77,6 +71,13 @@ interface ClimateIndicatorRow {
   is_baseline: boolean
   dataset_key: string
   attribution: string
+}
+
+type IndicatorMetaRow = {
+  id: string
+  code: string
+  unit: string | null
+  default_ttl_days: number | null
 }
 
 interface OpenMeteoResponse {
@@ -224,7 +225,7 @@ async function getRegionCentroid(
     .from('regions')
     .select('geom')
     .eq('id', regionId)
-    .single()
+    .maybeSingle()
 
   if (regionError) {
     console.error('[get-climate-indicators] Error fetching region:', regionError)
@@ -265,6 +266,57 @@ async function getRegionCentroid(
   return null
 }
 
+async function fetchAnnualMeanTempC(
+  lat: number,
+  lon: number,
+  year: number
+): Promise<{ value: number; dailyCount: number } | { error: string }> {
+  const startDate = `${year}-01-01`
+  const endDate = `${year}-12-31`
+
+  const params = new URLSearchParams({
+    latitude: lat.toString(),
+    longitude: lon.toString(),
+    start_date: startDate,
+    end_date: endDate,
+    daily: 'temperature_2m_mean',
+    timezone: 'auto',
+  })
+
+  const url = `${OPEN_METEO_ARCHIVE_URL}?${params}`
+  console.log(`[get-climate-indicators] Open-Meteo request: ${url}`)
+
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 15000)
+    const response = await fetch(url, { signal: controller.signal })
+    clearTimeout(timeoutId)
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('[get-climate-indicators] Open-Meteo error:', response.status, errorText)
+      return { error: `Open-Meteo API error: ${response.status}` }
+    }
+
+    const data: OpenMeteoResponse = await response.json()
+    const daily = data.daily?.temperature_2m_mean
+    if (!daily) return { error: 'Open-Meteo response missing daily temperature_2m_mean' }
+
+    const readings = daily.filter((v): v is number => v !== null)
+    if (readings.length < 300) {
+      return { error: `Insufficient daily readings (${readings.length}) for year ${year}` }
+    }
+
+    const mean = readings.reduce((a, b) => a + b, 0) / readings.length
+    const rounded = Math.round(mean * 10) / 10
+    console.log(`[get-climate-indicators] Annual mean computed: ${rounded}°C from ${readings.length} days`)
+    return { value: rounded, dailyCount: readings.length }
+  } catch (err) {
+    console.error('[get-climate-indicators] Open-Meteo fetch failed:', err)
+    return { error: err instanceof Error ? err.message : 'Network error' }
+  }
+}
+
 Deno.serve(async (req) => {
   console.log('[get-climate-indicators] Function invoked, method:', req.method)
 
@@ -293,7 +345,17 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey)
 
-    let body: { p_region_id?: string; p_scenario?: string; p_period_start?: number; p_period_end?: number }
+    let body: {
+      // new contract
+      region_id?: string
+      indicator_codes?: string[]
+      year?: number
+      // backwards compatibility
+      p_region_id?: string
+      p_scenario?: string
+      p_period_start?: number
+      p_period_end?: number
+    }
     try {
       body = await req.json()
     } catch (parseError) {
@@ -304,9 +366,17 @@ Deno.serve(async (req) => {
       )
     }
 
-    const { p_region_id, p_scenario, p_period_start, p_period_end } = body
+    const p_region_id = body.region_id ?? body.p_region_id
+    const indicatorCodes = Array.isArray(body.indicator_codes) && body.indicator_codes.length > 0
+      ? body.indicator_codes
+      : DEFAULT_INDICATOR_CODES
+    const requestYear = typeof body.year === 'number' ? body.year : new Date().getUTCFullYear() - 1
 
-    console.log('[get-climate-indicators] Request params:', { p_region_id, p_scenario, p_period_start, p_period_end })
+    console.log('[get-climate-indicators] Request params:', {
+      region_id: p_region_id,
+      indicator_codes: indicatorCodes,
+      year: requestYear,
+    })
 
     if (!p_region_id) {
       return new Response(
@@ -314,11 +384,6 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
-
-    // Determine time horizon
-    const horizonKey = p_period_start === 2031 ? 'near' : p_period_start === 2071 ? 'far' : null
-    const scenario = p_scenario || null
-    const isProjection = scenario !== null && horizonKey !== null
 
     // Get region centroid
     const centroid = await getRegionCentroid(supabase, p_region_id)
@@ -330,88 +395,213 @@ Deno.serve(async (req) => {
       )
     }
 
-    console.log(`[get-climate-indicators] Region centroid: lat=${centroid.lat}, lon=${centroid.lon}`)
+    console.log(`[get-climate-indicators] Resolved centroid: lat=${centroid.lat}, lon=${centroid.lon}`)
 
-    // Determine baseline year (most recent complete year)
-    const referenceYear = 2023 // Use 2023 as reference baseline
+    // Load indicator registry rows
+    const { data: indicatorRows, error: indicatorError } = await supabase
+      .from('indicators')
+      .select('id, code, unit, default_ttl_days')
+      .in('code', indicatorCodes)
 
-    // Fetch from Open-Meteo
-    console.log('[get-climate-indicators] Fetching baseline data from Open-Meteo...')
-    const climateData = await fetchClimateFromOpenMeteo(centroid.lat, centroid.lon, referenceYear)
-    
-    // Build baseline values (use fetched data or fallback to computed estimates)
-    const baselineValues: Record<string, number | null> = {
-      mean_annual_temperature: climateData.meanTemp ?? (10.5 - (centroid.lat - 50) * 0.6),
-      summer_mean_temperature: climateData.summerMeanTemp ?? (19.5 - (centroid.lat - 50) * 0.5),
-      heat_days_30c: climateData.hotDays ?? 8,
-      tropical_nights_20c: climateData.tropicalNights ?? 2,
-      max_daily_temperature: climateData.maxTemp ?? 35,
-      annual_precipitation_sum: climateData.precipSum ?? 700,
+    if (indicatorError) {
+      console.error('[get-climate-indicators] Failed to load indicators:', indicatorError)
+      return new Response(
+        JSON.stringify({ error: 'Indicator registry lookup failed' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
-    console.log('[get-climate-indicators] Baseline values:', baselineValues)
+    const indicators = (indicatorRows || []) as IndicatorMetaRow[]
+    const byCode = new Map(indicators.map((i) => [i.code, i]))
 
-    // Build result array
-    const result: ClimateIndicatorRow[] = []
-    const datasetsUsed = new Set<string>()
-
-    // Add baseline values
-    for (const indicator of CLIMATE_INDICATORS) {
-      const value = baselineValues[indicator.code]
-      if (value === null || value === undefined) continue
-
-      datasetsUsed.add(DATASET_ERA5.key)
-
-      result.push({
-        indicator_code: indicator.code,
-        indicator_name: indicator.name,
-        value: Math.round(value * 10) / 10,
-        unit: indicator.unit,
-        scenario: null,
-        period_start: 1991,
-        period_end: 2020,
-        is_baseline: true,
-        dataset_key: DATASET_ERA5.key,
-        attribution: DATASET_ERA5.attribution,
-      })
-    }
-
-    // Add projected values if scenario is specified
-    if (isProjection && scenario && SCENARIO_DELTAS[scenario]) {
-      datasetsUsed.add(DATASET_CORDEX.key)
-
-      for (const indicator of CLIMATE_INDICATORS) {
-        const baseValue = baselineValues[indicator.code]
-        if (baseValue === null || baseValue === undefined) continue
-
-        const delta = SCENARIO_DELTAS[scenario][indicator.code]?.[horizonKey!]
-        if (delta === undefined) continue
-
-        const projectedValue = Math.round((baseValue + delta) * 10) / 10
-
-        result.push({
-          indicator_code: indicator.code,
-          indicator_name: indicator.name,
-          value: projectedValue,
-          unit: indicator.unit,
-          scenario,
-          period_start: p_period_start ?? 2031,
-          period_end: p_period_end ?? 2060,
-          is_baseline: false,
-          dataset_key: DATASET_CORDEX.key,
-          attribution: DATASET_CORDEX.attribution,
-        })
+    for (const code of indicatorCodes) {
+      if (!byCode.has(code)) {
+        return new Response(
+          JSON.stringify({ error: `Indikator '${code}' nicht in der Registry gefunden` }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
       }
     }
 
+    const nowIso = new Date().toISOString()
+    const indicatorIds = indicators.map((i) => i.id)
+
+    // Check cache
+    const { data: cachedRows, error: cacheError } = await supabase
+      .from('indicator_values')
+      .select('indicator_id, value, year, computed_at, expires_at, source_dataset_key')
+      .eq('region_id', p_region_id)
+      .in('indicator_id', indicatorIds)
+      .eq('year', requestYear)
+      .is('scenario', null)
+      .is('period_start', null)
+      .is('period_end', null)
+      .gt('expires_at', nowIso)
+
+    if (cacheError) {
+      console.error('[get-climate-indicators] Cache query error:', cacheError)
+      // Continue (we can still compute)
+    }
+
+    const cachedByIndicatorId = new Map<string, any>((cachedRows || []).map((r: any) => [r.indicator_id, r]))
+    const values: Array<{
+      indicator_code: string
+      value: number | null
+      unit: string
+      year: number
+      scenario: string | null
+      period_start: number
+      period_end: number
+      is_baseline: boolean
+      dataset_key: string
+      cached: boolean
+    }> = []
+
+    const datasetsUsed = new Set<string>()
+    let allCached = true
+
+    for (const code of indicatorCodes) {
+      const indicator = byCode.get(code)!
+      const cached = cachedByIndicatorId.get(indicator.id)
+
+      if (cached && typeof cached.value === 'number') {
+        console.log(`[get-climate-indicators] Cache hit: ${code}=${cached.value} (year=${requestYear})`)
+        datasetsUsed.add(cached.source_dataset_key || DATASET_ERA5.key)
+        values.push({
+          indicator_code: code,
+          value: cached.value,
+          unit: indicator.unit || '°C',
+          year: requestYear,
+          scenario: null,
+          period_start: requestYear,
+          period_end: requestYear,
+          is_baseline: true,
+          dataset_key: cached.source_dataset_key || DATASET_ERA5.key,
+          cached: true,
+        })
+        continue
+      }
+
+      allCached = false
+
+      if (code !== 'temp_mean_annual') {
+        // We only compute temp_mean_annual right now.
+        values.push({
+          indicator_code: code,
+          value: null,
+          unit: indicator.unit || '',
+          year: requestYear,
+          scenario: null,
+          period_start: requestYear,
+          period_end: requestYear,
+          is_baseline: true,
+          dataset_key: DATASET_ERA5.key,
+          cached: false,
+        })
+        continue
+      }
+
+      console.log(`[get-climate-indicators] Cache miss: ${code} (year=${requestYear}) → fetching Open-Meteo…`)
+      const computed = await fetchAnnualMeanTempC(centroid.lat, centroid.lon, requestYear)
+      if ('error' in computed) {
+        // Clear backend error, not silent
+        return new Response(
+          JSON.stringify({ error: `Open-Meteo fehlgeschlagen: ${computed.error}` }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      datasetsUsed.add(DATASET_ERA5.key)
+
+      const ttlDays = indicator.default_ttl_days || 90
+      const computedAt = nowIso
+      const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString()
+
+      console.log('[get-climate-indicators] Writing cache…', {
+        region_id: p_region_id,
+        indicator_code: code,
+        year: requestYear,
+        computed_at: computedAt,
+        expires_at: expiresAt,
+      })
+
+      const { error: upsertError } = await supabase
+        .from('indicator_values')
+        .upsert(
+          {
+            indicator_id: indicator.id,
+            region_id: p_region_id,
+            value: computed.value,
+            year: requestYear,
+            scenario: null,
+            period_start: null,
+            period_end: null,
+            computed_at: computedAt,
+            expires_at: expiresAt,
+            stale: false,
+            source_dataset_key: DATASET_ERA5.key,
+            source_meta: {
+              lat: centroid.lat,
+              lon: centroid.lon,
+              source_api: 'open-meteo',
+              daily_readings: computed.dailyCount,
+            },
+          },
+          {
+            onConflict: 'indicator_id,region_id,year,scenario,period_start,period_end',
+          }
+        )
+
+      if (upsertError) {
+        console.error('[get-climate-indicators] Cache upsert error:', upsertError)
+        // Still return computed value (don’t block UI)
+      }
+
+      values.push({
+        indicator_code: code,
+        value: computed.value,
+        unit: indicator.unit || '°C',
+        year: requestYear,
+        scenario: null,
+        period_start: requestYear,
+        period_end: requestYear,
+        is_baseline: true,
+        dataset_key: DATASET_ERA5.key,
+        cached: false,
+      })
+    }
+
+    // Attribution via registry
+    let attribution: any[] = []
+    const { data: sources, error: sourcesError } = await supabase.rpc('get_indicator_sources', {
+      p_indicator_codes: indicatorCodes,
+    })
+    if (sourcesError) {
+      console.error('[get-climate-indicators] get_indicator_sources failed:', sourcesError)
+      attribution = [
+        {
+          indicator_code: 'temp_mean_annual',
+          dataset_key: DATASET_ERA5.key,
+          dataset_name: 'ERA5-Land Hourly Data',
+          provider: 'Copernicus Climate Change Service (C3S)',
+          license: 'CC BY 4.0',
+          attribution: DATASET_ERA5.attribution,
+          url: 'https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-land',
+        },
+      ]
+    } else {
+      attribution = sources || []
+    }
+
     const elapsed = Date.now() - startTime
-    console.log(`[get-climate-indicators] Complete: ${result.length} indicators, ${elapsed}ms`)
+    console.log(`[get-climate-indicators] Complete: ${values.length} values, cached=${allCached}, ${elapsed}ms`)
 
     return new Response(
       JSON.stringify({
-        indicators: result,
+        values,
+        attribution,
         datasets_used: Array.from(datasetsUsed),
-        cached: false,
+        cached: allCached,
         computed_at: new Date().toISOString(),
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

@@ -53,45 +53,6 @@ function toNumber(x: unknown) {
   return Number.isFinite(n) ? n : null;
 }
 
-function parsePoint(value: unknown): { lat: number; lon: number } | null {
-  if (!value) return null;
-
-  // GeoJSON object
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    (value as any).type === "Point" &&
-    Array.isArray((value as any).coordinates)
-  ) {
-    const lon = toNumber((value as any).coordinates[0]);
-    const lat = toNumber((value as any).coordinates[1]);
-    if (lat === null || lon === null) return null;
-    return { lat, lon };
-  }
-
-  // String: try JSON first
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      const p = parsePoint(parsed);
-      if (p) return p;
-    } catch {
-      // ignore
-    }
-
-    // String WKT: POINT(lon lat)
-    const m = value.match(/POINT\s*\(\s*([-0-9.]+)\s+([-0-9.]+)\s*\)/i);
-    if (m) {
-      const lon = toNumber(m[1]);
-      const lat = toNumber(m[2]);
-      if (lat === null || lon === null) return null;
-      return { lat, lon };
-    }
-  }
-
-  return null;
-}
-
 function getSupabaseUrl(): string | null {
   return Deno.env.get("SUPABASE_URL") || null;
 }
@@ -100,37 +61,50 @@ function getAnonKey(): string | null {
   return Deno.env.get("SUPABASE_ANON_KEY") || null;
 }
 
-function getServiceRoleKey(): string | null {
-  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || null;
+/**
+ * Calculate centroid from a Polygon or MultiPolygon GeoJSON geometry
+ */
+function centroidFromGeom(geom: unknown): { lat: number; lon: number } | null {
+  const g = geom as any;
+  if (!g || typeof g !== "object" || !Array.isArray(g.coordinates)) {
+    return null;
+  }
+
+  const type = g.type;
+  let coords: number[][] | null = null;
+
+  if (type === "Polygon") {
+    coords = g.coordinates?.[0] ?? null;
+  } else if (type === "MultiPolygon") {
+    coords = g.coordinates?.[0]?.[0] ?? null;
+  }
+
+  if (!coords || !coords.length) return null;
+
+  const lons = coords.map((c) => toNumber(c?.[0])).filter((x): x is number => x !== null);
+  const lats = coords.map((c) => toNumber(c?.[1])).filter((x): x is number => x !== null);
+
+  if (!lons.length || !lats.length) return null;
+
+  return {
+    lon: lons.reduce((a, b) => a + b, 0) / lons.length,
+    lat: lats.reduce((a, b) => a + b, 0) / lats.length,
+  };
 }
 
 /**
  * Make authenticated REST calls to PostgREST.
- * 
- * SIGNING-KEY PROJECT FIX (sb_publishable_* / sb_secret_*):
- * - apikey header: Must be ANON_KEY (publishable) - PostgREST validates this as JWT path
- * - Authorization header: Must be user's JWT for RLS, OR use service role key in a special way
- * 
- * The service_role key (sb_secret_*) is NOT a JWT and cannot be used in Authorization header.
- * For server-side calls that need to bypass RLS, we use the user's JWT + RLS policies that allow it,
- * OR we call via the Supabase JS client which handles this correctly.
- * 
- * Workaround: Use ANON_KEY in apikey + user's JWT in Authorization.
- * This means RLS policies apply. If RLS blocks access, we need to adjust policies.
  */
 async function restJson<T>(
   url: string,
   init: RequestInit,
   anonKey: string,
   userAuthHeader: string
-): Promise<{ data: T; status: number } | { error: string; status: number; body?: string }>
-{
+): Promise<{ data: T; status: number } | { error: string; status: number; body?: string }> {
   const headers = new Headers(init.headers);
-  // Use anon/publishable key - PostgREST expects this to be a valid JWT or known key
   headers.set("apikey", anonKey);
-  // Forward the user's JWT for authentication
   headers.set("Authorization", userAuthHeader);
-  
+
   const res = await fetch(url, { ...init, headers });
   const status = res.status;
   const text = await res.text();
@@ -141,8 +115,7 @@ async function restJson<T>(
   try {
     return { data: JSON.parse(text) as T, status };
   } catch {
-    // Some endpoints can return empty bodies
-    return { data: (undefined as unknown) as T, status };
+    return { data: undefined as unknown as T, status };
   }
 }
 
@@ -150,8 +123,7 @@ async function fetchAnnualMeanTempC(
   lat: number,
   lon: number,
   year: number
-): Promise<{ value: number; dailyCount: number } | { error: string }>
-{
+): Promise<{ value: number; dailyCount: number } | { error: string }> {
   const startDate = `${year}-01-01`;
   const endDate = `${year}-12-31`;
 
@@ -194,14 +166,13 @@ async function getRegionCentroid(
   supabaseUrl: string,
   anonKey: string,
   userAuthHeader: string
-): Promise<{ lat: number; lon: number }>
-{
+): Promise<{ lat: number; lon: number }> {
   const url = new URL(`${supabaseUrl}/rest/v1/regions`);
   url.searchParams.set("id", `eq.${regionId}`);
-  url.searchParams.set("select", "centroid,geom");
+  url.searchParams.set("select", "geom"); // Only geom - centroid column doesn't exist
   url.searchParams.set("limit", "1");
 
-  const res = await restJson<Array<{ centroid: unknown; geom: unknown }>>(
+  const res = await restJson<Array<{ geom: unknown }>>(
     url.toString(),
     { method: "GET" },
     anonKey,
@@ -217,35 +188,10 @@ async function getRegionCentroid(
   const row = res.data?.[0];
   if (!row) throw new Error("Region not found");
 
-  const fromCentroid = parsePoint(row.centroid);
-  if (fromCentroid) return fromCentroid;
+  const fromGeom = centroidFromGeom(row.geom);
+  if (fromGeom) return fromGeom;
 
-  // Try to compute from GeoJSON geom if available
-  const g = row.geom as any;
-  if (g && typeof g === "object" && Array.isArray(g.coordinates)) {
-    // crude fallback: average first ring points
-    const type = g.type;
-    let coords: number[][] | null = null;
-
-    if (type === "Polygon") {
-      coords = g.coordinates?.[0] ?? null;
-    } else if (type === "MultiPolygon") {
-      coords = g.coordinates?.[0]?.[0] ?? null;
-    }
-
-    if (coords && coords.length) {
-      const lons = coords.map((c) => toNumber(c?.[0])).filter((x): x is number => x !== null);
-      const lats = coords.map((c) => toNumber(c?.[1])).filter((x): x is number => x !== null);
-      if (lons.length && lats.length) {
-        return {
-          lon: lons.reduce((a, b) => a + b, 0) / lons.length,
-          lat: lats.reduce((a, b) => a + b, 0) / lats.length,
-        };
-      }
-    }
-  }
-
-  throw new Error("Region centroid missing/invalid");
+  throw new Error("Region geometry missing/invalid");
 }
 
 Deno.serve(async (req) => {
@@ -254,13 +200,11 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = getSupabaseUrl();
   const anonKey = getAnonKey();
-  
+
   if (!supabaseUrl || !anonKey) {
     return json({ error: "Server configuration error: missing env vars" }, 500);
   }
 
-  // Forward the caller's JWT to internal PostgREST calls
-  // With signing-key projects, we use anonKey in apikey header + user JWT in Authorization
   const userAuthHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
   if (!userAuthHeader || !userAuthHeader.startsWith("Bearer ")) {
     return json({ error: "Missing or invalid Authorization header" }, 401);
@@ -278,10 +222,12 @@ Deno.serve(async (req) => {
   const p_period_start = body?.p_period_start ?? null;
   const p_period_end = body?.p_period_end ?? null;
 
-  const indicatorCodes: string[] = Array.isArray(body?.indicator_codes) && body.indicator_codes.length
-    ? body.indicator_codes
-    : DEFAULT_INDICATOR_CODES;
-  const requestYear: number = typeof body?.year === "number" ? body.year : new Date().getUTCFullYear() - 1;
+  const indicatorCodes: string[] =
+    Array.isArray(body?.indicator_codes) && body.indicator_codes.length
+      ? body.indicator_codes
+      : DEFAULT_INDICATOR_CODES;
+  const requestYear: number =
+    typeof body?.year === "number" ? body.year : new Date().getUTCFullYear() - 1;
 
   if (!p_region_id || typeof p_region_id !== "string") {
     return badRequest("Missing p_region_id (uuid string)");
@@ -305,7 +251,10 @@ Deno.serve(async (req) => {
       userAuthHeader
     );
     if ("error" in indRes) {
-      return json({ error: `Indicator registry lookup failed: ${indRes.body ?? indRes.error}` }, 500);
+      return json(
+        { error: `Indicator registry lookup failed: ${indRes.body ?? indRes.error}` },
+        500
+      );
     }
     const indicators = indRes.data ?? [];
     const byCode = new Map(indicators.map((i) => [i.code, i]));
@@ -313,13 +262,10 @@ Deno.serve(async (req) => {
       if (!byCode.has(code)) return badRequest(`Indicator not found: ${code}`);
     }
 
-    // cache lookup
+    // cache lookup - only select columns that exist in the table
     const indicatorIds = indicators.map((i) => i.id);
     const cacheUrl = new URL(`${supabaseUrl}/rest/v1/indicator_values`);
-    cacheUrl.searchParams.set(
-      "select",
-      "indicator_id,value,year,computed_at,expires_at,source_dataset_key"
-    );
+    cacheUrl.searchParams.set("select", "indicator_id,value,year,computed_at,expires_at");
     cacheUrl.searchParams.set("region_id", `eq.${p_region_id}`);
     cacheUrl.searchParams.set("year", `eq.${requestYear}`);
     cacheUrl.searchParams.set("indicator_id", `in.(${indicatorIds.join(",")})`);
@@ -347,7 +293,7 @@ Deno.serve(async (req) => {
       const cached = cachedByIndicatorId.get(indicator.id);
 
       if (cached && typeof cached.value === "number") {
-        datasetsUsed.add(cached.source_dataset_key || DATASET_ERA5.key);
+        datasetsUsed.add(DATASET_ERA5.key);
         values.push({
           indicator_code: code,
           value: cached.value,
@@ -356,7 +302,7 @@ Deno.serve(async (req) => {
           period_start: requestYear,
           period_end: requestYear,
           is_baseline: true,
-          dataset_key: cached.source_dataset_key || DATASET_ERA5.key,
+          dataset_key: DATASET_ERA5.key,
         });
         continue;
       }
@@ -379,22 +325,19 @@ Deno.serve(async (req) => {
 
       const computed = await fetchAnnualMeanTempC(lat, lon, requestYear);
       if ("error" in computed) {
-        // Keep it JSON + actionable
         return json({ error: computed.error }, 500);
       }
 
       datasetsUsed.add(DATASET_ERA5.key);
 
-      // upsert cache (best-effort)
+      // Best-effort cache insert (skip upsert to avoid constraint issues)
+      // The table may not have the unique constraint we need, so we just INSERT and ignore failures
       const ttlDays = indicator.default_ttl_days ?? 90;
       const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
 
-      const upsertUrl = new URL(`${supabaseUrl}/rest/v1/indicator_values`);
-      upsertUrl.searchParams.set(
-        "on_conflict",
-        "indicator_id,region_id,year,scenario,period_start,period_end"
-      );
+      const insertUrl = new URL(`${supabaseUrl}/rest/v1/indicator_values`);
 
+      // Only include columns that exist in the table schema
       const payload = {
         indicator_id: indicator.id,
         region_id: p_region_id,
@@ -406,32 +349,30 @@ Deno.serve(async (req) => {
         computed_at: nowIso,
         expires_at: expiresAt,
         stale: false,
-        source_dataset_key: DATASET_ERA5.key,
-        source_meta: {
-          lat,
-          lon,
-          source_api: "open-meteo",
-          daily_readings: computed.dailyCount,
-          requested: {
-            p_scenario,
-            p_period_start,
-            p_period_end,
-          },
-        },
       };
 
-      const upRes = await fetch(upsertUrl.toString(), {
-        method: "POST",
-        headers: {
-          apikey: anonKey,
-          Authorization: userAuthHeader,
-          "Content-Type": "application/json",
-          Prefer: "resolution=merge-duplicates,return=minimal",
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!upRes.ok) {
-        console.warn("[get-climate-indicators] cache upsert failed", upRes.status, await upRes.text());
+      // Use simple INSERT without on_conflict - best effort caching
+      try {
+        const insertRes = await fetch(insertUrl.toString(), {
+          method: "POST",
+          headers: {
+            apikey: anonKey,
+            Authorization: userAuthHeader,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!insertRes.ok) {
+          // Log but don't fail - caching is optional
+          console.warn(
+            "[get-climate-indicators] cache insert failed (non-fatal)",
+            insertRes.status
+          );
+        }
+      } catch (cacheErr) {
+        console.warn("[get-climate-indicators] cache insert error (non-fatal)", cacheErr);
       }
 
       values.push({
@@ -459,15 +400,16 @@ Deno.serve(async (req) => {
       userAuthHeader
     );
 
-    const attribution = "error" in rpcRes
-      ? [
-          {
-            indicator_code: "temp_mean_annual",
-            dataset_key: DATASET_ERA5.key,
-            attribution: DATASET_ERA5.attribution,
-          },
-        ]
-      : (rpcRes.data ?? []);
+    const attribution =
+      "error" in rpcRes
+        ? [
+            {
+              indicator_code: "temp_mean_annual",
+              dataset_key: DATASET_ERA5.key,
+              attribution: DATASET_ERA5.attribution,
+            },
+          ]
+        : (rpcRes.data ?? []);
 
     return json({
       values,

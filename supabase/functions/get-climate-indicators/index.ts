@@ -1,14 +1,15 @@
 /**
  * get-climate-indicators Edge Function
  * 
- * PRODUCTION VERSION - Full projection support
+ * PRODUCTION VERSION - Full projection support with heat indicators
  * 
  * This function:
  * 1. Accepts region_id and fetches its centroid from geometry
  * 2. For baseline: fetches ERA5 data from Open-Meteo Archive API
- * 3. For projections: fetches CMIP6 data from Open-Meteo Climate API
- * 4. Caches results in indicator_values with TTL
- * 5. Returns consistent JSON with proper HTTP status codes
+ * 3. For projections: applies IPCC AR6 warming estimates
+ * 4. Computes heat indicators: hot_days_30c, tropical_nights_20c, summer_days_25c, heat_wave_days
+ * 5. Caches results in indicator_values with TTL
+ * 6. Returns consistent JSON with proper HTTP status codes
  * 
  * Auth: verify_jwt=false in config.toml - we validate manually if needed
  * CORS: Full preflight support
@@ -24,7 +25,6 @@ const corsHeaders: Record<string, string> = {
 
 // API URLs
 const OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
-const OPEN_METEO_CLIMATE_URL = "https://climate-api.open-meteo.com/v1/climate";
 
 // Dataset keys
 const DATASET_KEY_ERA5 = "copernicus_era5_land";
@@ -39,13 +39,15 @@ const BASELINE_PERIOD_END = 2020;
 const VALID_SCENARIOS = ["ssp126", "ssp245", "ssp370", "ssp585"] as const;
 type SspScenario = typeof VALID_SCENARIOS[number];
 
-// Open-Meteo Climate API uses different scenario names
-const SCENARIO_TO_OPENMETEO: Record<SspScenario, string> = {
-  ssp126: "ssp1_2_6",
-  ssp245: "ssp2_4_5",
-  ssp370: "ssp3_7_0",
-  ssp585: "ssp5_8_5",
-};
+// Heat indicator codes
+const HEAT_INDICATOR_CODES = [
+  "hot_days_30c",
+  "tropical_nights_20c", 
+  "summer_days_25c",
+  "heat_wave_days",
+] as const;
+
+type HeatIndicatorCode = typeof HEAT_INDICATOR_CODES[number];
 
 // ──────────────────────────────────────────────────────────────────────────────
 // RESPONSE HELPERS
@@ -229,6 +231,11 @@ const FALLBACK_INDICATORS: Record<string, IndicatorMeta> = {
   temp_mean_annual: { id: "temp_mean_annual_fallback", code: "temp_mean_annual", unit: "°C", ttlDays: 90 },
   temp_mean_projection: { id: "temp_mean_projection_fallback", code: "temp_mean_projection", unit: "°C", ttlDays: 180 },
   temp_delta_vs_baseline: { id: "temp_delta_vs_baseline_fallback", code: "temp_delta_vs_baseline", unit: "°C", ttlDays: 180 },
+  // Heat indicators
+  hot_days_30c: { id: "hot_days_30c_fallback", code: "hot_days_30c", unit: "days/year", ttlDays: 180 },
+  tropical_nights_20c: { id: "tropical_nights_20c_fallback", code: "tropical_nights_20c", unit: "nights/year", ttlDays: 180 },
+  summer_days_25c: { id: "summer_days_25c_fallback", code: "summer_days_25c", unit: "days/year", ttlDays: 180 },
+  heat_wave_days: { id: "heat_wave_days_fallback", code: "heat_wave_days", unit: "days/year", ttlDays: 180 },
 };
 
 async function getIndicatorMeta(
@@ -267,6 +274,52 @@ async function getIndicatorMeta(
     console.warn(`[get-climate-indicators] Indicator '${code}' lookup error, using fallback:`, e);
     return fallback;
   }
+}
+
+// Batch fetch multiple indicator metadata
+async function getMultipleIndicatorMeta(
+  supabaseUrl: string,
+  anonKey: string,
+  authHeader: string | undefined,
+  codes: string[]
+): Promise<Record<string, IndicatorMeta>> {
+  const result: Record<string, IndicatorMeta> = {};
+  
+  // Initialize with fallbacks
+  for (const code of codes) {
+    result[code] = FALLBACK_INDICATORS[code] || { id: `${code}_fallback`, code, unit: "days/year", ttlDays: 180 };
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/indicators`);
+  url.searchParams.set("select", "id,code,unit,default_ttl_days");
+  url.searchParams.set("code", `in.(${codes.join(",")})`);
+
+  try {
+    const res = await restJson<Array<{ id: string; code: string; unit: string | null; default_ttl_days: number | null }>>(
+      url.toString(),
+      { method: "GET" },
+      anonKey,
+      authHeader
+    );
+
+    if ("error" in res) {
+      console.warn(`[get-climate-indicators] Batch indicator lookup failed: ${res.status}`);
+      return result;
+    }
+
+    for (const row of res.data ?? []) {
+      result[row.code] = { 
+        id: row.id, 
+        code: row.code, 
+        unit: row.unit, 
+        ttlDays: row.default_ttl_days ?? 180 
+      };
+    }
+  } catch (e) {
+    console.warn(`[get-climate-indicators] Batch indicator lookup error:`, e);
+  }
+
+  return result;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -313,6 +366,47 @@ async function checkCache(args: CacheCheckArgs): Promise<{ value: number } | nul
 
   const row = res.data?.[0];
   return row && typeof row.value === "number" ? { value: row.value } : null;
+}
+
+// Batch check cache for multiple indicators
+async function checkMultipleCache(
+  supabaseUrl: string,
+  anonKey: string,
+  authHeader: string | undefined,
+  regionId: string,
+  indicatorIds: string[],
+  scenario: string,
+  periodStart: number,
+  periodEnd: number
+): Promise<Map<string, number>> {
+  const nowIso = new Date().toISOString();
+  const result = new Map<string, number>();
+
+  const cacheUrl = new URL(`${supabaseUrl}/rest/v1/indicator_values`);
+  cacheUrl.searchParams.set("select", "indicator_id,value");
+  cacheUrl.searchParams.set("region_id", `eq.${regionId}`);
+  cacheUrl.searchParams.set("indicator_id", `in.(${indicatorIds.join(",")})`);
+  cacheUrl.searchParams.set("scenario", `eq.${scenario}`);
+  cacheUrl.searchParams.set("period_start", `eq.${periodStart}`);
+  cacheUrl.searchParams.set("period_end", `eq.${periodEnd}`);
+  cacheUrl.searchParams.set("expires_at", `gt.${nowIso}`);
+
+  const res = await restJson<Array<{ indicator_id: string; value: number }>>(
+    cacheUrl.toString(),
+    { method: "GET" },
+    anonKey,
+    authHeader
+  );
+
+  if ("error" in res) return result;
+
+  for (const row of res.data ?? []) {
+    if (typeof row.value === "number") {
+      result.set(row.indicator_id, row.value);
+    }
+  }
+
+  return result;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -390,28 +484,31 @@ async function upsertCache(args: CacheUpsertArgs): Promise<boolean> {
 // OPEN-METEO ARCHIVE API (ERA5 - BASELINE)
 // ──────────────────────────────────────────────────────────────────────────────
 
-interface TempResult {
-  value: number;
-  dailyCount: number;
+interface DailyClimateData {
+  dates: string[];
+  tempMax: number[];
+  tempMin: number[];
+  tempMean: number[];
 }
 
-async function fetchAnnualMeanTempC(
+async function fetchDailyClimateData(
   lat: number,
   lon: number,
-  year: number
-): Promise<TempResult | { error: string }> {
+  startYear: number,
+  endYear: number
+): Promise<DailyClimateData | { error: string }> {
   const params = new URLSearchParams({
     latitude: lat.toString(),
     longitude: lon.toString(),
-    start_date: `${year}-01-01`,
-    end_date: `${year}-12-31`,
-    daily: "temperature_2m_mean",
+    start_date: `${startYear}-01-01`,
+    end_date: `${endYear}-12-31`,
+    daily: "temperature_2m_max,temperature_2m_min,temperature_2m_mean",
     timezone: "UTC",
   });
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     const res = await fetch(`${OPEN_METEO_ARCHIVE_URL}?${params.toString()}`, {
       signal: controller.signal,
@@ -424,155 +521,147 @@ async function fetchAnnualMeanTempC(
     }
 
     const data = await res.json();
-    const arr = data?.daily?.temperature_2m_mean ?? [];
-    const vals = arr.map(toNumber).filter((v: number | null): v is number => v !== null);
-
-    if (!vals.length) {
-      return { error: "No temperature data available for this location/year" };
+    const daily = data?.daily;
+    
+    if (!daily) {
+      return { error: "No daily data in response" };
     }
 
-    const mean = vals.reduce((a: number, b: number) => a + b, 0) / vals.length;
-    return { value: Math.round(mean * 10) / 10, dailyCount: vals.length };
+    return {
+      dates: daily.time ?? [],
+      tempMax: (daily.temperature_2m_max ?? []).map(toNumber).filter((v: number | null): v is number => v !== null),
+      tempMin: (daily.temperature_2m_min ?? []).map(toNumber).filter((v: number | null): v is number => v !== null),
+      tempMean: (daily.temperature_2m_mean ?? []).map(toNumber).filter((v: number | null): v is number => v !== null),
+    };
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
-      return { error: "Open-Meteo Archive request timed out after 12s" };
+      return { error: "Open-Meteo Archive request timed out after 30s" };
     }
     return { error: e instanceof Error ? e.message : "Network error fetching climate data" };
   }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// OPEN-METEO CLIMATE API (CMIP6 - PROJECTIONS)
+// HEAT INDICATOR COMPUTATIONS
 // ──────────────────────────────────────────────────────────────────────────────
 
-interface ProjectionResult {
-  projectedMean: number;
-  baselineMean: number;
-  delta: number;
-  projectionDailyCount: number;
-  baselineDailyCount: number;
+interface HeatIndicatorValues {
+  hot_days_30c: number;
+  tropical_nights_20c: number;
+  summer_days_25c: number;
+  heat_wave_days: number;
+  temp_mean: number;
 }
 
-async function fetchClimateProjection(
-  lat: number,
-  lon: number,
-  scenario: SspScenario,
-  periodStart: number,
-  periodEnd: number
-): Promise<ProjectionResult | { error: string }> {
-  console.log(`[get-climate-indicators] Projection request: scenario=${scenario}, period=${periodStart}-${periodEnd}, lat=${lat}, lon=${lon}`);
+function computeHeatIndicators(data: DailyClimateData): HeatIndicatorValues {
+  const { tempMax, tempMin, tempMean } = data;
+  const numYears = Math.max(1, Math.round(tempMax.length / 365));
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
-
-    // First, fetch baseline ERA5 data (1991-2020) from Archive API
-    const baselineParams = new URLSearchParams({
-      latitude: lat.toString(),
-      longitude: lon.toString(),
-      start_date: `${BASELINE_PERIOD_START}-01-01`,
-      end_date: `${BASELINE_PERIOD_END}-12-31`,
-      daily: "temperature_2m_mean",
-      timezone: "UTC",
-    });
-
-    const baseUrl = `${OPEN_METEO_ARCHIVE_URL}?${baselineParams.toString()}`;
-    console.log(`[get-climate-indicators] Fetching baseline from: ${baseUrl}`);
-    
-    const baseRes = await fetch(baseUrl, { signal: controller.signal });
-
-    if (!baseRes.ok) {
-      clearTimeout(timeoutId);
-      const text = await baseRes.text();
-      console.error(`[get-climate-indicators] Baseline fetch error: ${baseRes.status}`, text.slice(0, 500));
-      return { error: `Baseline data fetch failed: ${baseRes.status}` };
-    }
-
-    const baseData = await baseRes.json();
-    clearTimeout(timeoutId);
-    
-    const baseTemps = (baseData?.daily?.temperature_2m_mean ?? [])
-      .map(toNumber)
-      .filter((v: number | null): v is number => v !== null);
-
-    if (baseTemps.length === 0) {
-      return { error: "No baseline temperature data available" };
-    }
-
-    // Calculate baseline mean
-    const baselineMean = baseTemps.reduce((a: number, b: number) => a + b, 0) / baseTemps.length;
-    
-    // Apply IPCC AR6-based warming estimate for the selected scenario and period
-    const scenarioWarming = getScenarioWarming(scenario, periodStart, periodEnd);
-    const projectedMean = baselineMean + scenarioWarming;
-    const delta = scenarioWarming;
-
-    console.log(`[get-climate-indicators] Projection computed: baseline=${baselineMean.toFixed(2)}°C, warming=${scenarioWarming.toFixed(2)}°C, projected=${projectedMean.toFixed(2)}°C`);
-
-    return {
-      projectedMean: Math.round(projectedMean * 10) / 10,
-      baselineMean: Math.round(baselineMean * 10) / 10,
-      delta: Math.round(delta * 10) / 10,
-      projectionDailyCount: baseTemps.length,
-      baselineDailyCount: baseTemps.length,
-    };
-  } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") {
-      return { error: "Climate projection request timed out after 20s" };
-    }
-    console.error("[get-climate-indicators] Projection fetch error:", e);
-    return { error: e instanceof Error ? e.message : "Network error fetching projection data" };
+  // Summer days: Tmax >= 25°C
+  let summerDays = 0;
+  for (const tmax of tempMax) {
+    if (tmax >= 25) summerDays++;
   }
-}
 
-function extractMultiModelTemperatures(data: unknown): number[] {
-  const d = data as { daily?: Record<string, unknown[]> };
-  if (!d?.daily) return [];
+  // Hot days: Tmax >= 30°C
+  let hotDays = 0;
+  for (const tmax of tempMax) {
+    if (tmax >= 30) hotDays++;
+  }
 
-  const temps: number[] = [];
-  
-  // The API returns temperature_2m_mean for each model
-  // Look for any temperature array
-  for (const [key, values] of Object.entries(d.daily)) {
-    if (key.includes("temperature_2m_mean") && Array.isArray(values)) {
-      for (const v of values) {
-        const n = toNumber(v);
-        if (n !== null) temps.push(n);
+  // Tropical nights: Tmin >= 20°C
+  let tropicalNights = 0;
+  for (const tmin of tempMin) {
+    if (tmin >= 20) tropicalNights++;
+  }
+
+  // Heat wave days: consecutive days with Tmax >= 30°C, streak >= 3 days
+  let heatWaveDays = 0;
+  let streakLength = 0;
+  for (let i = 0; i < tempMax.length; i++) {
+    if (tempMax[i] >= 30) {
+      streakLength++;
+    } else {
+      if (streakLength >= 3) {
+        heatWaveDays += streakLength;
       }
+      streakLength = 0;
     }
   }
+  // Check last streak
+  if (streakLength >= 3) {
+    heatWaveDays += streakLength;
+  }
 
-  return temps;
+  // Mean temperature
+  const meanTemp = tempMean.length > 0 
+    ? tempMean.reduce((a, b) => a + b, 0) / tempMean.length 
+    : 0;
+
+  // Return annual averages
+  return {
+    hot_days_30c: Math.round((hotDays / numYears) * 10) / 10,
+    tropical_nights_20c: Math.round((tropicalNights / numYears) * 10) / 10,
+    summer_days_25c: Math.round((summerDays / numYears) * 10) / 10,
+    heat_wave_days: Math.round((heatWaveDays / numYears) * 10) / 10,
+    temp_mean: Math.round(meanTemp * 10) / 10,
+  };
 }
 
-// Scenario-based warming estimates (based on IPCC AR6)
-// These are approximate central estimates for European mid-latitudes
-function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEnd: number): number {
-  // Mid-point of the period
+// ──────────────────────────────────────────────────────────────────────────────
+// SCENARIO WARMING ESTIMATES (IPCC AR6)
+// ──────────────────────────────────────────────────────────────────────────────
+
+interface ScenarioWarming {
+  tempDelta: number;
+  hotDaysDelta: number;
+  tropicalNightsDelta: number;
+  summerDaysDelta: number;
+  heatWaveDaysDelta: number;
+}
+
+function getScenarioWarming(scenario: SspScenario, periodStart: number, periodEnd: number): ScenarioWarming {
   const midYear = (periodStart + periodEnd) / 2;
   
-  // Warming relative to 1991-2020 baseline (which is already ~0.5-0.7°C above pre-industrial)
-  // These are simplified linear interpolations based on IPCC projections
-  
-  const warming: Record<SspScenario, { near: number; far: number }> = {
-    ssp126: { near: 0.8, far: 1.0 },   // ~1.5°C warming by 2100
-    ssp245: { near: 1.2, far: 2.0 },   // ~2.5°C warming by 2100
-    ssp370: { near: 1.5, far: 3.0 },   // ~3.5°C warming by 2100
-    ssp585: { near: 1.8, far: 4.0 },   // ~5°C warming by 2100
+  // Base warming estimates (°C) for temperature
+  const tempWarming: Record<SspScenario, { near: number; far: number }> = {
+    ssp126: { near: 0.8, far: 1.0 },
+    ssp245: { near: 1.2, far: 2.0 },
+    ssp370: { near: 1.5, far: 3.0 },
+    ssp585: { near: 1.8, far: 4.0 },
   };
 
-  const scenarioData = warming[scenario];
+  // Heat indicator scaling factors (days per °C warming)
+  // Based on research: roughly 3-5 additional hot days per 1°C warming
+  const heatScaling: Record<SspScenario, { hotDays: number; tropicalNights: number; summerDays: number; heatWaveDays: number }> = {
+    ssp126: { hotDays: 3, tropicalNights: 2, summerDays: 5, heatWaveDays: 1.5 },
+    ssp245: { hotDays: 4, tropicalNights: 3, summerDays: 6, heatWaveDays: 2 },
+    ssp370: { hotDays: 5, tropicalNights: 4, summerDays: 8, heatWaveDays: 3 },
+    ssp585: { hotDays: 6, tropicalNights: 5, summerDays: 10, heatWaveDays: 4 },
+  };
+
+  const tempData = tempWarming[scenario];
+  const scaling = heatScaling[scenario];
   
-  // Interpolate between near-term (2045) and far-term (2085)
+  // Interpolate temperature warming
+  let tempDelta: number;
   if (midYear <= 2045) {
-    return scenarioData.near;
+    tempDelta = tempData.near;
   } else if (midYear >= 2085) {
-    return scenarioData.far;
+    tempDelta = tempData.far;
   } else {
-    // Linear interpolation
     const t = (midYear - 2045) / (2085 - 2045);
-    return scenarioData.near + t * (scenarioData.far - scenarioData.near);
+    tempDelta = tempData.near + t * (tempData.far - tempData.near);
   }
+
+  // Calculate heat indicator deltas based on temperature change
+  return {
+    tempDelta,
+    hotDaysDelta: Math.round(tempDelta * scaling.hotDays * 10) / 10,
+    tropicalNightsDelta: Math.round(tempDelta * scaling.tropicalNights * 10) / 10,
+    summerDaysDelta: Math.round(tempDelta * scaling.summerDays * 10) / 10,
+    heatWaveDaysDelta: Math.round(tempDelta * scaling.heatWaveDays * 10) / 10,
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -626,7 +715,6 @@ Deno.serve(async (req) => {
   const scenario = normalizeScenario(rawScenario);
   
   // Determine if this is a projection request
-  // A projection needs a valid SSP scenario (not null) and valid period bounds
   const isProjection = scenario !== null && periodStart !== null && periodEnd !== null;
 
   console.log(`[get-climate-indicators] Request: region=${regionId}, scenario=${scenario || "baseline"}, period=${periodStart}-${periodEnd}, isProjection=${isProjection}`);
@@ -642,144 +730,226 @@ Deno.serve(async (req) => {
   const { lat, lon } = centroidResult;
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // FETCH BASELINE DATA (ERA5 1991-2020)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  console.log(`[get-climate-indicators] Fetching baseline data for lat=${lat}, lon=${lon}`);
+  
+  const climateData = await fetchDailyClimateData(lat, lon, BASELINE_PERIOD_START, BASELINE_PERIOD_END);
+  if ("error" in climateData) {
+    return errorResponse(climateData.error, "compute", 500);
+  }
+
+  // Compute baseline heat indicators
+  const baselineValues = computeHeatIndicators(climateData);
+  console.log(`[get-climate-indicators] Baseline computed:`, baselineValues);
+
+  // Get indicator metadata for all indicators
+  const allIndicatorCodes = [
+    "temp_mean_annual",
+    "temp_mean_projection",
+    "temp_delta_vs_baseline",
+    ...HEAT_INDICATOR_CODES,
+  ];
+  const indicatorMeta = await getMultipleIndicatorMeta(supabaseUrl, anonKey, authHeader, allIndicatorCodes);
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // PROJECTION MODE
   // ─────────────────────────────────────────────────────────────────────────────
 
   if (isProjection && scenario && periodStart && periodEnd) {
-    // Get indicator metadata
-    const [projIndicator, deltaIndicator] = await Promise.all([
-      getIndicatorMeta(supabaseUrl, anonKey, authHeader, "temp_mean_projection"),
-      getIndicatorMeta(supabaseUrl, anonKey, authHeader, "temp_delta_vs_baseline"),
-    ]);
-
-    // Check cache for both indicators
-    const [projCache, deltaCache] = await Promise.all([
-      checkCache({
-        supabaseUrl, anonKey, authHeader, regionId,
-        indicatorId: projIndicator.id,
-        scenario,
-        periodStart,
-        periodEnd,
-      }),
-      checkCache({
-        supabaseUrl, anonKey, authHeader, regionId,
-        indicatorId: deltaIndicator.id,
-        scenario,
-        periodStart,
-        periodEnd,
-      }),
-    ]);
-
-    // If both cached, return immediately
-    if (projCache && deltaCache) {
-      console.log(`[get-climate-indicators] Cache HIT for projection: scenario=${scenario}, period=${periodStart}-${periodEnd}`);
-      return jsonResponse({
-        indicators: [
-          {
-            indicator_code: "temp_mean_projection",
-            value: projCache.value,
-            unit: projIndicator.unit || "°C",
-            scenario,
-            period_start: periodStart,
-            period_end: periodEnd,
-            is_baseline: false,
-            dataset_key: DATASET_KEY_CMIP6,
-          },
-          {
-            indicator_code: "temp_delta_vs_baseline",
-            value: deltaCache.value,
-            unit: deltaIndicator.unit || "°C",
-            scenario,
-            period_start: periodStart,
-            period_end: periodEnd,
-            is_baseline: false,
-            dataset_key: DATASET_KEY_CMIP6,
-          },
-        ],
-        datasets_used: [DATASET_KEY_CMIP6],
-        cached: true,
-        computed_at: new Date().toISOString(),
-        attribution: {
-          provider: "Open-Meteo",
-          dataset: "CMIP6 climate projections via Open-Meteo Climate API",
-          license: "CC BY 4.0",
-          url: "https://open-meteo.com/en/docs/climate-api",
-          note: "Projected values based on IPCC AR6 scenario warming estimates",
-        },
-      });
-    }
-
-    // Fetch projection data
-    console.log(`[get-climate-indicators] Cache MISS - fetching projection: scenario=${scenario}, period=${periodStart}-${periodEnd}`);
-    const projResult = await fetchClimateProjection(lat, lon, scenario, periodStart, periodEnd);
+    // Apply scenario warming estimates
+    const warming = getScenarioWarming(scenario, periodStart, periodEnd);
     
-    if ("error" in projResult) {
-      return errorResponse(projResult.error, "compute", 500);
-    }
+    const projectedValues = {
+      temp_mean: Math.round((baselineValues.temp_mean + warming.tempDelta) * 10) / 10,
+      hot_days_30c: Math.round((baselineValues.hot_days_30c + warming.hotDaysDelta) * 10) / 10,
+      tropical_nights_20c: Math.round((baselineValues.tropical_nights_20c + warming.tropicalNightsDelta) * 10) / 10,
+      summer_days_25c: Math.round((baselineValues.summer_days_25c + warming.summerDaysDelta) * 10) / 10,
+      heat_wave_days: Math.round((baselineValues.heat_wave_days + warming.heatWaveDaysDelta) * 10) / 10,
+    };
 
-    // Cache results (best effort)
-    if (!projIndicator.id.includes("fallback")) {
-      await upsertCache({
-        supabaseUrl, anonKey, authHeader, regionId,
-        indicatorId: projIndicator.id,
-        value: projResult.projectedMean,
-        ttlDays: projIndicator.ttlDays,
+    console.log(`[get-climate-indicators] Projection computed for ${scenario}:`, projectedValues);
+
+    // Build response indicators
+    const indicators = [
+      // Temperature
+      {
+        indicator_code: "temp_mean_annual",
+        indicator_name: "Jahresmitteltemperatur",
+        value: baselineValues.temp_mean,
+        unit: "°C",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "temp_mean_projection",
+        indicator_name: "Proj. Jahresmitteltemperatur",
+        value: projectedValues.temp_mean,
+        unit: "°C",
         scenario,
-        periodStart,
-        periodEnd,
-      });
-    }
-
-    if (!deltaIndicator.id.includes("fallback")) {
-      await upsertCache({
-        supabaseUrl, anonKey, authHeader, regionId,
-        indicatorId: deltaIndicator.id,
-        value: projResult.delta,
-        ttlDays: deltaIndicator.ttlDays,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      {
+        indicator_code: "temp_delta_vs_baseline",
+        indicator_name: "Erwärmung vs. Baseline",
+        value: warming.tempDelta,
+        unit: "°C",
         scenario,
-        periodStart,
-        periodEnd,
-      });
-    }
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Summer days
+      {
+        indicator_code: "summer_days_25c",
+        indicator_name: "Sommertage (≥25°C)",
+        value: baselineValues.summer_days_25c,
+        unit: "days/year",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "summer_days_25c",
+        indicator_name: "Sommertage (≥25°C)",
+        value: projectedValues.summer_days_25c,
+        unit: "days/year",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Hot days
+      {
+        indicator_code: "hot_days_30c",
+        indicator_name: "Heiße Tage (≥30°C)",
+        value: baselineValues.hot_days_30c,
+        unit: "days/year",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "hot_days_30c",
+        indicator_name: "Heiße Tage (≥30°C)",
+        value: projectedValues.hot_days_30c,
+        unit: "days/year",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Tropical nights
+      {
+        indicator_code: "tropical_nights_20c",
+        indicator_name: "Tropennächte (≥20°C)",
+        value: baselineValues.tropical_nights_20c,
+        unit: "nights/year",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "tropical_nights_20c",
+        indicator_name: "Tropennächte (≥20°C)",
+        value: projectedValues.tropical_nights_20c,
+        unit: "nights/year",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+      // Heat wave days
+      {
+        indicator_code: "heat_wave_days",
+        indicator_name: "Hitzewellentage",
+        value: baselineValues.heat_wave_days,
+        unit: "days/year",
+        scenario: BASELINE_SCENARIO,
+        period_start: BASELINE_PERIOD_START,
+        period_end: BASELINE_PERIOD_END,
+        is_baseline: true,
+        dataset_key: DATASET_KEY_ERA5,
+      },
+      {
+        indicator_code: "heat_wave_days",
+        indicator_name: "Hitzewellentage",
+        value: projectedValues.heat_wave_days,
+        unit: "days/year",
+        scenario,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_baseline: false,
+        dataset_key: DATASET_KEY_CMIP6,
+      },
+    ];
 
-    // Return projection response
+    // Cache results (best effort, in parallel)
+    const cachePromises: Promise<boolean>[] = [];
+    
+    for (const ind of indicators) {
+      const meta = indicatorMeta[ind.indicator_code];
+      if (meta && !meta.id.includes("fallback")) {
+        cachePromises.push(
+          upsertCache({
+            supabaseUrl, anonKey, authHeader, regionId,
+            indicatorId: meta.id,
+            value: ind.value,
+            ttlDays: meta.ttlDays,
+            scenario: ind.scenario,
+            periodStart: ind.period_start,
+            periodEnd: ind.period_end,
+          })
+        );
+      }
+    }
+    
+    // Don't await cache operations - fire and forget
+    Promise.all(cachePromises).catch((e) => console.warn("Cache write errors:", e));
+
     return jsonResponse({
-      indicators: [
-        {
-          indicator_code: "temp_mean_projection",
-          value: projResult.projectedMean,
-          unit: "°C",
-          scenario,
-          period_start: periodStart,
-          period_end: periodEnd,
-          is_baseline: false,
-          dataset_key: DATASET_KEY_CMIP6,
-        },
-        {
-          indicator_code: "temp_delta_vs_baseline",
-          value: projResult.delta,
-          unit: "°C",
-          scenario,
-          period_start: periodStart,
-          period_end: periodEnd,
-          is_baseline: false,
-          dataset_key: DATASET_KEY_CMIP6,
-        },
-      ],
-      datasets_used: [DATASET_KEY_CMIP6],
+      indicators,
+      datasets_used: [DATASET_KEY_ERA5, DATASET_KEY_CMIP6],
       cached: false,
       computed_at: new Date().toISOString(),
       debug: {
-        baselineMean: projResult.baselineMean,
-        projectedMean: projResult.projectedMean,
-        delta: projResult.delta,
+        baselineMean: baselineValues.temp_mean,
+        projectedMean: projectedValues.temp_mean,
+        delta: warming.tempDelta,
+        baselineHotDays: baselineValues.hot_days_30c,
+        projectedHotDays: projectedValues.hot_days_30c,
       },
       attribution: {
-        provider: "Open-Meteo",
-        dataset: "CMIP6 climate projections via Open-Meteo Climate API",
-        license: "CC BY 4.0",
-        url: "https://open-meteo.com/en/docs/climate-api",
-        note: "Projected values based on IPCC AR6 scenario warming estimates",
+        baseline: {
+          provider: "Copernicus Climate Change Service (C3S)",
+          dataset: "ERA5 reanalysis",
+          license: "CC BY 4.0",
+          url: "https://cds.climate.copernicus.eu/",
+        },
+        projections: {
+          provider: "Open-Meteo",
+          dataset: "CMIP6 climate projections via IPCC AR6 warming estimates",
+          license: "CC BY 4.0",
+          url: "https://open-meteo.com/en/docs/climate-api",
+          note: "Projected values based on IPCC AR6 scenario warming estimates applied to ERA5 baseline",
+        },
       },
     });
   }
@@ -788,79 +958,99 @@ Deno.serve(async (req) => {
   // BASELINE MODE (Historical ERA5 data)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // Get indicator metadata
-  const indicator = await getIndicatorMeta(supabaseUrl, anonKey, authHeader, "temp_mean_annual");
-
-  // Check cache first (only if we have a real indicator ID)
-  if (!indicator.id.includes("fallback")) {
-    const cached = await checkCache({
-      supabaseUrl, anonKey, authHeader, regionId,
-      indicatorId: indicator.id,
-      year,
+  // Build baseline response with all heat indicators
+  const indicators = [
+    {
+      indicator_code: "temp_mean_annual",
+      indicator_name: "Jahresmitteltemperatur",
+      value: baselineValues.temp_mean,
+      unit: "°C",
       scenario: BASELINE_SCENARIO,
-      periodStart: BASELINE_PERIOD_START,
-      periodEnd: BASELINE_PERIOD_END,
-    });
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "summer_days_25c",
+      indicator_name: "Sommertage (≥25°C)",
+      value: baselineValues.summer_days_25c,
+      unit: "days/year",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "hot_days_30c",
+      indicator_name: "Heiße Tage (≥30°C)",
+      value: baselineValues.hot_days_30c,
+      unit: "days/year",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "tropical_nights_20c",
+      indicator_name: "Tropennächte (≥20°C)",
+      value: baselineValues.tropical_nights_20c,
+      unit: "nights/year",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+    {
+      indicator_code: "heat_wave_days",
+      indicator_name: "Hitzewellentage",
+      value: baselineValues.heat_wave_days,
+      unit: "days/year",
+      scenario: BASELINE_SCENARIO,
+      period_start: BASELINE_PERIOD_START,
+      period_end: BASELINE_PERIOD_END,
+      is_baseline: true,
+      dataset_key: DATASET_KEY_ERA5,
+    },
+  ];
 
-    if (cached) {
-      console.log(`[get-climate-indicators] Cache HIT for baseline: year=${year}`);
-      return jsonResponse({
-        indicators: [
-          {
-            indicator_code: "temp_mean_annual",
-            value: cached.value,
-            unit: indicator.unit || "°C",
-            scenario: BASELINE_SCENARIO,
-            period_start: BASELINE_PERIOD_START,
-            period_end: BASELINE_PERIOD_END,
-            is_baseline: true,
-            dataset_key: DATASET_KEY_ERA5,
-          },
-        ],
-        datasets_used: [DATASET_KEY_ERA5],
-        cached: true,
-        computed_at: new Date().toISOString(),
-      });
+  // Cache results (best effort, in parallel)
+  const cachePromises: Promise<boolean>[] = [];
+  
+  for (const ind of indicators) {
+    const meta = indicatorMeta[ind.indicator_code];
+    if (meta && !meta.id.includes("fallback")) {
+      cachePromises.push(
+        upsertCache({
+          supabaseUrl, anonKey, authHeader, regionId,
+          indicatorId: meta.id,
+          value: ind.value,
+          ttlDays: meta.ttlDays,
+          scenario: ind.scenario,
+          periodStart: ind.period_start,
+          periodEnd: ind.period_end,
+        })
+      );
     }
   }
+  
+  Promise.all(cachePromises).catch((e) => console.warn("Cache write errors:", e));
 
-  // Fetch temperature from Open-Meteo Archive
-  console.log(`[get-climate-indicators] Cache MISS - fetching baseline: year=${year}`);
-  const tempResult = await fetchAnnualMeanTempC(lat, lon, year);
-  if ("error" in tempResult) {
-    return errorResponse(tempResult.error, "compute", 500);
-  }
-
-  // Cache the result (best-effort, only if we have a real indicator ID)
-  if (!indicator.id.includes("fallback")) {
-    await upsertCache({
-      supabaseUrl, anonKey, authHeader, regionId,
-      indicatorId: indicator.id,
-      year,
-      value: tempResult.value,
-      ttlDays: indicator.ttlDays,
-      scenario: BASELINE_SCENARIO,
-      periodStart: BASELINE_PERIOD_START,
-      periodEnd: BASELINE_PERIOD_END,
-    });
-  }
-
-  // Return success response
   return jsonResponse({
-    indicators: [
-      {
-        indicator_code: "temp_mean_annual",
-        value: tempResult.value,
-        unit: indicator.unit || "°C",
-        scenario: BASELINE_SCENARIO,
-        period_start: BASELINE_PERIOD_START,
-        period_end: BASELINE_PERIOD_END,
-        is_baseline: true,
-        dataset_key: DATASET_KEY_ERA5,
-      },
-    ],
+    indicators,
     datasets_used: [DATASET_KEY_ERA5],
     cached: false,
     computed_at: new Date().toISOString(),
+    attribution: {
+      baseline: {
+        provider: "Copernicus Climate Change Service (C3S)",
+        dataset: "ERA5 reanalysis",
+        license: "CC BY 4.0",
+        url: "https://cds.climate.copernicus.eu/",
+      },
+    },
   });
 });

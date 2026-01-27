@@ -76,7 +76,7 @@ export const CLIMATE_TIME_HORIZONS: ClimateTimeHorizonOption[] = [
 ];
 
 // Climate Indicator Categories
-export type ClimateIndicatorCategory = 'temperature' | 'extremes' | 'precipitation' | 'urban' | 'analog';
+export type ClimateIndicatorCategory = 'temperature' | 'heat' | 'extremes' | 'precipitation' | 'urban' | 'analog';
 
 // Full Climate Indicator Definition
 export interface ClimateIndicatorDefinition {
@@ -138,14 +138,26 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     showDelta: true,
     deltaUnit: '°C',
   },
+  // HEAT INDICATORS (Hitze & Nächte)
   {
-    code: 'heat_days_30c',
+    code: 'summer_days_25c',
+    name: 'Sommertage (≥25°C)',
+    unit: 'Tage/Jahr',
+    category: 'heat',
+    description: 'Tage mit Maximaltemperatur ≥ 25°C',
+    higherIsBetter: false,
+    source: 'era5',
+    showDelta: true,
+    deltaUnit: 'Tage',
+  },
+  {
+    code: 'hot_days_30c',
     name: 'Heiße Tage (≥30°C)',
     unit: 'Tage/Jahr',
-    category: 'temperature',
+    category: 'heat',
     description: 'Tage mit Maximaltemperatur ≥ 30°C',
     higherIsBetter: false,
-    source: 'cordex',
+    source: 'era5',
     showDelta: true,
     deltaUnit: 'Tage',
   },
@@ -153,21 +165,21 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     code: 'tropical_nights_20c',
     name: 'Tropennächte (≥20°C)',
     unit: 'Nächte/Jahr',
-    category: 'temperature',
+    category: 'heat',
     description: 'Nächte mit Minimaltemperatur ≥ 20°C',
     higherIsBetter: false,
-    source: 'cordex',
+    source: 'era5',
     showDelta: true,
     deltaUnit: 'Nächte',
   },
   {
-    code: 'heatwave_duration_index',
-    name: 'Hitzewellen-Index',
-    unit: 'Tage',
-    category: 'temperature',
-    description: 'Kumulierte Tage in Hitzewellen (≥3 Tage über 30°C)',
+    code: 'heat_wave_days',
+    name: 'Hitzewellentage',
+    unit: 'Tage/Jahr',
+    category: 'heat',
+    description: 'Tage in Hitzewellen (≥3 aufeinanderfolgende Tage mit Tmax ≥ 30°C)',
     higherIsBetter: false,
-    source: 'derived',
+    source: 'era5',
     showDelta: true,
     deltaUnit: 'Tage',
   },
@@ -320,6 +332,7 @@ export const CLIMATE_ANALOG_LOCATIONS: ClimateAnalogLocation[] = [
 // Category display labels
 export const CLIMATE_CATEGORY_LABELS: Record<ClimateIndicatorCategory, string> = {
   temperature: 'Temperatur',
+  heat: 'Hitze & Nächte',
   extremes: 'Extreme',
   precipitation: 'Niederschlag',
   urban: 'Urbane Hitze',

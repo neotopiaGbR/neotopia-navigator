@@ -3,8 +3,12 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { supabase } from '@/integrations/supabase/client';
 import { useRegion, Region } from '@/contexts/RegionContext';
+import { useMapLayers } from './MapLayersContext';
+import { useMapOverlays } from '@/hooks/useMapOverlays';
+import { getBasemapStyle } from './basemapStyles';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
+import LayersControl from './LayersControl';
 
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
@@ -12,32 +16,6 @@ const devLog = (tag: string, ...args: unknown[]) => {
   if (import.meta.env.DEV) {
     console.log(`[RegionMap:${tag}]`, ...args);
   }
-};
-
-const DARK_STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  name: 'Dark',
-  sources: {
-    'carto-dark': {
-      type: 'raster',
-      tiles: [
-        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-      ],
-      tileSize: 256,
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-    },
-  },
-  layers: [
-    {
-      id: 'carto-dark-layer',
-      type: 'raster',
-      source: 'carto-dark',
-      minzoom: 0,
-      maxzoom: 22,
-    },
-  ],
 };
 
 const RegionMap: React.FC = () => {
@@ -56,13 +34,17 @@ const RegionMap: React.FC = () => {
     setHoveredRegionId,
   } = useRegion();
 
+  const { basemap, overlays } = useMapLayers();
+  
+  // Initialize overlay data fetching
+  useMapOverlays();
+
   // Fetch regions from Supabase with timeout protection
   const fetchRegions = useCallback(async () => {
     devLog('REGIONS_FETCH_START', {});
     setLoading(true);
     setError(null);
 
-    // Timeout promise
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error('REGIONS_FETCH_TIMEOUT')), REGIONS_FETCH_TIMEOUT_MS);
     });
@@ -84,7 +66,7 @@ const RegionMap: React.FC = () => {
           hint: fetchError.hint,
         });
         setError(`Fehler: ${fetchError.message}`);
-        setRegions([]); // Safe fallback - empty regions
+        setRegions([]);
         return;
       }
 
@@ -112,7 +94,7 @@ const RegionMap: React.FC = () => {
         ? 'Zeitüberschreitung beim Laden der Regionen' 
         : 'Netzwerkfehler beim Laden der Regionen'
       );
-      setRegions([]); // Safe fallback
+      setRegions([]);
     } finally {
       setLoading(false);
     }
@@ -123,15 +105,15 @@ const RegionMap: React.FC = () => {
     fetchRegions();
   }, [fetchRegions]);
 
-  // Initialize map - doesn't depend on regions
+  // Initialize map
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
     try {
       map.current = new maplibregl.Map({
         container: mapContainer.current,
-        style: DARK_STYLE,
-        center: [10.4515, 51.1657], // Germany center
+        style: getBasemapStyle(basemap),
+        center: [10.4515, 51.1657],
         zoom: 5,
       });
 
@@ -156,98 +138,199 @@ const RegionMap: React.FC = () => {
     };
   }, []);
 
-  // Add regions to map when both map and regions are ready
+  // Update basemap when changed
   useEffect(() => {
-    if (!map.current || !mapReady || regions.length === 0) return;
+    if (!map.current || !mapReady) return;
+    
+    const currentCenter = map.current.getCenter();
+    const currentZoom = map.current.getZoom();
+    
+    map.current.setStyle(getBasemapStyle(basemap));
+    
+    // Restore position after style change
+    map.current.once('style.load', () => {
+      map.current?.setCenter(currentCenter);
+      map.current?.setZoom(currentZoom);
+      // Re-add regions after style change
+      addRegionsToMap();
+      // Re-add overlays
+      updateOverlays();
+    });
+  }, [basemap, mapReady]);
 
-    const addRegionsToMap = () => {
-      if (!map.current) return;
+  // Add regions to map
+  const addRegionsToMap = useCallback(() => {
+    if (!map.current || regions.length === 0) return;
 
-      try {
-        // Remove existing source/layers if they exist
-        if (map.current.getSource('regions')) {
-          if (map.current.getLayer('regions-fill')) map.current.removeLayer('regions-fill');
-          if (map.current.getLayer('regions-outline')) map.current.removeLayer('regions-outline');
-          if (map.current.getLayer('regions-highlight')) map.current.removeLayer('regions-highlight');
-          map.current.removeSource('regions');
+    try {
+      // Remove existing source/layers if they exist
+      if (map.current.getSource('regions')) {
+        if (map.current.getLayer('regions-fill')) map.current.removeLayer('regions-fill');
+        if (map.current.getLayer('regions-outline')) map.current.removeLayer('regions-outline');
+        if (map.current.getLayer('regions-highlight')) map.current.removeLayer('regions-highlight');
+        map.current.removeSource('regions');
+      }
+
+      const geojson: GeoJSON.FeatureCollection = {
+        type: 'FeatureCollection',
+        features: regions.map((region) => ({
+          type: 'Feature',
+          id: region.id,
+          properties: {
+            id: region.id,
+            name: region.name,
+          },
+          geometry: region.geom,
+        })),
+      };
+
+      map.current.addSource('regions', {
+        type: 'geojson',
+        data: geojson,
+      });
+
+      map.current.addLayer({
+        id: 'regions-fill',
+        type: 'fill',
+        source: 'regions',
+        paint: {
+          'fill-color': [
+            'case',
+            ['==', ['get', 'id'], selectedRegionId || ''],
+            '#00ff00',
+            ['==', ['get', 'id'], hoveredRegionId || ''],
+            'rgba(0, 255, 0, 0.4)',
+            'rgba(0, 255, 0, 0.15)',
+          ],
+          'fill-opacity': 0.8,
+        },
+      });
+
+      map.current.addLayer({
+        id: 'regions-outline',
+        type: 'line',
+        source: 'regions',
+        paint: {
+          'line-color': '#00ff00',
+          'line-width': [
+            'case',
+            ['==', ['get', 'id'], selectedRegionId || ''],
+            3,
+            ['==', ['get', 'id'], hoveredRegionId || ''],
+            2,
+            1,
+          ],
+        },
+      });
+
+      map.current.addLayer({
+        id: 'regions-highlight',
+        type: 'line',
+        source: 'regions',
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 2,
+          'line-dasharray': [2, 2],
+        },
+        filter: ['==', ['get', 'id'], selectedRegionId || ''],
+      });
+
+      devLog('REGIONS_RENDERED', { count: regions.length });
+    } catch (err) {
+      devLog('REGIONS_RENDER_ERROR', { message: err instanceof Error ? err.message : 'Unknown' });
+    }
+  }, [regions, selectedRegionId, hoveredRegionId]);
+
+  // Update overlays (WMS/XYZ layers)
+  const updateOverlays = useCallback(() => {
+    if (!map.current) return;
+
+    // Handle Flood Risk WMS overlay
+    const floodLayerId = 'flood-risk-overlay';
+    const floodSourceId = 'flood-risk-source';
+
+    if (overlays.floodRisk.enabled && overlays.floodRisk.metadata?.layers) {
+      const layers = overlays.floodRisk.metadata.layers as any[];
+      const activeLayer = layers.find((l) => l.type === 'wms' || l.type === 'xyz');
+      
+      if (activeLayer) {
+        // Remove existing if present
+        if (map.current.getLayer(floodLayerId)) {
+          map.current.removeLayer(floodLayerId);
+        }
+        if (map.current.getSource(floodSourceId)) {
+          map.current.removeSource(floodSourceId);
         }
 
-        // Convert regions to GeoJSON FeatureCollection
-        const geojson: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: regions.map((region) => ({
-            type: 'Feature',
-            id: region.id,
-            properties: {
-              id: region.id,
-              name: region.name,
+        if (activeLayer.type === 'wms') {
+          // Add WMS source
+          map.current.addSource(floodSourceId, {
+            type: 'raster',
+            tiles: [
+              `${activeLayer.url}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=${activeLayer.layer_name}&STYLES=&FORMAT=image/png&TRANSPARENT=true&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256`,
+            ],
+            tileSize: 256,
+            attribution: activeLayer.attribution,
+          });
+        } else if (activeLayer.type === 'xyz') {
+          map.current.addSource(floodSourceId, {
+            type: 'raster',
+            tiles: [activeLayer.url],
+            tileSize: 256,
+            attribution: activeLayer.attribution,
+          });
+        }
+
+        // Add layer below regions
+        map.current.addLayer(
+          {
+            id: floodLayerId,
+            type: 'raster',
+            source: floodSourceId,
+            paint: {
+              'raster-opacity': overlays.floodRisk.opacity / 100,
             },
-            geometry: region.geom,
-          })),
-        };
-
-        map.current.addSource('regions', {
-          type: 'geojson',
-          data: geojson,
-        });
-
-        // Fill layer
-        map.current.addLayer({
-          id: 'regions-fill',
-          type: 'fill',
-          source: 'regions',
-          paint: {
-            'fill-color': [
-              'case',
-              ['==', ['get', 'id'], selectedRegionId || ''],
-              '#00ff00',
-              ['==', ['get', 'id'], hoveredRegionId || ''],
-              'rgba(0, 255, 0, 0.4)',
-              'rgba(0, 255, 0, 0.15)',
-            ],
-            'fill-opacity': 0.8,
           },
-        });
-
-        // Outline layer
-        map.current.addLayer({
-          id: 'regions-outline',
-          type: 'line',
-          source: 'regions',
-          paint: {
-            'line-color': '#00ff00',
-            'line-width': [
-              'case',
-              ['==', ['get', 'id'], selectedRegionId || ''],
-              3,
-              ['==', ['get', 'id'], hoveredRegionId || ''],
-              2,
-              1,
-            ],
-          },
-        });
-
-        // Highlight layer for selected
-        map.current.addLayer({
-          id: 'regions-highlight',
-          type: 'line',
-          source: 'regions',
-          paint: {
-            'line-color': '#ffffff',
-            'line-width': 2,
-            'line-dasharray': [2, 2],
-          },
-          filter: ['==', ['get', 'id'], selectedRegionId || ''],
-        });
-
-        devLog('REGIONS_RENDERED', { count: regions.length });
-      } catch (err) {
-        devLog('REGIONS_RENDER_ERROR', { message: err instanceof Error ? err.message : 'Unknown' });
+          'regions-fill' // Insert below regions
+        );
       }
-    };
+    } else {
+      // Remove flood overlay if disabled
+      if (map.current.getLayer(floodLayerId)) {
+        map.current.removeLayer(floodLayerId);
+      }
+      if (map.current.getSource(floodSourceId)) {
+        map.current.removeSource(floodSourceId);
+      }
+    }
 
+    // Handle ECOSTRESS overlay (placeholder - full COG rendering requires deck.gl)
+    // For now, show a message that COG rendering is being prepared
+    const ecostressLayerId = 'ecostress-overlay';
+    if (overlays.ecostress.enabled && overlays.ecostress.metadata?.cogUrl) {
+      devLog('ECOSTRESS_COG', { url: overlays.ecostress.metadata.cogUrl });
+      // TODO: Implement deck.gl GeoTIFFLayer for COG rendering
+      // For now, the overlay panel shows the data availability
+    }
+  }, [overlays]);
+
+  // Effect to add regions when ready
+  useEffect(() => {
+    if (!map.current || !mapReady || regions.length === 0) return;
     addRegionsToMap();
-  }, [regions, mapReady, selectedRegionId, hoveredRegionId]);
+  }, [regions, mapReady, addRegionsToMap]);
+
+  // Effect to update overlays
+  useEffect(() => {
+    if (!map.current || !mapReady) return;
+    
+    // Wait for style to be loaded
+    if (map.current.isStyleLoaded()) {
+      updateOverlays();
+    } else {
+      map.current.once('style.load', updateOverlays);
+    }
+  }, [mapReady, overlays.floodRisk.enabled, overlays.floodRisk.opacity, overlays.floodRisk.metadata, overlays.ecostress.enabled, overlays.ecostress.metadata, updateOverlays]);
 
   // Update paint properties when selection/hover changes
   useEffect(() => {
@@ -337,7 +420,6 @@ const RegionMap: React.FC = () => {
       }
     };
 
-    // Only attach listeners if regions layer exists
     const attachListeners = () => {
       if (!map.current?.getLayer('regions-fill')) return;
       
@@ -346,7 +428,6 @@ const RegionMap: React.FC = () => {
       map.current.on('click', 'regions-fill', handleClick);
     };
 
-    // Try to attach immediately or wait for layer
     if (map.current.getLayer('regions-fill')) {
       attachListeners();
     }
@@ -388,6 +469,10 @@ const RegionMap: React.FC = () => {
   return (
     <div className="relative h-full w-full">
       <div ref={mapContainer} className="h-full w-full" />
+      
+      {/* Layers Control */}
+      <LayersControl />
+      
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80">
           <div className="text-center">

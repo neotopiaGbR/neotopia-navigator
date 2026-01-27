@@ -36,6 +36,9 @@ const RegionMap: React.FC = () => {
 
   const { basemap, overlays } = useMapLayers();
   
+  // Check if any overlay is enabled (to adjust region fill style)
+  const anyOverlayEnabled = overlays.ecostress.enabled || overlays.floodRisk.enabled;
+  
   // Initialize overlay data fetching
   useMapOverlays();
 
@@ -197,12 +200,12 @@ const RegionMap: React.FC = () => {
           'fill-color': [
             'case',
             ['==', ['get', 'id'], selectedRegionId || ''],
-            '#00ff00',
+            anyOverlayEnabled ? 'rgba(0, 255, 0, 0)' : '#00ff00',
             ['==', ['get', 'id'], hoveredRegionId || ''],
-            'rgba(0, 255, 0, 0.4)',
-            'rgba(0, 255, 0, 0.15)',
+            anyOverlayEnabled ? 'rgba(0, 255, 0, 0.1)' : 'rgba(0, 255, 0, 0.4)',
+            anyOverlayEnabled ? 'rgba(0, 255, 0, 0)' : 'rgba(0, 255, 0, 0.15)',
           ],
-          'fill-opacity': 0.8,
+          'fill-opacity': anyOverlayEnabled ? 0.3 : 0.8,
         },
       });
 
@@ -239,7 +242,7 @@ const RegionMap: React.FC = () => {
     } catch (err) {
       devLog('REGIONS_RENDER_ERROR', { message: err instanceof Error ? err.message : 'Unknown' });
     }
-  }, [regions, selectedRegionId, hoveredRegionId]);
+  }, [regions, selectedRegionId, hoveredRegionId, anyOverlayEnabled]);
 
   // Update overlays (WMS/XYZ layers)
   const updateOverlays = useCallback(() => {
@@ -314,11 +317,11 @@ const RegionMap: React.FC = () => {
     }
   }, [overlays]);
 
-  // Effect to add regions when ready
+  // Effect to add/update regions when ready or overlay mode changes
   useEffect(() => {
     if (!map.current || !mapReady || regions.length === 0) return;
     addRegionsToMap();
-  }, [regions, mapReady, addRegionsToMap]);
+  }, [regions, mapReady, addRegionsToMap, anyOverlayEnabled]);
 
   // Effect to update overlays
   useEffect(() => {
@@ -340,11 +343,13 @@ const RegionMap: React.FC = () => {
       map.current.setPaintProperty('regions-fill', 'fill-color', [
         'case',
         ['==', ['get', 'id'], selectedRegionId || ''],
-        '#00ff00',
+        anyOverlayEnabled ? 'rgba(0, 255, 0, 0)' : '#00ff00',
         ['==', ['get', 'id'], hoveredRegionId || ''],
-        'rgba(0, 255, 0, 0.4)',
-        'rgba(0, 255, 0, 0.15)',
+        anyOverlayEnabled ? 'rgba(0, 255, 0, 0.1)' : 'rgba(0, 255, 0, 0.4)',
+        anyOverlayEnabled ? 'rgba(0, 255, 0, 0)' : 'rgba(0, 255, 0, 0.15)',
       ]);
+      
+      map.current.setPaintProperty('regions-fill', 'fill-opacity', anyOverlayEnabled ? 0.3 : 0.8);
 
       map.current.setPaintProperty('regions-outline', 'line-width', [
         'case',
@@ -363,7 +368,7 @@ const RegionMap: React.FC = () => {
     } catch (err) {
       devLog('PAINT_UPDATE_ERROR', { message: err instanceof Error ? err.message : 'Unknown' });
     }
-  }, [selectedRegionId, hoveredRegionId]);
+  }, [selectedRegionId, hoveredRegionId, anyOverlayEnabled]);
 
   // Mouse interactions
   useEffect(() => {

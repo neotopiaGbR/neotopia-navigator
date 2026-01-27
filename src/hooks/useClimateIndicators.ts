@@ -350,13 +350,17 @@ export function useClimateIndicators(
     // Also process other indicators from CLIMATE_INDICATORS if they have data
     for (const indicator of CLIMATE_INDICATORS) {
       if (indicator.code === 'temp_mean_annual') continue; // Already handled
+      if (indicator.code === 'temp_mean_projection') continue; // Part of temp display
+      if (indicator.code === 'temp_delta_vs_baseline') continue; // Part of temp display
       if (indicator.category === 'analog') continue; // Skip analog indicators
 
+      // Find baseline value for this indicator
       const indicatorBaselineRow = rawData.find(
         (v) => v.indicator_code === indicator.code && (v.is_baseline || v.scenario === 'historical')
       );
       const indicatorBaselineValue = indicatorBaselineRow?.value ?? null;
 
+      // Find projected value for this indicator (same code, matching scenario, not baseline)
       const indicatorProjectedRow = rawData.find(
         (v) => v.indicator_code === indicator.code && v.scenario === scenario && !v.is_baseline
       );
@@ -374,9 +378,11 @@ export function useClimateIndicators(
           }
         }
       } else {
+        // Baseline mode - show baseline as projected
         projectedValue = indicatorBaselineValue;
       }
 
+      // Only add if we have at least some data
       if (indicatorBaselineValue !== null || projectedValue !== null) {
         result.push({
           indicator,

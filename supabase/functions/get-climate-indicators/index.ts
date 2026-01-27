@@ -108,21 +108,21 @@ function getServiceRoleKey(): string | null {
  * Make authenticated REST calls to PostgREST.
  * 
  * For Supabase projects with signing keys (sb_publishable_* / sb_secret_*):
- * - apikey header: use the anon/publishable key
- * - Authorization header: use Bearer <service_role_key> for elevated access
+ * - Use ONLY the `apikey` header with the service role key
+ * - Do NOT use Authorization header (service role key is not a JWT)
  * 
- * The service role key bypasses RLS, which is what we need for server-side operations.
+ * The service role key in apikey header bypasses RLS.
  */
 async function restJson<T>(
   url: string,
   init: RequestInit,
-  anonKey: string,
   serviceRoleKey: string
 ): Promise<{ data: T; status: number } | { error: string; status: number; body?: string }>
 {
   const headers = new Headers(init.headers);
-  headers.set("apikey", anonKey);
-  headers.set("Authorization", `Bearer ${serviceRoleKey}`);
+  // For signing-key projects: use service role key in apikey header ONLY
+  headers.set("apikey", serviceRoleKey);
+  // DO NOT set Authorization header - service role key is not a JWT
   
   const res = await fetch(url, { ...init, headers });
   const status = res.status;
@@ -185,7 +185,6 @@ async function fetchAnnualMeanTempC(
 async function getRegionCentroid(
   regionId: string,
   supabaseUrl: string,
-  anonKey: string,
   serviceRoleKey: string
 ): Promise<{ lat: number; lon: number }>
 {
@@ -197,7 +196,6 @@ async function getRegionCentroid(
   const res = await restJson<Array<{ centroid: unknown; geom: unknown }>>(
     url.toString(),
     { method: "GET" },
-    anonKey,
     serviceRoleKey
   );
 
@@ -246,10 +244,9 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = getSupabaseUrl();
-  const anonKey = getAnonKey();
   const serviceRoleKey = getServiceRoleKey();
   
-  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+  if (!supabaseUrl || !serviceRoleKey) {
     return json({ error: "Server configuration error: missing env vars" }, 500);
   }
 
@@ -277,7 +274,7 @@ Deno.serve(async (req) => {
   const nowIso = new Date().toISOString();
 
   try {
-    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, anonKey, serviceRoleKey);
+    const centroid = await getRegionCentroid(p_region_id, supabaseUrl, serviceRoleKey);
     const { lat, lon } = centroid;
 
     // indicators registry
@@ -285,7 +282,7 @@ Deno.serve(async (req) => {
     indUrl.searchParams.set("select", "id,code,unit,default_ttl_days");
     indUrl.searchParams.set("code", `in.(${indicatorCodes.join(",")})`);
 
-    const indRes = await restJson<IndicatorMetaRow[]>(indUrl.toString(), { method: "GET" }, anonKey, serviceRoleKey);
+    const indRes = await restJson<IndicatorMetaRow[]>(indUrl.toString(), { method: "GET" }, serviceRoleKey);
     if ("error" in indRes) {
       return json({ error: `Indicator registry lookup failed: ${indRes.body ?? indRes.error}` }, 500);
     }
@@ -310,7 +307,7 @@ Deno.serve(async (req) => {
     cacheUrl.searchParams.set("period_start", "is.null");
     cacheUrl.searchParams.set("period_end", "is.null");
 
-    const cacheRes = await restJson<any[]>(cacheUrl.toString(), { method: "GET" }, anonKey, serviceRoleKey);
+    const cacheRes = await restJson<any[]>(cacheUrl.toString(), { method: "GET" }, serviceRoleKey);
     const cachedRows = "error" in cacheRes ? [] : cacheRes.data || [];
     const cachedByIndicatorId = new Map<string, any>(cachedRows.map((r) => [r.indicator_id, r]));
 
@@ -400,8 +397,7 @@ Deno.serve(async (req) => {
       const upRes = await fetch(upsertUrl.toString(), {
         method: "POST",
         headers: {
-          apikey: anonKey,
-          Authorization: `Bearer ${serviceRoleKey}`,
+          apikey: serviceRoleKey,
           "Content-Type": "application/json",
           Prefer: "resolution=merge-duplicates,return=minimal",
         },
@@ -432,7 +428,6 @@ Deno.serve(async (req) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ p_indicator_codes: indicatorCodes }),
       },
-      anonKey,
       serviceRoleKey
     );
 

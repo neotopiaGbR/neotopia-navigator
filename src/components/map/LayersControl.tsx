@@ -310,9 +310,33 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
 
           {/* Acquisition datetime for ECOSTRESS */}
           {id === 'ecostress' && config.metadata?.acquisitionDatetime && (
-            <p className="text-[10px] text-muted-foreground">
-              Aufnahme: {String(config.metadata.acquisitionDatetime)}
-            </p>
+            <div className="p-2 rounded bg-green-500/10 border border-green-500/30 text-xs">
+              <p className="text-green-600 dark:text-green-400 font-medium">✓ Daten verfügbar</p>
+              <p className="text-muted-foreground mt-1">
+                Aufnahme: {new Date(String(config.metadata.acquisitionDatetime)).toLocaleDateString('de-DE', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </p>
+              <p className="text-[10px] text-muted-foreground/70 mt-1">
+                Hinweis: Vollständige Rasterkacheln erfordern deck.gl Integration
+              </p>
+            </div>
+          )}
+
+          {/* Layer count for Flood Risk */}
+          {id === 'floodRisk' && config.metadata?.layers && (
+            <div className="p-2 rounded bg-blue-500/10 border border-blue-500/30 text-xs">
+              <p className="text-blue-600 dark:text-blue-400 font-medium">
+                ✓ {(config.metadata.layers as any[]).length} Layer geladen
+              </p>
+              {config.metadata.message && (
+                <p className="text-muted-foreground mt-1">{String(config.metadata.message)}</p>
+              )}
+            </div>
           )}
         </div>
       )}

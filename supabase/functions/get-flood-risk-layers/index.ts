@@ -100,13 +100,54 @@ Deno.serve(async (req) => {
         notes: layer.notes,
       }));
 
-    // If no WMS layers available, provide fallback info
+    // If no layers available from registry, use public fallback WMS
     if (layers.length === 0) {
+      // JRC Global Surface Water – publicly accessible flood/inundation data
+      const fallbackLayers = [
+        {
+          key: 'jrc_gsw_occurrence',
+          name: 'JRC Global Surface Water (Occurrence)',
+          type: 'wms',
+          url: 'https://storage.googleapis.com/global-surface-water/tiles2021/occurrence',
+          layer_name: null, // XYZ-style, not WMS layer param
+          attribution: 'EC JRC / Google – Global Surface Water',
+          license: 'CC BY 4.0',
+          return_period: null,
+          notes: 'Zeigt historische Wasserbedeckung (1984-2021). Hellblau = seltene, Dunkelblau = häufige Überflutung.',
+        },
+        // Copernicus EMS GloFAS (if in Europe, use EFAS; else GloFAS global)
+        isInEurope
+          ? {
+              key: 'efas_flood_rp100',
+              name: 'EFAS Hochwasser (RP100)',
+              type: 'wms',
+              url: 'https://maps.ecmwf.int/wms/efas_rp100',
+              layer_name: 'flood_depth_rp100',
+              attribution: 'ECMWF / Copernicus Emergency Management Service',
+              license: 'ECMWF Terms',
+              return_period: 100,
+              notes: 'EFAS modellierte Überflutungstiefe mit 100-jährlicher Wiederkehrperiode',
+            }
+          : {
+              key: 'glofas_flood_global',
+              name: 'GloFAS Hochwasser (Global)',
+              type: 'wms',
+              url: 'https://maps.ecmwf.int/wms/glofas_flood',
+              layer_name: 'flood_forecast',
+              attribution: 'ECMWF / Copernicus Emergency Management Service',
+              license: 'ECMWF Terms',
+              return_period: null,
+              notes: 'GloFAS globale Hochwasservorhersage',
+            },
+      ];
+
       return new Response(
         JSON.stringify({
           status: 'ok',
-          layers: [],
-          message: 'Keine Hochwasser-Layer für diese Region verfügbar.',
+          layers: fallbackLayers,
+          default_return_period: 100,
+          available_return_periods: [100],
+          message: 'Fallback-Layer aus öffentlichen Quellen geladen.',
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );

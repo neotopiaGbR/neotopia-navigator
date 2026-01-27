@@ -24,16 +24,21 @@ const TILE_SIZE = 256;
 const LST_MIN = 273; // 0°C
 const LST_MAX = 323; // 50°C
 
+// RGBA color tuple type
+type RGBAColor = [number, number, number, number];
+
 /**
  * Heat colormap: blue (cold) → cyan → green → yellow → red (hot)
  * Input: normalized value 0-1
  * Output: [r, g, b, a] 0-255
  */
-function heatColormap(value: number): [number, number, number, number] {
+function heatColormap(value: number): RGBAColor {
   // Clamp to 0-1
   const t = Math.max(0, Math.min(1, value));
   
-  let r: number, g: number, b: number;
+  let r: number;
+  let g: number;
+  let b: number;
   
   if (t < 0.25) {
     // Blue to Cyan (0 - 0.25)

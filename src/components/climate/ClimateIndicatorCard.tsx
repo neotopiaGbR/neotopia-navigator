@@ -1,13 +1,13 @@
-import React from 'react';
+import React, { forwardRef } from 'react';
 import { ClimateIndicatorData } from './types';
-import { TrendingUp, TrendingDown, Minus, ThermometerSun, Droplets, AlertTriangle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, ThermometerSun, Droplets, AlertTriangle, Flame, Zap } from 'lucide-react';
 
 interface ClimateIndicatorCardProps {
   data: ClimateIndicatorData;
   onClick?: () => void;
 }
 
-const ClimateIndicatorCard: React.FC<ClimateIndicatorCardProps> = ({ data, onClick }) => {
+const ClimateIndicatorCard = forwardRef<HTMLButtonElement, ClimateIndicatorCardProps>(({ data, onClick }, ref) => {
   const { indicator, baselineValue, projectedValue, absoluteChange, relativeChange, scenario, timeHorizon } = data;
 
   const isProjection = scenario !== 'historical' && timeHorizon !== 'baseline';
@@ -37,9 +37,16 @@ const ClimateIndicatorCard: React.FC<ClimateIndicatorCardProps> = ({ data, onCli
     switch (indicator.category) {
       case 'temperature':
         return <ThermometerSun className="h-4 w-4" />;
+      case 'heat':
+        return <Flame className="h-4 w-4" />;
+      case 'thermal':
+        return <ThermometerSun className="h-4 w-4" />;
+      case 'energy':
+        return <Zap className="h-4 w-4" />;
       case 'extremes':
         return <AlertTriangle className="h-4 w-4" />;
       case 'precipitation':
+      case 'drought':
         return <Droplets className="h-4 w-4" />;
       default:
         return <ThermometerSun className="h-4 w-4" />;
@@ -72,6 +79,7 @@ const ClimateIndicatorCard: React.FC<ClimateIndicatorCardProps> = ({ data, onCli
 
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       className="group w-full cursor-pointer rounded-md border border-border bg-card p-3 text-left transition-colors hover:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent"
@@ -135,6 +143,8 @@ const ClimateIndicatorCard: React.FC<ClimateIndicatorCardProps> = ({ data, onCli
       </p>
     </button>
   );
-};
+});
+
+ClimateIndicatorCard.displayName = 'ClimateIndicatorCard';
 
 export default ClimateIndicatorCard;

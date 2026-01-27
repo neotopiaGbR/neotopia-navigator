@@ -91,9 +91,11 @@ export interface ClimateIndicatorDefinition {
   deltaUnit?: string;
 }
 
-// Complete Climate Indicator Catalog
+// Complete Climate Indicator Catalog - #1-#12
 export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
-  // TEMPERATURE - BASELINE
+  // ─────────────────────────────────────────────────────────────────────────────
+  // #1 TEMPERATURE (Baseline & Projections)
+  // ─────────────────────────────────────────────────────────────────────────────
   {
     code: 'temp_mean_annual',
     name: 'Jahresmitteltemperatur',
@@ -105,7 +107,6 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     showDelta: true,
     deltaUnit: '°C',
   },
-  // TEMPERATURE - PROJECTIONS (returned by edge function for projection mode)
   {
     code: 'temp_mean_projection',
     name: 'Proj. Jahresmitteltemperatur',
@@ -127,18 +128,9 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     source: 'cordex',
     showDelta: false,
   },
-  {
-    code: 'summer_mean_temperature',
-    name: 'Sommermittel (JJA)',
-    unit: '°C',
-    category: 'temperature',
-    description: 'Mitteltemperatur Juni–August',
-    higherIsBetter: false,
-    source: 'era5',
-    showDelta: true,
-    deltaUnit: '°C',
-  },
-  // HEAT INDICATORS (Hitze & Nächte)
+  // ─────────────────────────────────────────────────────────────────────────────
+  // #2-#5 HEAT INDICATORS (Hitze & Nächte)
+  // ─────────────────────────────────────────────────────────────────────────────
   {
     code: 'summer_days_25c',
     name: 'Sommertage (≥25°C)',
@@ -183,41 +175,9 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     showDelta: true,
     deltaUnit: 'Tage',
   },
-  // EXTREMES
-  {
-    code: 'max_daily_temperature',
-    name: 'Max. Tagestemperatur',
-    unit: '°C',
-    category: 'extremes',
-    description: 'Höchste gemessene Tagestemperatur im Jahr',
-    higherIsBetter: false,
-    source: 'era5',
-    showDelta: true,
-    deltaUnit: '°C',
-  },
-  {
-    code: 'consecutive_dry_days',
-    name: 'Aufeinanderfolgende Trockentage',
-    unit: 'Tage',
-    category: 'extremes',
-    description: 'Max. Anzahl aufeinanderfolgender Tage ohne Niederschlag (< 1mm)',
-    higherIsBetter: false,
-    source: 'cordex',
-    showDelta: true,
-    deltaUnit: 'Tage',
-  },
-  {
-    code: 'heavy_precip_days_20mm',
-    name: 'Starkniederschlagstage (≥20mm)',
-    unit: 'Tage/Jahr',
-    category: 'extremes',
-    description: 'Tage mit Niederschlag ≥ 20mm',
-    higherIsBetter: false,
-    source: 'cordex',
-    showDelta: true,
-    deltaUnit: 'Tage',
-  },
-  // PRECIPITATION
+  // ─────────────────────────────────────────────────────────────────────────────
+  // #6-#8 PRECIPITATION & DROUGHT
+  // ─────────────────────────────────────────────────────────────────────────────
   {
     code: 'precip_annual',
     name: 'Jahresniederschlag',
@@ -251,61 +211,9 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     showDelta: true,
     deltaUnit: 'Tage',
   },
-  // LEGACY PRECIPITATION INDICATORS (keep for backward compatibility)
-  {
-    code: 'annual_precipitation_sum',
-    name: 'Jahresniederschlag (alt)',
-    unit: 'mm',
-    category: 'precipitation',
-    description: 'Gesamtniederschlag pro Jahr',
-    higherIsBetter: true,
-    source: 'era5',
-    showDelta: true,
-    deltaUnit: '%',
-  },
-  {
-    code: 'summer_precipitation_change',
-    name: 'Sommerniederschlag (Δ)',
-    unit: '%',
-    category: 'precipitation',
-    description: 'Prozentuale Änderung des Sommerniederschlags vs. Baseline',
-    higherIsBetter: true,
-    source: 'derived',
-    showDelta: false,
-  },
-  {
-    code: 'winter_precipitation_change',
-    name: 'Winterniederschlag (Δ)',
-    unit: '%',
-    category: 'precipitation',
-    description: 'Prozentuale Änderung des Winterniederschlags vs. Baseline',
-    higherIsBetter: true,
-    source: 'derived',
-    showDelta: false,
-  },
-  {
-    code: 'heavy_precip_days_20mm',
-    name: 'Starkniederschlagstage (alt)',
-    unit: 'Tage/Jahr',
-    category: 'extremes',
-    description: 'Tage mit Niederschlag ≥ 20mm',
-    higherIsBetter: false,
-    source: 'cordex',
-    showDelta: true,
-    deltaUnit: 'Tage',
-  },
-  {
-    code: 'consecutive_dry_days',
-    name: 'Aufeinanderfolgende Trockentage (alt)',
-    unit: 'Tage',
-    category: 'extremes',
-    description: 'Max. Anzahl aufeinanderfolgender Tage ohne Niederschlag (< 1mm)',
-    higherIsBetter: false,
-    source: 'cordex',
-    showDelta: true,
-    deltaUnit: 'Tage',
-  },
-  // THERMAL STRESS INDICATORS
+  // ─────────────────────────────────────────────────────────────────────────────
+  // #9-#10 THERMAL STRESS
+  // ─────────────────────────────────────────────────────────────────────────────
   {
     code: 'utci_mean_summer',
     name: 'UTCI Sommer',
@@ -328,7 +236,9 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     showDelta: true,
     deltaUnit: '°C',
   },
-  // ENERGY DEMAND INDICATORS
+  // ─────────────────────────────────────────────────────────────────────────────
+  // #11-#12 ENERGY DEMAND
+  // ─────────────────────────────────────────────────────────────────────────────
   {
     code: 'cooling_degree_days',
     name: 'Kühlgradtage (CDD)',
@@ -351,30 +261,9 @@ export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
     showDelta: true,
     deltaUnit: '°C·d',
   },
-  // URBAN HEAT / EXPOSURE
-  {
-    code: 'urban_heat_risk_index',
-    name: 'Urbaner Hitzestress-Index',
-    unit: '0–100',
-    category: 'urban',
-    description: 'Kombinierter Index aus Hitzetagen, Tropennächten und Versiegelung',
-    higherIsBetter: false,
-    source: 'derived',
-    showDelta: true,
-    deltaUnit: 'Punkte',
-  },
-  {
-    code: 'heat_exposure_population_share',
-    name: 'Hitzeexposition Bevölkerung',
-    unit: '%',
-    category: 'urban',
-    description: 'Anteil der Bevölkerung mit erhöhter Hitzebelastung',
-    higherIsBetter: false,
-    source: 'derived',
-    showDelta: true,
-    deltaUnit: '%',
-  },
-  // CLIMATE ANALOGS
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CLIMATE ANALOGS (derived, not from edge function)
+  // ─────────────────────────────────────────────────────────────────────────────
   {
     code: 'climate_analog_city',
     name: 'Klimaanalog-Stadt',

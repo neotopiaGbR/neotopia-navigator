@@ -95,7 +95,7 @@ export interface ClimateIndicatorDefinition {
 export const CLIMATE_INDICATORS: ClimateIndicatorDefinition[] = [
   // TEMPERATURE
   {
-    code: 'mean_annual_temperature',
+    code: 'temp_mean_annual',
     name: 'Jahresmitteltemperatur',
     unit: '°C',
     category: 'temperature',

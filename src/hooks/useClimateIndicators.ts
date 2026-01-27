@@ -43,6 +43,33 @@ interface ClimateApiResponse {
   computed_at: string;
 }
 
+type EdgeFnErrorLike = {
+  name?: string;
+  message?: string;
+  status?: number;
+  context?: unknown;
+};
+
+function toEdgeFnErrorMessage(err: unknown): string {
+  const e = (err ?? {}) as EdgeFnErrorLike;
+  const msg = typeof e.message === 'string' ? e.message : '';
+  const status = typeof e.status === 'number' ? e.status : undefined;
+
+  // Not deployed / network layer (often shows as TypeError: Load failed in browser)
+  if (
+    status === 404 ||
+    e.name === 'FunctionsFetchError' ||
+    msg.includes('Failed to send a request to the Edge Function') ||
+    msg.includes('Load failed')
+  ) {
+    return 'Edge Function nicht deployed in Supabase. Gehe zu Supabase → Edge Functions → Deploy get-climate-indicators.';
+  }
+
+  // Surface backend error messages when available
+  if (msg) return msg;
+  return 'Klimadaten konnten nicht geladen werden.';
+}
+
 export function useClimateIndicators(
   regionId: string | null,
   scenario: ClimateScenario,
@@ -76,11 +103,20 @@ export function useClimateIndicators(
         setIsLoading(true);
         setError(null);
 
+        const lastFullYear = new Date().getFullYear() - 1;
+        const requestedIndicatorCodes = ['temp_mean_annual'];
+
         // Call the edge function directly
         const { data: apiData, error: apiError } = await supabase.functions.invoke(
           'get-climate-indicators',
           {
             body: {
+              // New, explicit contract
+              region_id: regionId,
+              indicator_codes: requestedIndicatorCodes,
+              year: lastFullYear,
+
+              // Backwards compatibility with existing function params
               p_region_id: regionId,
               p_scenario: scenario === 'historical' ? null : scenario,
               p_period_start: timeHorizonConfig?.periodStart ?? 1991,
@@ -97,6 +133,15 @@ export function useClimateIndicators(
             data: apiData,
             error: apiError,
           });
+          if (apiError) {
+            const anyErr = apiError as unknown as EdgeFnErrorLike;
+            console.log('[useClimateIndicators] invoke error details:', {
+              name: anyErr?.name,
+              status: anyErr?.status,
+              message: anyErr?.message,
+              context: anyErr?.context,
+            });
+          }
         }
 
         if (apiError) {
@@ -105,8 +150,15 @@ export function useClimateIndicators(
 
         if (cancelled) return;
 
-        // Handle the structured response
-        const response = apiData as ClimateApiResponse | RpcClimateRow[];
+        // Handle the structured response (legacy + new)
+        const response = apiData as
+          | ClimateApiResponse
+          | RpcClimateRow[]
+          | {
+              values?: RpcClimateRow[];
+              attribution?: unknown;
+              datasets_used?: string[];
+            };
         
         let rows: RpcClimateRow[] = [];
         let datasets: string[] = [];
@@ -119,6 +171,9 @@ export function useClimateIndicators(
           // New structured format
           rows = response.indicators || [];
           datasets = response.datasets_used || [];
+        } else if (response && 'values' in response) {
+          rows = (response.values || []) as RpcClimateRow[];
+          datasets = (response.datasets_used || ['copernicus_era5_land']) as string[];
         }
 
         if (rows.length === 0) {
@@ -147,11 +202,7 @@ export function useClimateIndicators(
           console.error('[useClimateIndicators] Error:', err);
         }
         if (!cancelled) {
-          // More specific error message based on error type
-          const errorMessage = err instanceof Error 
-            ? err.message 
-            : 'Klimadaten konnten nicht geladen werden.';
-          setError(errorMessage);
+          setError(toEdgeFnErrorMessage(err));
           setRawData([]);
           setLocalDatasetsUsed([]);
         }
@@ -175,7 +226,8 @@ export function useClimateIndicators(
 
     if (!timeHorizonConfig) return [];
 
-    return CLIMATE_INDICATORS.filter((ind) => ind.category !== 'analog').map((indicator) => {
+    return CLIMATE_INDICATORS.filter((ind) => ind.category !== 'analog')
+      .map((indicator) => {
       // Find baseline value (historical, 1991-2020)
       const baselineRow = rawData.find(
         (v) =>
@@ -225,7 +277,9 @@ export function useClimateIndicators(
         scenario,
         timeHorizon,
       };
-    });
+    })
+      // Only show indicators that actually have at least one real value
+      .filter((row) => row.baselineValue !== null || row.projectedValue !== null);
   }, [rawData, scenario, timeHorizon, timeHorizonConfig]);
 
   // Calculate climate analog based on projected summer temperature
@@ -265,14 +319,14 @@ export function useClimateIndicators(
     // Fallback to mean annual temperature
     const projectedMeanTemp = rawData.find(
       (v) =>
-        v.indicator_code === 'mean_annual_temperature' &&
+        v.indicator_code === 'temp_mean_annual' &&
         v.scenario === scenario &&
         v.period_start === timeHorizonConfig.periodStart
     )?.value;
 
     const baselineMeanTemp = rawData.find(
       (v) =>
-        v.indicator_code === 'mean_annual_temperature' &&
+        v.indicator_code === 'temp_mean_annual' &&
         (v.is_baseline || v.scenario === 'historical')
     )?.value;
 

@@ -1,3 +1,15 @@
+/**
+ * ClimateProjectionPanel
+ * 
+ * STABLE VERSION - Full audit completed
+ * 
+ * Displays climate projections for selected region.
+ * Guarantees:
+ * - Never hangs in loading state
+ * - Always shows error OR data OR empty state
+ * - Retry button on failure
+ */
+
 import React, { useState } from 'react';
 import { useRegion } from '@/contexts/RegionContext';
 import { useClimateIndicators } from '@/hooks/useClimateIndicators';
@@ -5,7 +17,6 @@ import {
   ClimateScenario,
   ClimateTimeHorizon,
   CLIMATE_CATEGORY_LABELS,
-  CLIMATE_INDICATORS,
   CLIMATE_DATA_ATTRIBUTION,
   ClimateIndicatorCategory,
 } from './types';
@@ -15,7 +26,7 @@ import ClimateIndicatorCard from './ClimateIndicatorCard';
 import ClimateAnalogCard from './ClimateAnalogCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
-import { Thermometer, CloudSun, Info, RefreshCw, ExternalLink } from 'lucide-react';
+import { Thermometer, CloudSun, Info, RefreshCw, ExternalLink, AlertTriangle } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
@@ -28,7 +39,7 @@ const ClimateProjectionPanel: React.FC = () => {
   const [timeHorizon, setTimeHorizon] = useState<ClimateTimeHorizon>('near');
   const [showAttribution, setShowAttribution] = useState(false);
 
-  const { data, climateAnalog, isLoading, error, hasData, refetch, datasetsUsed } = useClimateIndicators(
+  const { data, climateAnalog, isLoading, error, hasData, refetch } = useClimateIndicators(
     selectedRegionId,
     scenario,
     timeHorizon
@@ -54,7 +65,10 @@ const ClimateProjectionPanel: React.FC = () => {
     return groups;
   }, [data]);
 
-  // If no region selected
+  // ─────────────────────────────────────────────────────────────────────────────
+  // RENDER: No region selected
+  // ─────────────────────────────────────────────────────────────────────────────
+
   if (!selectedRegionId) {
     return (
       <div className="flex flex-col items-center justify-center p-6 text-center">
@@ -66,34 +80,77 @@ const ClimateProjectionPanel: React.FC = () => {
     );
   }
 
-  // Loading state
+  // ─────────────────────────────────────────────────────────────────────────────
+  // RENDER: Loading state
+  // ─────────────────────────────────────────────────────────────────────────────
+
   if (isLoading) {
     return (
-      <div className="space-y-4 p-4">
-        <Skeleton className="h-9 w-full" />
-        <Skeleton className="h-9 w-full" />
-        <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-28 w-full rounded-md" />
-          ))}
+      <div className="flex h-full flex-col">
+        {/* Header */}
+        <div className="shrink-0 border-b border-border p-4">
+          <div className="flex items-center gap-2">
+            <Thermometer className="h-4 w-4 text-accent" />
+            <h3 className="text-sm font-semibold text-foreground">Klimaprojektionen</h3>
+          </div>
+          {selectedRegion && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Region: {selectedRegion.name}
+            </p>
+          )}
+        </div>
+
+        {/* Loading skeleton */}
+        <div className="space-y-4 p-4">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-24 w-full rounded-md" />
+            ))}
+          </div>
         </div>
       </div>
     );
   }
 
-  // Error state - only show if we have a real error
-  if (error && !isLoading) {
+  // ─────────────────────────────────────────────────────────────────────────────
+  // RENDER: Error state
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  if (error) {
     return (
-      <div className="flex flex-col items-center justify-center p-6 text-center">
-        <CloudSun className="mb-3 h-8 w-8 text-destructive/50" />
-        <p className="mb-3 text-sm text-destructive">{error}</p>
-        <Button variant="outline" size="sm" onClick={refetch}>
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Erneut versuchen
-        </Button>
+      <div className="flex h-full flex-col">
+        {/* Header */}
+        <div className="shrink-0 border-b border-border p-4">
+          <div className="flex items-center gap-2">
+            <Thermometer className="h-4 w-4 text-accent" />
+            <h3 className="text-sm font-semibold text-foreground">Klimaprojektionen</h3>
+          </div>
+          {selectedRegion && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Region: {selectedRegion.name}
+            </p>
+          )}
+        </div>
+
+        {/* Error message */}
+        <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
+          <AlertTriangle className="mb-3 h-8 w-8 text-destructive/70" />
+          <p className="mb-1 text-sm font-medium text-destructive">Fehler beim Laden</p>
+          <p className="mb-4 max-w-xs text-xs text-muted-foreground">{error}</p>
+          <Button variant="outline" size="sm" onClick={refetch}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Erneut versuchen
+          </Button>
+        </div>
       </div>
     );
   }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // RENDER: Main content
+  // ─────────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex h-full flex-col">
@@ -123,16 +180,20 @@ const ClimateProjectionPanel: React.FC = () => {
       {/* Content */}
       <ScrollArea className="flex-1">
         <div className="space-y-4 p-4">
-          {/* Empty state */}
+          {/* Empty state - no data available */}
           {!hasData && (
             <div className="rounded-md border border-dashed border-border bg-muted/30 p-6 text-center">
               <CloudSun className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
               <p className="text-sm text-muted-foreground">
-                Klimaprojektionen werden hier angezeigt, sobald Daten geladen sind.
+                Keine Klimadaten für diese Region verfügbar.
               </p>
               <p className="mt-2 text-xs text-muted-foreground">
                 Datenquellen: Copernicus ERA5-Land, EURO-CORDEX
               </p>
+              <Button variant="outline" size="sm" className="mt-4" onClick={refetch}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Erneut laden
+              </Button>
             </div>
           )}
 

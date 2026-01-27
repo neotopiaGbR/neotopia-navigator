@@ -91,7 +91,78 @@ async function osmConnector(
   }
 }
 
-// Climate connector stub
+// Temperature connector - uses compute-temperature edge function for real data
+async function temperatureConnector(
+  supabaseUrl: string,
+  supabaseKey: string,
+  indicatorCodes: string[],
+  regionId: string,
+  centroid: { lat: number; lon: number } | null,
+  year: number
+): Promise<ConnectorResult> {
+  console.log(`[resolve-indicators] Temperature connector for ${indicatorCodes.length} indicators`)
+  
+  const values: ConnectorResult['values'] = []
+  
+  for (const code of indicatorCodes) {
+    if (code === 'temp_mean_annual' && centroid) {
+      try {
+        // Call the compute-temperature edge function
+        const response = await fetch(`${supabaseUrl}/functions/v1/compute-temperature`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({
+            region_id: regionId,
+            lat: centroid.lat,
+            lon: centroid.lon,
+            year,
+          }),
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          console.log(`[resolve-indicators] Temperature result:`, result)
+          
+          if (result.success && result.value !== null) {
+            values.push({
+              indicator_code: code,
+              value: result.value,
+              value_text: null,
+              meta: {
+                status: 'computed',
+                cached: result.cached,
+                source_api: 'open-meteo',
+                dataset_key: result.dataset_key,
+              },
+            })
+            continue
+          }
+        }
+      } catch (err) {
+        console.error(`[resolve-indicators] Temperature fetch error:`, err)
+      }
+    }
+    
+    // Fallback for failed or unsupported indicators
+    values.push({
+      indicator_code: code,
+      value: null,
+      value_text: null,
+      meta: { status: 'fetch_failed' },
+    })
+  }
+
+  return {
+    values,
+    dataset_key: 'copernicus_era5_land',
+    ttl_days: 180,
+  }
+}
+
+// Climate connector stub (for non-temperature climate indicators)
 async function climateConnector(
   indicatorCodes: string[],
   _regionId: string,
@@ -494,6 +565,17 @@ Deno.serve(async (req) => {
 
         try {
           switch (connectorKey) {
+            case 'temperature':
+              result = await temperatureConnector(
+                supabaseUrl,
+                supabaseKey,
+                group.codes,
+                resolvedRegionId,
+                centroid,
+                year
+              )
+              break
+            
             case 'climate':
             case 'climate_analog':
               result = await climateConnector(

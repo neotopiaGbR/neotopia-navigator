@@ -147,7 +147,11 @@ export function useClimateIndicators(
           console.error('[useClimateIndicators] Error:', err);
         }
         if (!cancelled) {
-          setError('Klimadaten konnten nicht geladen werden. Bitte versuchen Sie es später erneut.');
+          // More specific error message based on error type
+          const errorMessage = err instanceof Error 
+            ? err.message 
+            : 'Klimadaten konnten nicht geladen werden.';
+          setError(errorMessage);
           setRawData([]);
           setLocalDatasetsUsed([]);
         }

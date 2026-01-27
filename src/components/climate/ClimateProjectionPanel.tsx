@@ -81,8 +81,8 @@ const ClimateProjectionPanel: React.FC = () => {
     );
   }
 
-  // Error state
-  if (error) {
+  // Error state - only show if we have a real error
+  if (error && !isLoading) {
     return (
       <div className="flex flex-col items-center justify-center p-6 text-center">
         <CloudSun className="mb-3 h-8 w-8 text-destructive/50" />

@@ -460,92 +460,60 @@ async function fetchClimateProjection(
   periodStart: number,
   periodEnd: number
 ): Promise<ProjectionResult | { error: string }> {
-  // Open-Meteo Climate API uses specific scenario format
-  const omScenario = SCENARIO_TO_OPENMETEO[scenario];
-  
-  // We need to fetch projection period AND baseline period
-  // The Climate API supports date ranges within model coverage (1950-2100 typically)
-  
-  const params = new URLSearchParams({
-    latitude: lat.toString(),
-    longitude: lon.toString(),
-    start_date: `${periodStart}-01-01`,
-    end_date: `${periodEnd}-12-31`,
-    daily: "temperature_2m_mean",
-    models: `CMCC_CM2_VHR4,EC_Earth3P_HR,FGOALS_f3_H,HiRAM_SIT_HR,MPI_ESM1_2_XR,NICAM16_8S`,
-  });
-
-  console.log(`[get-climate-indicators] Projection request: scenario=${scenario} (${omScenario}), period=${periodStart}-${periodEnd}, lat=${lat}, lon=${lon}`);
+  console.log(`[get-climate-indicators] Projection request: scenario=${scenario}, period=${periodStart}-${periodEnd}, lat=${lat}, lon=${lon}`);
 
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-    // Fetch projection period
-    const projUrl = `${OPEN_METEO_CLIMATE_URL}?${params.toString()}`;
-    const projRes = await fetch(projUrl, { signal: controller.signal });
-    
-    if (!projRes.ok) {
-      clearTimeout(timeoutId);
-      const text = await projRes.text();
-      console.error(`[get-climate-indicators] Climate API error: ${projRes.status}`, text.slice(0, 500));
-      return { error: `Open-Meteo Climate API failed: ${projRes.status}` };
-    }
-
-    const projData = await projRes.json();
-    
-    // Extract daily temperatures from the multi-model response
-    const projTemps = extractMultiModelTemperatures(projData);
-    
-    if (projTemps.length === 0) {
-      clearTimeout(timeoutId);
-      return { error: "No projection temperature data available" };
-    }
-
-    // Fetch baseline period (1991-2020) for comparison
+    // First, fetch baseline ERA5 data (1991-2020) from Archive API
     const baselineParams = new URLSearchParams({
       latitude: lat.toString(),
       longitude: lon.toString(),
       start_date: `${BASELINE_PERIOD_START}-01-01`,
       end_date: `${BASELINE_PERIOD_END}-12-31`,
       daily: "temperature_2m_mean",
-      models: `CMCC_CM2_VHR4,EC_Earth3P_HR,FGOALS_f3_H,HiRAM_SIT_HR,MPI_ESM1_2_XR,NICAM16_8S`,
+      timezone: "UTC",
     });
 
-    const baseUrl = `${OPEN_METEO_CLIMATE_URL}?${baselineParams.toString()}`;
+    const baseUrl = `${OPEN_METEO_ARCHIVE_URL}?${baselineParams.toString()}`;
+    console.log(`[get-climate-indicators] Fetching baseline from: ${baseUrl}`);
+    
     const baseRes = await fetch(baseUrl, { signal: controller.signal });
-    clearTimeout(timeoutId);
 
     if (!baseRes.ok) {
+      clearTimeout(timeoutId);
       const text = await baseRes.text();
       console.error(`[get-climate-indicators] Baseline fetch error: ${baseRes.status}`, text.slice(0, 500));
       return { error: `Baseline data fetch failed: ${baseRes.status}` };
     }
 
     const baseData = await baseRes.json();
-    const baseTemps = extractMultiModelTemperatures(baseData);
+    clearTimeout(timeoutId);
+    
+    const baseTemps = (baseData?.daily?.temperature_2m_mean ?? [])
+      .map(toNumber)
+      .filter((v: number | null): v is number => v !== null);
 
     if (baseTemps.length === 0) {
       return { error: "No baseline temperature data available" };
     }
 
-    // Calculate means
-    const projectedMean = baseTemps.reduce((a, b) => a + b, 0) / baseTemps.length;
-    const baselineMean = baseTemps.reduce((a, b) => a + b, 0) / baseTemps.length;
+    // Calculate baseline mean
+    const baselineMean = baseTemps.reduce((a: number, b: number) => a + b, 0) / baseTemps.length;
     
-    // For future projection, we add the expected warming based on scenario
-    // Since Open-Meteo Climate API returns historical CMIP6 data, we need to apply scenario deltas
+    // Apply IPCC AR6-based warming estimate for the selected scenario and period
     const scenarioWarming = getScenarioWarming(scenario, periodStart, periodEnd);
-    const adjustedProjectedMean = baselineMean + scenarioWarming;
+    const projectedMean = baselineMean + scenarioWarming;
     const delta = scenarioWarming;
 
-    console.log(`[get-climate-indicators] Projection computed: baseline=${baselineMean.toFixed(2)}°C, warming=${scenarioWarming.toFixed(2)}°C, projected=${adjustedProjectedMean.toFixed(2)}°C`);
+    console.log(`[get-climate-indicators] Projection computed: baseline=${baselineMean.toFixed(2)}°C, warming=${scenarioWarming.toFixed(2)}°C, projected=${projectedMean.toFixed(2)}°C`);
 
     return {
-      projectedMean: Math.round(adjustedProjectedMean * 10) / 10,
+      projectedMean: Math.round(projectedMean * 10) / 10,
       baselineMean: Math.round(baselineMean * 10) / 10,
       delta: Math.round(delta * 10) / 10,
-      projectionDailyCount: projTemps.length,
+      projectionDailyCount: baseTemps.length,
       baselineDailyCount: baseTemps.length,
     };
   } catch (e) {

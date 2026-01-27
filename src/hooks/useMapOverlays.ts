@@ -54,10 +54,16 @@ export function useMapOverlays() {
 
   // Fetch ECOSTRESS data when overlay is enabled
   const fetchEcostress = useCallback(async () => {
+    console.log('[useMapOverlays] fetchEcostress called', { 
+      selectedRegionId: selectedRegion?.id,
+      hasGeom: !!selectedRegion?.geom,
+      enabled: overlays.ecostress.enabled 
+    });
+    
     if (!selectedRegion) {
       // Only show error if overlay is enabled but no region selected
       if (overlays.ecostress.enabled) {
-        setOverlayError('ecostress', 'Keine Region ausgewählt');
+        setOverlayError('ecostress', 'Bitte wählen Sie eine Region auf der Karte aus');
       }
       return;
     }
@@ -136,10 +142,16 @@ export function useMapOverlays() {
 
   // Fetch Flood Risk layers when overlay is enabled
   const fetchFloodRisk = useCallback(async () => {
+    console.log('[useMapOverlays] fetchFloodRisk called', { 
+      selectedRegionId: selectedRegion?.id,
+      hasGeom: !!selectedRegion?.geom,
+      enabled: overlays.floodRisk.enabled 
+    });
+    
     if (!selectedRegion) {
       // Only show error if overlay is enabled but no region selected
       if (overlays.floodRisk.enabled) {
-        setOverlayError('floodRisk', 'Keine Region ausgewählt');
+        setOverlayError('floodRisk', 'Bitte wählen Sie eine Region auf der Karte aus');
       }
       return;
     }

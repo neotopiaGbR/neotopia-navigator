@@ -95,6 +95,8 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
         [overlay]: {
           ...prev[overlay],
           metadata,
+          error: null, // Clear error on successful metadata update
+          loading: false,
           lastUpdated: new Date().toISOString(),
         },
       }));

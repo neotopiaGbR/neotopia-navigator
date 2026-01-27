@@ -9,66 +9,68 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { useAllIndicators, IndicatorsByCategory } from '@/hooks/useAllIndicators';
+import { useAllIndicators, IndicatorsByDomain } from '@/hooks/useAllIndicators';
 import { useIndicatorSelection } from '@/hooks/useIndicatorSelection';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 const IndicatorMultiSelect: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set());
   
-  const { indicators, indicatorsByCategory, isLoading, error } = useAllIndicators();
+  const { indicators, indicatorsByDomain, isLoading, error } = useAllIndicators();
   const { selectedCodes, toggleCode, selectAll, deselectAll, isSelected } = useIndicatorSelection();
 
   // Filter indicators based on search
-  const filteredByCategory = useMemo(() => {
-    if (!searchQuery.trim()) return indicatorsByCategory;
+  const filteredByDomain = useMemo(() => {
+    if (!searchQuery.trim()) return indicatorsByDomain;
     
     const query = searchQuery.toLowerCase();
-    const filtered: IndicatorsByCategory[] = [];
+    const filtered: IndicatorsByDomain[] = [];
     
-    for (const group of indicatorsByCategory) {
+    for (const group of indicatorsByDomain) {
       const matchingIndicators = group.indicators.filter(
         (ind) =>
           ind.name.toLowerCase().includes(query) ||
-          ind.code.toLowerCase().includes(query)
+          ind.code.toLowerCase().includes(query) ||
+          (ind.description?.toLowerCase().includes(query))
       );
       if (matchingIndicators.length > 0) {
         filtered.push({
-          category: group.category,
+          domain: group.domain,
+          label: group.label,
           indicators: matchingIndicators,
         });
       }
     }
     return filtered;
-  }, [indicatorsByCategory, searchQuery]);
+  }, [indicatorsByDomain, searchQuery]);
 
-  // Expand all categories when searching
+  // Expand all domains when searching
   React.useEffect(() => {
     if (searchQuery.trim()) {
-      setExpandedCategories(new Set(filteredByCategory.map((g) => g.category)));
+      setExpandedDomains(new Set(filteredByDomain.map((g) => g.domain)));
     }
-  }, [searchQuery, filteredByCategory]);
+  }, [searchQuery, filteredByDomain]);
 
   const allCodes = useMemo(() => indicators.map((i) => i.code), [indicators]);
   const allSelected = indicators.length > 0 && selectedCodes.size === indicators.length;
   const noneSelected = selectedCodes.size === 0;
 
-  const toggleCategory = (category: string) => {
-    setExpandedCategories((prev) => {
+  const toggleDomain = (domain: string) => {
+    setExpandedDomains((prev) => {
       const next = new Set(prev);
-      if (next.has(category)) {
-        next.delete(category);
+      if (next.has(domain)) {
+        next.delete(domain);
       } else {
-        next.add(category);
+        next.add(domain);
       }
       return next;
     });
   };
 
-  const selectAllInCategory = (categoryIndicators: { code: string }[]) => {
-    const codes = categoryIndicators.map((i) => i.code);
+  const selectAllInDomain = (domainIndicators: { code: string }[]) => {
+    const codes = domainIndicators.map((i) => i.code);
     const newSelection = new Set(selectedCodes);
     for (const code of codes) {
       newSelection.add(code);
@@ -76,8 +78,8 @@ const IndicatorMultiSelect: React.FC = () => {
     selectAll(Array.from(newSelection));
   };
 
-  const getCategorySelectionState = (categoryIndicators: { code: string }[]) => {
-    const codes = categoryIndicators.map((i) => i.code);
+  const getDomainSelectionState = (domainIndicators: { code: string }[]) => {
+    const codes = domainIndicators.map((i) => i.code);
     const selectedCount = codes.filter((c) => selectedCodes.has(c)).length;
     if (selectedCount === 0) return 'none';
     if (selectedCount === codes.length) return 'all';
@@ -167,20 +169,20 @@ const IndicatorMultiSelect: React.FC = () => {
           {!isLoading && !error && (
             <ScrollArea className="h-72">
               <div className="p-1">
-                {filteredByCategory.length === 0 ? (
+                {filteredByDomain.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-4">
                     Keine Indikatoren gefunden
                   </p>
                 ) : (
-                  filteredByCategory.map((group) => {
-                    const isExpanded = expandedCategories.has(group.category);
-                    const selectionState = getCategorySelectionState(group.indicators);
+                  filteredByDomain.map((group) => {
+                    const isExpanded = expandedDomains.has(group.domain);
+                    const selectionState = getDomainSelectionState(group.indicators);
                     
                     return (
                       <Collapsible
-                        key={group.category}
+                        key={group.domain}
                         open={isExpanded}
-                        onOpenChange={() => toggleCategory(group.category)}
+                        onOpenChange={() => toggleDomain(group.domain)}
                       >
                         <div className="flex items-center gap-1 px-1 py-1">
                           <CollapsibleTrigger asChild>
@@ -198,7 +200,7 @@ const IndicatorMultiSelect: React.FC = () => {
                           </CollapsibleTrigger>
                           
                           <span className="flex-1 text-xs font-semibold uppercase tracking-wide text-accent">
-                            {group.category}
+                            {group.label}
                           </span>
                           
                           <Button
@@ -207,7 +209,7 @@ const IndicatorMultiSelect: React.FC = () => {
                             className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
                             onClick={(e) => {
                               e.stopPropagation();
-                              selectAllInCategory(group.indicators);
+                              selectAllInDomain(group.indicators);
                             }}
                             disabled={selectionState === 'all'}
                           >
@@ -236,7 +238,7 @@ const IndicatorMultiSelect: React.FC = () => {
                                     {indicator.name}
                                   </p>
                                   <p className="text-xs text-muted-foreground truncate">
-                                    {indicator.code} · {indicator.unit}
+                                    {indicator.code} · {indicator.unit || '–'}
                                   </p>
                                 </div>
                               </label>

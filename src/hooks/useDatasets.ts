@@ -3,127 +3,153 @@ import { supabase } from '@/integrations/supabase/client';
 
 export interface Dataset {
   id: string;
-  dataset_key: string;
-  source: string;
+  key: string;
+  name: string;
+  provider: string;
+  domain: string;
+  geographic_coverage: string;
+  access_type: string;
   license: string;
-  license_url: string | null;
   attribution: string;
-  url: string;
-  coverage: string;
-  resolution: string | null;
-  update_cycle: string;
-  default_ttl_days: number;
+  url: string | null;
+  notes: string | null;
+  update_frequency: string | null;
   version: string | null;
-  fetched_at: string | null;
   created_at: string;
-  updated_at: string;
+}
+
+export interface IndicatorSource {
+  indicator_code: string;
+  dataset_key: string;
+  dataset_name: string;
+  provider: string;
+  license: string;
+  attribution: string;
+  url: string | null;
+  connector_key: string;
+  priority: number;
 }
 
 // Fallback dataset definitions for when DB doesn't have entries yet
-const FALLBACK_DATASETS: Record<string, Omit<Dataset, 'id' | 'created_at' | 'updated_at' | 'fetched_at' | 'version'>> = {
+const FALLBACK_DATASETS: Record<string, Omit<Dataset, 'id' | 'created_at'>> = {
   copernicus_era5_land: {
-    dataset_key: 'copernicus_era5_land',
-    source: 'Copernicus Climate Change Service (C3S)',
+    key: 'copernicus_era5_land',
+    name: 'ERA5-Land Hourly Data',
+    provider: 'Copernicus Climate Change Service (C3S)',
+    domain: 'climate',
+    geographic_coverage: 'global',
+    access_type: 'api',
     license: 'CC BY 4.0',
-    license_url: 'https://creativecommons.org/licenses/by/4.0/',
     attribution: 'Copernicus Climate Change Service (C3S): ERA5-Land hourly data from 1950 to present',
     url: 'https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-land',
-    coverage: 'Global, 0.1° (~9km)',
-    resolution: '0.1°',
-    update_cycle: 'Monatlich',
-    default_ttl_days: 90,
+    notes: '0.1° resolution (~9km), hourly, 1950-present',
+    update_frequency: 'monthly',
+    version: null,
   },
   copernicus_eurocordex: {
-    dataset_key: 'copernicus_eurocordex',
-    source: 'Copernicus Climate Change Service (C3S)',
+    key: 'copernicus_eurocordex',
+    name: 'EURO-CORDEX Climate Projections',
+    provider: 'Copernicus Climate Change Service (C3S)',
+    domain: 'climate',
+    geographic_coverage: 'EU',
+    access_type: 'api',
     license: 'CC BY 4.0',
-    license_url: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: 'Copernicus Climate Change Service (C3S): EURO-CORDEX EUR-11 regional climate projections (bias-adjusted)',
+    attribution: 'Copernicus Climate Change Service (C3S): CORDEX regional climate model data',
     url: 'https://cds.climate.copernicus.eu/cdsapp#!/dataset/projections-cordex-domains-single-levels',
-    coverage: 'Europa, 0.11° (~12km)',
-    resolution: '0.11°',
-    update_cycle: 'Statisch (CMIP6)',
-    default_ttl_days: 365,
+    notes: 'EUR-11 (0.11°/~12km), bias-adjusted, CMIP5/CMIP6 scenarios',
+    update_frequency: 'static',
+    version: null,
   },
   eurostat_geostat: {
-    dataset_key: 'eurostat_geostat',
-    source: 'Eurostat GEOSTAT',
+    key: 'eurostat_geostat',
+    name: 'GEOSTAT Population Grid 1km',
+    provider: 'Eurostat / GISCO',
+    domain: 'demography',
+    geographic_coverage: 'EU',
+    access_type: 'bulk_download',
     license: 'CC BY 4.0',
-    license_url: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: 'Eurostat GEOSTAT: Population grid 1km',
+    attribution: 'Eurostat GEOSTAT: Population grid based on census data. © European Union',
     url: 'https://ec.europa.eu/eurostat/web/gisco/geodata/reference-data/population-distribution-demography/geostat',
-    coverage: 'EU27, 1km Raster',
-    resolution: '1km',
-    update_cycle: 'Jährlich',
-    default_ttl_days: 180,
+    notes: '1km grid, census-based, 2011/2018/2021',
+    update_frequency: 'census cycle',
+    version: null,
   },
   copernicus_corine: {
-    dataset_key: 'copernicus_corine',
-    source: 'Copernicus Land Monitoring Service',
+    key: 'copernicus_corine',
+    name: 'CORINE Land Cover',
+    provider: 'Copernicus Land Monitoring Service',
+    domain: 'landuse',
+    geographic_coverage: 'EU',
+    access_type: 'bulk_download',
     license: 'CC BY 4.0',
-    license_url: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: 'Copernicus Land Monitoring Service: CORINE Land Cover',
+    attribution: 'Copernicus Land Monitoring Service: CORINE Land Cover. © European Union',
     url: 'https://land.copernicus.eu/pan-european/corine-land-cover',
-    coverage: 'Europa, 100m',
-    resolution: '100m',
-    update_cycle: '6 Jahre',
-    default_ttl_days: 365,
+    notes: '100m resolution, 44 classes, 1990-2018',
+    update_frequency: '6 years',
+    version: null,
   },
   copernicus_imperviousness: {
-    dataset_key: 'copernicus_imperviousness',
-    source: 'Copernicus Land Monitoring Service',
+    key: 'copernicus_imperviousness',
+    name: 'High Resolution Imperviousness',
+    provider: 'Copernicus Land Monitoring Service',
+    domain: 'landuse',
+    geographic_coverage: 'EU',
+    access_type: 'bulk_download',
     license: 'CC BY 4.0',
-    license_url: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: 'Copernicus Land Monitoring Service: High Resolution Layer Imperviousness Density',
+    attribution: 'Copernicus Land Monitoring Service: High Resolution Layer Imperviousness',
     url: 'https://land.copernicus.eu/pan-european/high-resolution-layers/imperviousness',
-    coverage: 'Europa, 10m',
-    resolution: '10m',
-    update_cycle: '3 Jahre',
-    default_ttl_days: 365,
+    notes: '10m resolution, 0-100% density, 2006-2018',
+    update_frequency: '3 years',
+    version: null,
   },
   eea_airquality: {
-    dataset_key: 'eea_airquality',
-    source: 'European Environment Agency (EEA)',
+    key: 'eea_airquality',
+    name: 'Air Quality e-Reporting',
+    provider: 'European Environment Agency (EEA)',
+    domain: 'air',
+    geographic_coverage: 'EU',
+    access_type: 'api',
     license: 'CC BY 4.0',
-    license_url: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: 'EEA Air Quality e-Reporting: Validated measurements from monitoring stations',
+    attribution: 'European Environment Agency: Air Quality e-Reporting (AQ e-Reporting). © EEA',
     url: 'https://www.eea.europa.eu/themes/air/air-quality-index',
-    coverage: 'EU27 + EEA Länder',
-    resolution: 'Stationen',
-    update_cycle: 'Stündlich',
-    default_ttl_days: 1,
+    notes: 'Validated station measurements, hourly/daily',
+    update_frequency: 'hourly',
+    version: null,
   },
   osm: {
-    dataset_key: 'osm',
-    source: 'OpenStreetMap',
+    key: 'osm',
+    name: 'OpenStreetMap',
+    provider: 'OpenStreetMap Contributors',
+    domain: 'infrastructure',
+    geographic_coverage: 'global',
+    access_type: 'api',
     license: 'ODbL',
-    license_url: 'https://opendatacommons.org/licenses/odbl/',
-    attribution: '© OpenStreetMap contributors',
+    attribution: '© OpenStreetMap contributors. Data available under the Open Database License.',
     url: 'https://www.openstreetmap.org/',
-    coverage: 'Global',
-    resolution: 'Vektordaten',
-    update_cycle: 'Kontinuierlich',
-    default_ttl_days: 30,
+    notes: 'POIs, networks, land use, buildings',
+    update_frequency: 'continuous',
+    version: null,
   },
 };
 
-export function useDatasets() {
+export function useDatasets(domainFilter?: string) {
   return useQuery({
-    queryKey: ['datasets'],
+    queryKey: ['datasets', domainFilter],
     queryFn: async (): Promise<Dataset[]> => {
-      const { data, error } = await supabase.rpc('list_datasets');
+      const { data, error } = await supabase.rpc('list_datasets', {
+        p_domain: domainFilter || null,
+      });
 
       if (error) {
         console.error('[useDatasets] RPC error:', error);
-        // Fallback to direct table query if RPC doesn't exist
+        // Fallback to direct table query
         const { data: fallbackData, error: fallbackError } = await supabase
-          .from('dataset_versions')
+          .from('datasets')
           .select('*')
-          .order('source, dataset_key');
+          .order('domain, name');
 
         if (fallbackError) {
           console.error('[useDatasets] Fallback query error:', fallbackError);
-          // Return empty array, will use FALLBACK_DATASETS in useUsedDatasets
           return [];
         }
         return (fallbackData || []) as Dataset[];
@@ -131,7 +157,30 @@ export function useDatasets() {
 
       return (data || []) as Dataset[];
     },
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+// Fetch attribution sources for specific indicator codes
+export function useIndicatorSources(indicatorCodes: string[]) {
+  return useQuery({
+    queryKey: ['indicator-sources', indicatorCodes],
+    queryFn: async (): Promise<IndicatorSource[]> => {
+      if (!indicatorCodes.length) return [];
+
+      const { data, error } = await supabase.rpc('get_indicator_sources', {
+        p_indicator_codes: indicatorCodes,
+      });
+
+      if (error) {
+        console.error('[useIndicatorSources] RPC error:', error);
+        return [];
+      }
+
+      return (data || []) as IndicatorSource[];
+    },
+    enabled: indicatorCodes.length > 0,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -141,11 +190,11 @@ export function useUsedDatasets(datasetsUsed: string[]) {
 
   // Filter from DB datasets
   const dbDatasets = allDatasets?.filter(ds => 
-    datasetsUsed.includes(ds.dataset_key)
+    datasetsUsed.includes(ds.key)
   ) || [];
 
   // Find missing datasets and use fallbacks
-  const dbDatasetKeys = new Set(dbDatasets.map(ds => ds.dataset_key));
+  const dbDatasetKeys = new Set(dbDatasets.map(ds => ds.key));
   const missingKeys = datasetsUsed.filter(key => !dbDatasetKeys.has(key));
   
   const fallbackDatasets: Dataset[] = missingKeys
@@ -154,9 +203,6 @@ export function useUsedDatasets(datasetsUsed: string[]) {
       ...FALLBACK_DATASETS[key],
       id: `fallback-${key}`,
       created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      fetched_at: null,
-      version: null,
     }));
 
   const usedDatasets = [...dbDatasets, ...fallbackDatasets];

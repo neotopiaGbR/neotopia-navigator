@@ -16,6 +16,8 @@ import { AirTemperatureOverlay } from './AirTemperatureOverlay';
 import { AirTemperatureLegend } from './AirTemperatureLegend';
 import { DwdTemperatureHealthCheck } from './DwdTemperatureHealthCheck';
 import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
+import LayerDiagnosticsPanel from './LayerDiagnosticsPanel';
+
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
 // Show health check panel in development mode only
@@ -527,6 +529,9 @@ const RegionMap: React.FC = () => {
       {/* DWD TEMPERATURE HEALTH CHECK - Dev/Admin only */}
       <DwdTemperatureHealthCheck visible={isDev || isAdmin} />
       
+      {/* LAYER DIAGNOSTICS PANEL - Dev/Admin only */}
+      <LayerDiagnosticsPanel map={map.current} />
+      
       {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
       {mapReady && map.current && heatOverlayEnabled && (
         <GlobalLSTOverlay
@@ -537,10 +542,11 @@ const RegionMap: React.FC = () => {
       )}
       
       {/* TIER 2: ECOSTRESS Summer Composite - SINGLE aggregated layer */}
-      {mapReady && map.current && overlays.ecostress.metadata?.status === 'match' && (
+      {/* Render when enabled AND we have granule data, regardless of 'match' status */}
+      {mapReady && map.current && overlays.ecostress.enabled && (
         <EcostressCompositeOverlay
           map={map.current}
-          visible={overlays.ecostress.enabled}
+          visible={overlays.ecostress.enabled && overlays.ecostress.metadata?.status === 'match'}
           opacity={heatLayers.ecostressOpacity / 100}
           allGranules={overlays.ecostress.metadata?.allGranules as Array<{
             cog_url: string;
@@ -556,9 +562,7 @@ const RegionMap: React.FC = () => {
           aggregationMethod={heatLayers.aggregationMethod}
           onMetadata={(metadata) => {
             setCompositeMetadata(metadata);
-            // Update overlay metadata with composite results for UI display
             if (metadata) {
-              // This could be enhanced to sync metadata to context
               console.log('[RegionMap] Composite metadata:', {
                 confidence: metadata.coverageConfidence.level,
                 granules: metadata.successfulGranules,

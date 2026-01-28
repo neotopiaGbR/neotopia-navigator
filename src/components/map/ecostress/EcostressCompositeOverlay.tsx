@@ -4,14 +4,13 @@
  * Renders a single, stable heat map from aggregated ECOSTRESS data.
  * Uses quality-weighted pixel aggregation with regional percentile normalization.
  * 
- * Scientific requirements:
- * - Quality filtering: discards granules with cloud >40% or coverage <60%
- * - Weighted aggregation: weights by cloud confidence, coverage, quality score
- * - Percentile normalization: uses P5-P95 to prevent tile-to-tile contrast jumps
- * - Single output layer: no overlapping swaths or rotated tiles
+ * ARCHITECTURE FIX (2026-01):
+ * - Uses refs to persist image data across re-renders
+ * - Separates composite creation from overlay mounting
+ * - Prevents state resets during React render cycles
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { BitmapLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
@@ -70,13 +69,24 @@ export function EcostressCompositeOverlay({
   onRenderStatus,
   onMetadata,
 }: EcostressCompositeOverlayProps) {
+  // === REFS for persistence across re-renders ===
   const overlayRef = useRef<MapboxOverlay | null>(null);
-  const [compositeResult, setCompositeResult] = useState<CompositeResult | null>(null);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const compositeDataRef = useRef<{
+    result: CompositeResult | null;
+    imageUrl: string | null;
+    granuleKey: string;
+    bboxKey: string;
+    method: AggregationMethod;
+  }>({ result: null, imageUrl: null, granuleKey: '', bboxKey: '', method: 'median' });
+  const isMountedRef = useRef(true);
+  
+  // === STATE for UI only ===
   const [status, setStatus] = useState<'idle' | 'loading' | 'rendered' | 'error' | 'no_data'>('idle');
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [displayStats, setDisplayStats] = useState<CompositeResult['stats'] | null>(null);
+  const [displayMetadata, setDisplayMetadata] = useState<CompositeResult['metadata'] | null>(null);
   
-  // Stabilize callback refs to prevent infinite loops
+  // Stabilize callback refs
   const onRenderStatusRef = useRef(onRenderStatus);
   const onMetadataRef = useRef(onMetadata);
   onRenderStatusRef.current = onRenderStatus;
@@ -90,16 +100,103 @@ export function EcostressCompositeOverlay({
   // Stabilize bbox by converting to string key
   const bboxKey = regionBbox ? regionBbox.join(',') : 'none';
 
-  // Create composite when granules change - use stable keys to prevent infinite loops
+  // === MOUNT OVERLAY onto map ===
+  const mountOverlay = useCallback(() => {
+    if (!map || !compositeDataRef.current.imageUrl || !compositeDataRef.current.result) {
+      console.log('[EcostressCompositeOverlay] Cannot mount: missing map or data');
+      return false;
+    }
+    
+    // Remove existing overlay first
+    if (overlayRef.current) {
+      try {
+        map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
+      } catch (e) {
+        // Ignore
+      }
+      overlayRef.current = null;
+    }
+
+    if (!map.getCanvas()) {
+      console.warn('[EcostressCompositeOverlay] Map canvas not ready');
+      return false;
+    }
+
+    const { result, imageUrl } = compositeDataRef.current;
+    
+    console.log('[EcostressCompositeOverlay] Mounting overlay', {
+      bounds: result.bounds,
+      opacity,
+      imageLength: imageUrl.length,
+    });
+
+    try {
+      const layer = new BitmapLayer({
+        id: 'ecostress-summer-composite',
+        bounds: result.bounds,
+        image: imageUrl,
+        opacity,
+        pickable: false,
+        parameters: { depthTest: false },
+      });
+
+      const overlay = new MapboxOverlay({
+        interleaved: false,
+        layers: [layer],
+      });
+
+      map.addControl(overlay as unknown as maplibregl.IControl);
+      overlayRef.current = overlay;
+      
+      console.log('[EcostressCompositeOverlay] ✅ Overlay mounted successfully');
+      return true;
+    } catch (err) {
+      console.error('[EcostressCompositeOverlay] Failed to mount overlay:', err);
+      return false;
+    }
+  }, [map, opacity]);
+
+  // === REMOVE OVERLAY from map ===
+  const removeOverlay = useCallback(() => {
+    if (overlayRef.current && map) {
+      try {
+        map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
+        console.log('[EcostressCompositeOverlay] Overlay removed');
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+      overlayRef.current = null;
+    }
+  }, [map]);
+
+  // === CREATE COMPOSITE when granules change ===
   useEffect(() => {
+    // Mark component as mounted
+    isMountedRef.current = true;
+    
     if (!visible || !allGranules || allGranules.length === 0 || !regionBbox) {
-      setCompositeResult(null);
-      setImageUrl(null);
-      setStatus('idle');
-      onMetadataRef.current?.(null);
+      // Not visible or no data - just update status, DON'T clear the cached data
+      if (!visible) {
+        setStatus('idle');
+      }
       return;
     }
 
+    // Check if we already have this composite cached
+    const needsRefresh = 
+      compositeDataRef.current.granuleKey !== granuleKey ||
+      compositeDataRef.current.bboxKey !== bboxKey ||
+      compositeDataRef.current.method !== aggregationMethod;
+
+    if (!needsRefresh && compositeDataRef.current.result) {
+      console.log('[EcostressCompositeOverlay] Using cached composite');
+      setStatus('rendered');
+      setDisplayStats(compositeDataRef.current.result.stats);
+      setDisplayMetadata(compositeDataRef.current.result.metadata);
+      return;
+    }
+
+    // Build new composite
     let cancelled = false;
 
     async function buildComposite() {
@@ -108,7 +205,6 @@ export function EcostressCompositeOverlay({
       setProgress({ loaded: 0, total: allGranules!.length });
 
       try {
-        // Transform to GranuleInput format with quality metadata
         const granuleInputs = allGranules!.map(g => ({
           cog_url: g.cog_url,
           datetime: g.datetime,
@@ -123,13 +219,13 @@ export function EcostressCompositeOverlay({
           regionBbox!,
           aggregationMethod,
           (loaded, total) => {
-            if (!cancelled) {
+            if (!cancelled && isMountedRef.current) {
               setProgress({ loaded, total });
             }
           }
         );
 
-        if (cancelled) return;
+        if (cancelled || !isMountedRef.current) return;
 
         if (!result) {
           setStatus('no_data');
@@ -138,11 +234,23 @@ export function EcostressCompositeOverlay({
           return;
         }
 
+        // Store in ref to persist across re-renders
         const dataUrl = imageDataToDataUrl(result.imageData);
-        setCompositeResult(result);
-        setImageUrl(dataUrl);
-        setStatus('rendered');
+        compositeDataRef.current = {
+          result,
+          imageUrl: dataUrl,
+          granuleKey,
+          bboxKey,
+          method: aggregationMethod,
+        };
 
+        // Update UI state
+        setStatus('rendered');
+        setDisplayStats(result.stats);
+        setDisplayMetadata(result.metadata);
+        setProgress(null);
+
+        // Build metadata for callback
         const metadata: CompositeMetadata = {
           timeWindow: result.metadata.timeWindow,
           acquisitionCount: result.stats.granuleCount,
@@ -168,22 +276,21 @@ export function EcostressCompositeOverlay({
           `Komposit: ${result.stats.successfulGranules} Aufnahmen, ${result.metadata.coverageConfidence.percent}% Abdeckung (${confidenceLabel})`
         );
 
-        console.log('[EcostressCompositeOverlay] Composite created:', {
+        console.log('[EcostressCompositeOverlay] Composite created and cached:', {
           granules: result.stats.successfulGranules,
-          discarded: result.stats.discardedGranules,
           pixels: result.stats.validPixels,
           coverage: `${result.metadata.coverageConfidence.percent}%`,
-          confidence: result.metadata.coverageConfidence.level,
-          tempRange: `${(result.stats.min - 273.15).toFixed(1)}°C to ${(result.stats.max - 273.15).toFixed(1)}°C`,
-          normRange: `P5=${(result.stats.p5 - 273.15).toFixed(1)}°C, P95=${(result.stats.p95 - 273.15).toFixed(1)}°C`,
         });
+
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || !isMountedRef.current) return;
         console.error('[EcostressCompositeOverlay] Failed to create composite:', err);
         setStatus('error');
         onRenderStatusRef.current?.('error', err instanceof Error ? err.message : 'Unbekannter Fehler');
       } finally {
-        setProgress(null);
+        if (isMountedRef.current) {
+          setProgress(null);
+        }
       }
     }
 
@@ -195,108 +302,72 @@ export function EcostressCompositeOverlay({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, granuleKey, bboxKey, aggregationMethod]);
 
-  // Manage deck.gl overlay - SINGLE BitmapLayer only
+  // === MANAGE OVERLAY LIFECYCLE ===
   useEffect(() => {
     if (!map) return;
 
-    // Remove existing overlay first
-    if (overlayRef.current) {
-      try {
-        map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-      } catch (e) {
-        console.warn('[EcostressCompositeOverlay] Error removing overlay:', e);
-      }
-      overlayRef.current = null;
-    }
-
-    // Don't add if not visible or no image
-    if (!visible || !imageUrl || !compositeResult) {
-      console.log('[EcostressCompositeOverlay] Skipping overlay:', { visible, hasImage: !!imageUrl, hasResult: !!compositeResult });
-      return;
-    }
-
-    const addOverlay = () => {
-      // Double-check map is still valid
-      if (!map || !map.getCanvas()) {
-        console.warn('[EcostressCompositeOverlay] Map not ready for overlay');
-        return;
-      }
-
-      console.log('[EcostressCompositeOverlay] Adding SINGLE composite BitmapLayer', {
-        bounds: compositeResult.bounds,
-        opacity,
-        imageLength: imageUrl.length,
-      });
-
-      try {
-        // Create SINGLE BitmapLayer - no overlapping swaths
-        const layer = new BitmapLayer({
-          id: 'ecostress-summer-composite',
-          bounds: compositeResult.bounds,
-          image: imageUrl,
-          opacity,
-          pickable: false,
-          parameters: {
-            depthTest: false,
-          },
-        });
-
-        // NOTE: For MapLibre, non-interleaved mode is the most reliable.
-        // Interleaved mode is primarily for Mapbox GL JS v2+.
-        const overlay = new MapboxOverlay({
-          interleaved: false,
-          layers: [layer],
-        });
-
-        // Add as control - MapboxOverlay implements IControl interface
-        map.addControl(overlay as unknown as maplibregl.IControl);
-        overlayRef.current = overlay;
-
-        console.log('[EcostressCompositeOverlay] ✅ Single composite overlay mounted successfully');
-      } catch (err) {
-        console.error('[EcostressCompositeOverlay] Failed to add overlay:', err);
+    // Handle style load (basemap changes)
+    const handleStyleLoad = () => {
+      // Re-mount overlay after style change if we have data and should be visible
+      if (visible && compositeDataRef.current.imageUrl) {
+        setTimeout(() => {
+          mountOverlay();
+        }, 150); // Delay to ensure style is fully loaded
       }
     };
 
-    // Ensure overlay is (re-)added after style reloads (basemap switches)
-    const handleStyleLoad = () => setTimeout(addOverlay, 100);
-    if (map.isStyleLoaded()) {
-      handleStyleLoad();
+    // Initial mount or visibility change
+    if (visible && compositeDataRef.current.imageUrl) {
+      if (map.isStyleLoaded()) {
+        mountOverlay();
+      }
+    } else if (!visible) {
+      removeOverlay();
     }
+
+    // Listen for style changes (basemap switches)
     map.on('style.load', handleStyleLoad);
 
     return () => {
-      map?.off('style.load', handleStyleLoad);
-      if (overlayRef.current && map) {
-        try {
-          map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-        } catch (e) {
-          // Ignore cleanup errors during unmount
-        }
-        overlayRef.current = null;
-      }
+      map.off('style.load', handleStyleLoad);
     };
-  }, [map, visible, imageUrl, compositeResult, opacity]);
+  }, [map, visible, mountOverlay, removeOverlay]);
 
-  // Update opacity without re-creating
+  // === UPDATE OPACITY without re-creating overlay ===
   useEffect(() => {
-    if (!overlayRef.current || !compositeResult || !imageUrl) return;
+    if (!overlayRef.current || !compositeDataRef.current.result || !compositeDataRef.current.imageUrl) return;
 
     const layer = new BitmapLayer({
       id: 'ecostress-summer-composite',
-      bounds: compositeResult.bounds,
-      image: imageUrl,
+      bounds: compositeDataRef.current.result.bounds,
+      image: compositeDataRef.current.imageUrl,
       opacity,
       pickable: false,
-      parameters: {
-        depthTest: false,
-      },
+      parameters: { depthTest: false },
     });
 
     overlayRef.current.setProps({ layers: [layer] });
-  }, [opacity, compositeResult, imageUrl]);
+  }, [opacity]);
 
-  // Render loading/status UI
+  // === CLEANUP on unmount ===
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      removeOverlay();
+    };
+  }, [removeOverlay]);
+
+  // === TRIGGER MOUNT when data becomes available ===
+  useEffect(() => {
+    if (visible && status === 'rendered' && compositeDataRef.current.imageUrl && map) {
+      // Ensure overlay is mounted after composite is ready
+      if (!overlayRef.current && map.isStyleLoaded()) {
+        mountOverlay();
+      }
+    }
+  }, [visible, status, map, mountOverlay]);
+
+  // === RENDER UI ===
   if (!visible) return null;
 
   if (status === 'loading' && progress) {
@@ -321,23 +392,22 @@ export function EcostressCompositeOverlay({
     );
   }
 
-  if (status === 'rendered' && compositeResult) {
-    const minC = (compositeResult.stats.min - 273.15).toFixed(1);
-    const maxC = (compositeResult.stats.max - 273.15).toFixed(1);
-    const p5C = (compositeResult.stats.p5 - 273.15).toFixed(1);
-    const p95C = (compositeResult.stats.p95 - 273.15).toFixed(1);
-    const methodLabel = compositeResult.stats.aggregationMethod === 'max' ? 'Maximum (Heißeste)' : compositeResult.stats.aggregationMethod === 'p90' ? 'P90 (Extreme)' : 'Median';
-    const confidence = compositeResult.metadata.coverageConfidence;
+  if (status === 'rendered' && displayStats && displayMetadata) {
+    const minC = (displayStats.min - 273.15).toFixed(1);
+    const maxC = (displayStats.max - 273.15).toFixed(1);
+    const p5C = (displayStats.p5 - 273.15).toFixed(1);
+    const p95C = (displayStats.p95 - 273.15).toFixed(1);
+    const methodLabel = displayStats.aggregationMethod === 'max' ? 'Maximum (Heißeste)' 
+      : displayStats.aggregationMethod === 'p90' ? 'P90 (Extreme)' : 'Median';
+    const confidence = displayMetadata.coverageConfidence;
     
-    // Format time window
-    const fromDate = compositeResult.metadata.timeWindow.from 
-      ? new Date(compositeResult.metadata.timeWindow.from).toLocaleDateString('de-DE', { month: 'short', year: 'numeric' })
+    const fromDate = displayMetadata.timeWindow.from 
+      ? new Date(displayMetadata.timeWindow.from).toLocaleDateString('de-DE', { month: 'short', year: 'numeric' })
       : '';
-    const toDate = compositeResult.metadata.timeWindow.to
-      ? new Date(compositeResult.metadata.timeWindow.to).toLocaleDateString('de-DE', { month: 'short', year: 'numeric' })
+    const toDate = displayMetadata.timeWindow.to
+      ? new Date(displayMetadata.timeWindow.to).toLocaleDateString('de-DE', { month: 'short', year: 'numeric' })
       : '';
 
-    // Confidence indicator color
     const confidenceColor = confidence.level === 'high' 
       ? 'bg-green-500' 
       : confidence.level === 'medium' 
@@ -351,7 +421,6 @@ export function EcostressCompositeOverlay({
       <div className="absolute top-16 right-4 bg-background/95 backdrop-blur px-3 py-2.5 rounded-lg text-xs z-10 shadow-lg border border-border/50 min-w-[220px]">
         <div className="font-medium text-sm mb-2">Hitze-Hotspots – Sommer-Komposit</div>
         
-        {/* Coverage Confidence Indicator */}
         <div className="flex items-center gap-2 mb-2 p-1.5 rounded bg-muted/50">
           <div className={`w-2 h-2 rounded-full ${confidenceColor}`} />
           <span className="text-foreground font-medium">Konfidenz: {confidenceLabel}</span>
@@ -370,9 +439,9 @@ export function EcostressCompositeOverlay({
           <div className="flex justify-between">
             <span>Aufnahmen:</span>
             <span className="text-foreground">
-              {compositeResult.stats.successfulGranules}
-              {compositeResult.stats.discardedGranules > 0 && (
-                <span className="text-muted-foreground"> (−{compositeResult.stats.discardedGranules} verworfen)</span>
+              {displayStats.successfulGranules}
+              {displayStats.discardedGranules > 0 && (
+                <span className="text-muted-foreground"> (−{displayStats.discardedGranules} verworfen)</span>
               )}
             </span>
           </div>
@@ -386,14 +455,12 @@ export function EcostressCompositeOverlay({
           </div>
         </div>
 
-        {/* Color gradient with normalized scale */}
         <div className="mt-2.5 h-2 w-full rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 via-green-500 via-yellow-400 via-orange-500 to-red-500" />
         <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
           <span>{p5C}°C</span>
           <span>{p95C}°C</span>
         </div>
 
-        {/* Scientific note */}
         <div className="mt-2 pt-2 border-t border-border/50 text-[10px] text-muted-foreground/70 leading-relaxed">
           Diese Ebene zeigt aggregierte Sommerwärme (nicht Einzelaufnahme). 
           Farbskala regional normalisiert (P5–P95).

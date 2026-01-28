@@ -10,11 +10,12 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import * as GeoTIFF from 'https://esm.sh/geotiff@2.1.3';
-import * as pako from 'https://esm.sh/pako@2.1.0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  // Keep in sync with Supabase web client preflight headers
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
 };
 
@@ -27,6 +28,18 @@ const LST_MAX = 323; // 50°C
 
 // RGBA color tuple type
 type RGBAColor = [number, number, number, number];
+
+function base64ToUint8Array(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// 1x1 transparent PNG (works fine as a "blank" tile and avoids crashes on error paths)
+const TRANSPARENT_PNG_1X1 = base64ToUint8Array(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMBAp1r3p0AAAAASUVORK5CYII='
+);
 
 /**
  * Heat colormap: blue (cold) → cyan → green → yellow → red (hot)
@@ -92,7 +105,18 @@ function tileToBounds(z: number, x: number, y: number): { west: number; south: n
  * Uses a minimal PNG encoder for Deno
  */
 async function createPNG(width: number, height: number, rgba: Uint8ClampedArray): Promise<Uint8Array> {
-  // Use pako for zlib compression (static import to avoid runtime network imports in Edge)
+  // Use native CompressionStream for zlib/deflate (avoids esm.sh runtime incompatibilities)
+  async function zlibDeflate(data: Uint8Array): Promise<Uint8Array> {
+    const cs = new CompressionStream('deflate');
+    const writer = cs.writable.getWriter();
+    // Ensure the underlying buffer is an ArrayBuffer (not ArrayBufferLike) to satisfy Deno's TS types
+    const bytes = new Uint8Array(data.byteLength);
+    bytes.set(data);
+    await writer.write(bytes);
+    await writer.close();
+    const buf = await new Response(cs.readable).arrayBuffer();
+    return new Uint8Array(buf);
+  }
   
   // PNG signature
   const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -126,7 +150,7 @@ async function createPNG(width: number, height: number, rgba: Uint8ClampedArray)
     }
   }
   
-  const compressed = pako.deflate(rawData, { level: 6 });
+  const compressed = await zlibDeflate(rawData);
   const idat = new Uint8Array(12 + compressed.length);
   const idatView = new DataView(idat.buffer);
   idatView.setUint32(0, compressed.length, false);
@@ -174,10 +198,8 @@ function crc32(data: Uint8Array): number {
  * Create a transparent tile
  */
 async function createTransparentTile(): Promise<ArrayBuffer> {
-  const rgba = new Uint8ClampedArray(TILE_SIZE * TILE_SIZE * 4);
-  // All zeros = transparent
-  const png = await createPNG(TILE_SIZE, TILE_SIZE, rgba);
-  return png.buffer as ArrayBuffer;
+  // Never throw from fallback path.
+  return TRANSPARENT_PNG_1X1.buffer as ArrayBuffer;
 }
 
 Deno.serve(async (req) => {

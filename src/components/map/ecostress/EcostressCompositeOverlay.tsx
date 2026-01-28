@@ -288,6 +288,13 @@ export function EcostressCompositeOverlay({
               data: (() => {
                 const [w, s, e, n] = result.bounds;
                 const c: [number, number] = [(w + e) / 2, (s + n) / 2];
+                console.log('[EcostressCompositeOverlay] Creating debug points at:', {
+                  SW: [w.toFixed(4), s.toFixed(4)],
+                  NW: [w.toFixed(4), n.toFixed(4)],
+                  NE: [e.toFixed(4), n.toFixed(4)],
+                  SE: [e.toFixed(4), s.toFixed(4)],
+                  CENTER: [c[0].toFixed(4), c[1].toFixed(4)],
+                });
                 return [
                   { p: [w, s] as [number, number], n: 'SW' },
                   { p: [w, n] as [number, number], n: 'NW' },
@@ -296,9 +303,9 @@ export function EcostressCompositeOverlay({
                   { p: c, n: 'C' },
                 ];
               })(),
-              getPosition: (d: any) => d.p,
-              getFillColor: [255, 0, 0, 255],
-              getRadius: 16,
+              getPosition: (d: { p: [number, number] }) => d.p,
+              getFillColor: [255, 0, 0, 255], // Pure red, full alpha
+              getRadius: 50, // VERY LARGE for debugging visibility
               radiusUnits: 'pixels',
               opacity: 1,
               visible: true,
@@ -601,9 +608,9 @@ export function EcostressCompositeOverlay({
                 { p: c, n: 'C' },
               ];
             })(),
-            getPosition: (d: any) => d.p,
+            getPosition: (d: { p: [number, number] }) => d.p,
             getFillColor: [255, 0, 0, 255],
-            getRadius: 16,
+            getRadius: 50, // Match mountOverlay debug radius
             radiusUnits: 'pixels',
             opacity: 1,
             visible: true,

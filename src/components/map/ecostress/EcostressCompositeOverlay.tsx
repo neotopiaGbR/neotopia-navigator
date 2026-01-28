@@ -12,11 +12,11 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MapboxOverlay } from '@deck.gl/mapbox';
-import { BitmapLayer } from '@deck.gl/layers';
+import { BitmapLayer, ScatterplotLayer } from '@deck.gl/layers';
+import { COORDINATE_SYSTEM } from '@deck.gl/core';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { 
   createComposite, 
-  imageDataToDataUrl, 
   type AggregationMethod,
   type CompositeResult,
   type CoverageConfidence,
@@ -59,6 +59,46 @@ interface EcostressCompositeOverlayProps {
   onMetadata?: (metadata: CompositeMetadata | null) => void;
 }
 
+function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = imageData.width;
+  canvas.height = imageData.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Failed to get canvas context');
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function assertWgs84Bounds(bounds: [number, number, number, number]) {
+  const [w, s, e, n] = bounds;
+  if (![w, s, e, n].every((v) => Number.isFinite(v))) {
+    throw new Error(`ECOSTRESS bounds contain non-finite values: ${JSON.stringify(bounds)}`);
+  }
+  if (w < -180 || e > 180 || s < -90 || n > 90) {
+    throw new Error(`ECOSTRESS bounds out of WGS84 range: ${JSON.stringify(bounds)}`);
+  }
+  if (w >= e || s >= n) {
+    throw new Error(`ECOSTRESS bounds invalid (west/east or south/north inverted): ${JSON.stringify(bounds)}`);
+  }
+}
+
+function estimateOpaquePixels(imageData: ImageData, sampleStep = 8): number {
+  // Sample alpha channel (fast) to ensure we actually generated visible pixels.
+  const { data, width, height } = imageData;
+  let count = 0;
+  for (let y = 0; y < height; y += sampleStep) {
+    for (let x = 0; x < width; x += sampleStep) {
+      const a = data[(y * width + x) * 4 + 3];
+      if (a > 0) count++;
+    }
+  }
+  return count;
+}
+
+function bboxIntersects(a: [number, number, number, number], b: [number, number, number, number]) {
+  return !(a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3]);
+}
+
 export function EcostressCompositeOverlay({
   map,
   visible,
@@ -73,11 +113,11 @@ export function EcostressCompositeOverlay({
   const overlayRef = useRef<MapboxOverlay | null>(null);
   const compositeDataRef = useRef<{
     result: CompositeResult | null;
-    imageUrl: string | null;
+    imageCanvas: HTMLCanvasElement | null;
     granuleKey: string;
     bboxKey: string;
     method: AggregationMethod;
-  }>({ result: null, imageUrl: null, granuleKey: '', bboxKey: '', method: 'median' });
+  }>({ result: null, imageCanvas: null, granuleKey: '', bboxKey: '', method: 'median' });
   const isMountedRef = useRef(true);
   
   // === STATE for UI only ===
@@ -102,7 +142,7 @@ export function EcostressCompositeOverlay({
 
   // === MOUNT OVERLAY onto map ===
   const mountOverlay = useCallback(() => {
-    if (!map || !compositeDataRef.current.imageUrl || !compositeDataRef.current.result) {
+    if (!map || !compositeDataRef.current.imageCanvas || !compositeDataRef.current.result) {
       console.log('[EcostressCompositeOverlay] Cannot mount: missing map or data');
       return false;
     }
@@ -122,33 +162,103 @@ export function EcostressCompositeOverlay({
       return false;
     }
 
-    const { result, imageUrl } = compositeDataRef.current;
+    const { result, imageCanvas } = compositeDataRef.current;
+    const debug = import.meta.env.DEV;
+    const effectiveOpacity = debug ? 1 : opacity;
+
+    // Hard assertions (fail fast) — never silently render nothing.
+    assertWgs84Bounds(result.bounds);
+    const sampledOpaque = estimateOpaquePixels(result.imageData, 12);
+    if (sampledOpaque === 0) {
+      throw new Error('ECOSTRESS composite produced fully-transparent image (no opaque pixels sampled)');
+    }
+
+    // View/bounds sanity logs
+    try {
+      const center = map.getCenter();
+      const zoom = map.getZoom();
+      const mb = map.getBounds();
+      const viewBbox: [number, number, number, number] = [mb.getWest(), mb.getSouth(), mb.getEast(), mb.getNorth()];
+      console.log('[EcostressCompositeOverlay] ViewState vs Bounds', {
+        view: { lon: center.lng, lat: center.lat, zoom },
+        viewBbox,
+        dataBounds: result.bounds,
+        intersects: bboxIntersects(viewBbox, result.bounds),
+        image: { w: result.imageData.width, h: result.imageData.height, sampledOpaque },
+      });
+    } catch {
+      // ignore
+    }
     
     console.log('[EcostressCompositeOverlay] Mounting overlay', {
       bounds: result.bounds,
-      opacity,
-      imageLength: imageUrl.length,
+      opacity: effectiveOpacity,
+      imageType: 'canvas',
+      imageSize: `${imageCanvas.width}x${imageCanvas.height}`,
     });
 
     try {
       const layer = new BitmapLayer({
         id: 'ecostress-summer-composite',
         bounds: result.bounds,
-        image: imageUrl,
-        opacity,
-        pickable: false,
+        image: imageCanvas,
+        opacity: effectiveOpacity,
+        visible: true,
+        pickable: true,
+        coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
         parameters: { depthTest: false },
       });
 
+      // Force-visual debug: draw bright red corner + centroid points so CRS/bounds issues can’t hide.
+      const debugLayers = import.meta.env.DEV
+        ? [
+            new ScatterplotLayer({
+              id: 'ecostress-debug-points',
+              data: (() => {
+                const [w, s, e, n] = result.bounds;
+                const c: [number, number] = [(w + e) / 2, (s + n) / 2];
+                return [
+                  { p: [w, s] as [number, number], n: 'SW' },
+                  { p: [w, n] as [number, number], n: 'NW' },
+                  { p: [e, n] as [number, number], n: 'NE' },
+                  { p: [e, s] as [number, number], n: 'SE' },
+                  { p: c, n: 'C' },
+                ];
+              })(),
+              getPosition: (d: any) => d.p,
+              getFillColor: [255, 0, 0, 255],
+              getRadius: 16,
+              radiusUnits: 'pixels',
+              opacity: 1,
+              visible: true,
+              pickable: true,
+              coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+              parameters: { depthTest: false },
+            }),
+          ]
+        : [];
+
       const overlay = new MapboxOverlay({
         interleaved: false,
-        layers: [layer],
+        layers: [layer, ...debugLayers],
       });
 
       map.addControl(overlay as unknown as maplibregl.IControl);
       overlayRef.current = overlay;
       
       console.log('[EcostressCompositeOverlay] ✅ Overlay mounted successfully');
+
+      if (import.meta.env.DEV) {
+        const canvases = Array.from(document.querySelectorAll('canvas')) as HTMLCanvasElement[];
+        const deckCanvas = canvases.find((c) => (c.id || '').toLowerCase().includes('deck') || String(c.className || '').toLowerCase().includes('deck'));
+        console.log('[EcostressCompositeOverlay] Deck canvas check', {
+          found: !!deckCanvas,
+          w: deckCanvas?.width,
+          h: deckCanvas?.height,
+          id: deckCanvas?.id,
+          className: deckCanvas?.className,
+        });
+      }
       return true;
     } catch (err) {
       console.error('[EcostressCompositeOverlay] Failed to mount overlay:', err);
@@ -183,12 +293,14 @@ export function EcostressCompositeOverlay({
     }
 
     // Check if we already have this composite cached
-    const needsRefresh = 
+    const forceNoCache = import.meta.env.DEV;
+    const needsRefresh =
+      forceNoCache ||
       compositeDataRef.current.granuleKey !== granuleKey ||
       compositeDataRef.current.bboxKey !== bboxKey ||
       compositeDataRef.current.method !== aggregationMethod;
 
-    if (!needsRefresh && compositeDataRef.current.result) {
+     if (!needsRefresh && compositeDataRef.current.result) {
       console.log('[EcostressCompositeOverlay] Using cached composite');
       setStatus('rendered');
       setDisplayStats(compositeDataRef.current.result.stats);
@@ -235,10 +347,19 @@ export function EcostressCompositeOverlay({
         }
 
         // Store in ref to persist across re-renders
-        const dataUrl = imageDataToDataUrl(result.imageData);
+         // Hard assertions for coordinate contract
+         assertWgs84Bounds(result.bounds);
+
+         const sampledOpaque = estimateOpaquePixels(result.imageData, 12);
+         if (sampledOpaque === 0) {
+           throw new Error('ECOSTRESS composite ImageData appears fully transparent (sampled alpha=0)');
+         }
+
+         // Use a Canvas directly (more robust than data URLs; avoids async image decoding).
+         const canvas = imageDataToCanvas(result.imageData);
         compositeDataRef.current = {
           result,
-          imageUrl: dataUrl,
+           imageCanvas: canvas,
           granuleKey,
           bboxKey,
           method: aggregationMethod,
@@ -303,13 +424,13 @@ export function EcostressCompositeOverlay({
   }, [visible, granuleKey, bboxKey, aggregationMethod]);
 
   // === MANAGE OVERLAY LIFECYCLE ===
-  useEffect(() => {
+   useEffect(() => {
     if (!map) return;
 
     // Handle style load (basemap changes)
     const handleStyleLoad = () => {
       // Re-mount overlay after style change if we have data and should be visible
-      if (visible && compositeDataRef.current.imageUrl) {
+      if (visible && compositeDataRef.current.imageCanvas) {
         setTimeout(() => {
           mountOverlay();
         }, 150); // Delay to ensure style is fully loaded
@@ -317,7 +438,7 @@ export function EcostressCompositeOverlay({
     };
 
     // Initial mount or visibility change
-    if (visible && compositeDataRef.current.imageUrl) {
+    if (visible && compositeDataRef.current.imageCanvas) {
       if (map.isStyleLoaded()) {
         mountOverlay();
       }
@@ -335,18 +456,52 @@ export function EcostressCompositeOverlay({
 
   // === UPDATE OPACITY without re-creating overlay ===
   useEffect(() => {
-    if (!overlayRef.current || !compositeDataRef.current.result || !compositeDataRef.current.imageUrl) return;
+    if (!overlayRef.current || !compositeDataRef.current.result || !compositeDataRef.current.imageCanvas) return;
+
+    const debug = import.meta.env.DEV;
+    const effectiveOpacity = debug ? 1 : opacity;
 
     const layer = new BitmapLayer({
       id: 'ecostress-summer-composite',
       bounds: compositeDataRef.current.result.bounds,
-      image: compositeDataRef.current.imageUrl,
-      opacity,
-      pickable: false,
+      image: compositeDataRef.current.imageCanvas,
+      opacity: effectiveOpacity,
+      visible: true,
+      pickable: true,
+      coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
       parameters: { depthTest: false },
     });
 
-    overlayRef.current.setProps({ layers: [layer] });
+    // Keep debug points in dev on opacity updates too
+    const debugLayers = import.meta.env.DEV
+      ? [
+          new ScatterplotLayer({
+            id: 'ecostress-debug-points',
+            data: (() => {
+              const [w, s, e, n] = compositeDataRef.current.result!.bounds;
+              const c: [number, number] = [(w + e) / 2, (s + n) / 2];
+              return [
+                { p: [w, s] as [number, number], n: 'SW' },
+                { p: [w, n] as [number, number], n: 'NW' },
+                { p: [e, n] as [number, number], n: 'NE' },
+                { p: [e, s] as [number, number], n: 'SE' },
+                { p: c, n: 'C' },
+              ];
+            })(),
+            getPosition: (d: any) => d.p,
+            getFillColor: [255, 0, 0, 255],
+            getRadius: 16,
+            radiusUnits: 'pixels',
+            opacity: 1,
+            visible: true,
+            pickable: true,
+            coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+            parameters: { depthTest: false },
+          }),
+        ]
+      : [];
+
+    overlayRef.current.setProps({ layers: [layer, ...debugLayers] });
   }, [opacity]);
 
   // === CLEANUP on unmount ===
@@ -359,7 +514,7 @@ export function EcostressCompositeOverlay({
 
   // === TRIGGER MOUNT when data becomes available ===
   useEffect(() => {
-    if (visible && status === 'rendered' && compositeDataRef.current.imageUrl && map) {
+    if (visible && status === 'rendered' && compositeDataRef.current.imageCanvas && map) {
       // Ensure overlay is mounted after composite is ready
       if (!overlayRef.current && map.isStyleLoaded()) {
         mountOverlay();

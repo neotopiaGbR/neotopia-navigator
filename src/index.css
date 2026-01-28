@@ -96,3 +96,30 @@
     font-family: 'Manrope', sans-serif;
   }
 }
+
+/* 
+ * CRITICAL: deck.gl canvas sizing fix
+ * Ensures deck.gl overlays render at correct size above MapLibre canvas
+ * Without this, deck canvases default to 300x150px and layers are invisible
+ */
+@layer utilities {
+  .maplibregl-map canvas[id*="deck"],
+  .maplibregl-map .deck-canvas,
+  .mapboxgl-map canvas[id*="deck"],
+  .mapboxgl-map .deck-canvas,
+  canvas.deckgl-overlay {
+    width: 100% !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    z-index: 10 !important;
+    pointer-events: none !important;
+  }
+  
+  /* Ensure map container has proper stacking context */
+  .maplibregl-map,
+  .mapboxgl-map {
+    position: relative !important;
+  }
+}

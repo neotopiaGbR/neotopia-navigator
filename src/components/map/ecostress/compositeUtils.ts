@@ -104,9 +104,7 @@ export function kelvinToRGBA(kelvin: number, p5: number = LST_MIN_K, p95: number
     r = 255; g = Math.round(128 * (1 - s)); b = 0;
   }
   
-  // Force full opacity in DEV for debugging visibility
-  const alpha = import.meta.env.DEV ? 255 : 220;
-  return [r, g, b, alpha];
+  return [r, g, b, 220];
 }
 
 /**

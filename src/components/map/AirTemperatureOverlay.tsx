@@ -1,30 +1,25 @@
 /**
  * Air Temperature Overlay (2m) - Germany Summer Composite
  * 
- * Renders ERA5-Land 2m air temperature as a CONTINUOUS raster (no dots, no cells)
- * using deck.gl BitmapLayer via MapboxOverlay.
+ * Renders ERA5-Land 2m air temperature as EXPLICIT 0.1° GRID CELL POLYGONS
+ * using deck.gl GeoJsonLayer via MapboxOverlay.
  *
  * Implementation notes:
- * - Client-side rasterization to a fixed grid over Germany bounds
- * - Bilinear interpolation on a regular lon/lat grid (filled from sampled points)
- * - Germany mask applied so there are no square edges
- * - Single Germany-wide normalization (P5–P95) coming from the backend
- * 
- * This layer provides regional thermal context (~9 km resolution) and sits
- * BELOW the high-resolution ECOSTRESS LST hotspot layer.
+ * - Each data point becomes a visible 0.1° (~9km) polygon cell
+ * - Cells without data are left transparent (no interpolation)
+ * - Uses perceptual blue→yellow→red color scale
+ * - Germany-wide normalization (P5–P95) from backend
  * 
  * Data source: Copernicus ERA5-Land via Open-Meteo Archive API
  * License: CC BY 4.0 (Copernicus Climate Change Service)
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { MapboxOverlay } from '@deck.gl/mapbox';
-import { BitmapLayer } from '@deck.gl/layers';
+import { GeoJsonLayer } from '@deck.gl/layers';
 import { AirTemperatureData } from './MapLayersContext';
-import germanyBoundaryUrl from '@/assets/germany-boundary.json?url';
-import type { MultiPolygon, Ring } from './airTemperature/types';
-import { rasterizeAirTemperatureToDataUrl } from './airTemperature/rasterize';
+import { gridToGeoJson } from './airTemperature/gridToGeoJson';
 
 interface AirTemperatureOverlayProps {
   map: MapLibreMap | null;
@@ -40,86 +35,22 @@ export function AirTemperatureOverlay({
   data,
 }: AirTemperatureOverlayProps) {
   const overlayRef = useRef<MapboxOverlay | null>(null);
-  const boundaryRef = useRef<MultiPolygon | null>(null);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
 
-  const bounds = useMemo(() => {
-    if (!data) return null;
-    const [minLon, minLat, maxLon, maxLat] = data.bounds;
-    return { minLon, minLat, maxLon, maxLat };
+  // Convert grid data to GeoJSON with cell polygons
+  const geoJsonData = useMemo(() => {
+    if (!data || !data.grid || data.grid.length === 0) {
+      return null;
+    }
+    
+    const geojson = gridToGeoJson(data.grid, data.normalization);
+    console.log('[AirTemperatureOverlay] GeoJSON created:', {
+      features: geojson.features.length,
+      sampleFeature: geojson.features[0]?.properties,
+    });
+    return geojson;
   }, [data]);
 
-  // Load Germany boundary once
-  useEffect(() => {
-    let cancelled = false;
-    if (boundaryRef.current) return;
-    fetch(germanyBoundaryUrl)
-      .then((r) => r.json())
-      .then((gj) => {
-        if (cancelled) return;
-        // Handle both FeatureCollection and bare geometry
-        let geom = gj?.geometry;
-        if (!geom && gj?.features?.[0]?.geometry) {
-          geom = gj.features[0].geometry;
-        }
-        if (!geom) {
-          console.warn('[AirTemperatureOverlay] No geometry found in boundary file');
-          return;
-        }
-        if (geom.type === 'Polygon') {
-          boundaryRef.current = [geom.coordinates as Ring[]];
-        } else if (geom.type === 'MultiPolygon') {
-          boundaryRef.current = geom.coordinates as MultiPolygon;
-        }
-        console.log('[AirTemperatureOverlay] Germany boundary loaded:', geom.type);
-      })
-      .catch((err) => {
-        console.warn('[AirTemperatureOverlay] Failed to load boundary:', err);
-        // If boundary fails, we still render the raster in bbox (no blocking)
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Rasterize to an image whenever data changes
-  useEffect(() => {
-    if (!visible || !data || !bounds) {
-      setImageUrl(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const run = async () => {
-      const germany = boundaryRef.current;
-      const { url, stats } = rasterizeAirTemperatureToDataUrl({
-        bounds,
-        grid: data.grid,
-        normalization: data.normalization,
-        germanyMask: germany,
-        width: 640,
-        height: 640,
-        stepDeg: 0.1,
-      });
-
-      if (cancelled) return;
-      console.log('[AirTemperatureOverlay] Raster created:', {
-        urlBytes: url.length,
-        ...stats,
-        hasMask: !!germany,
-      });
-      if (!cancelled) setImageUrl(url);
-    };
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [visible, data, bounds]);
-
-  // Mount/unmount deck.gl BitmapLayer via MapboxOverlay
+  // Mount/unmount deck.gl GeoJsonLayer via MapboxOverlay
   useEffect(() => {
     if (!map) return;
 
@@ -133,22 +64,45 @@ export function AirTemperatureOverlay({
       overlayRef.current = null;
     }
 
-    if (!visible || !imageUrl || !bounds) return;
+    if (!visible || !geoJsonData || geoJsonData.features.length === 0) {
+      return;
+    }
 
-    const layer = new BitmapLayer({
-      id: 'era5-air-temperature-raster',
-      bounds: [bounds.minLon, bounds.minLat, bounds.maxLon, bounds.maxLat],
-      image: imageUrl,
+    const layer = new GeoJsonLayer({
+      id: 'era5-air-temperature-cells',
+      data: geoJsonData,
+      // Polygon fill
+      filled: true,
+      getFillColor: (feature: any) => feature.properties.fillColor,
+      // Polygon outline
+      stroked: true,
+      getLineColor: [80, 80, 80, 60],
+      getLineWidth: 1,
+      lineWidthUnits: 'pixels',
+      lineWidthMinPixels: 0.5,
+      // Rendering options
       opacity,
-      pickable: false,
-      parameters: { depthTest: false },
+      pickable: true,
+      autoHighlight: true,
+      highlightColor: [255, 255, 255, 80],
+      // No depth test for 2D overlay
+      parameters: {
+        depthTest: false,
+      },
     });
 
-    const overlay = new MapboxOverlay({ interleaved: false, layers: [layer] });
+    const overlay = new MapboxOverlay({ 
+      interleaved: false, 
+      layers: [layer],
+    });
+    
     try {
       map.addControl(overlay as unknown as any);
       overlayRef.current = overlay;
-      console.log('[AirTemperatureOverlay] BitmapLayer added to map, bounds:', bounds);
+      console.log('[AirTemperatureOverlay] GeoJsonLayer added to map:', {
+        cells: geoJsonData.features.length,
+        opacity,
+      });
     } catch (err) {
       console.error('[AirTemperatureOverlay] Failed to add overlay:', err);
     }
@@ -163,7 +117,33 @@ export function AirTemperatureOverlay({
         overlayRef.current = null;
       }
     };
-  }, [map, visible, imageUrl, bounds, opacity]);
+  }, [map, visible, geoJsonData, opacity]);
+
+  // Update opacity without re-creating the entire overlay
+  useEffect(() => {
+    if (!overlayRef.current || !geoJsonData) return;
+
+    const layer = new GeoJsonLayer({
+      id: 'era5-air-temperature-cells',
+      data: geoJsonData,
+      filled: true,
+      getFillColor: (feature: any) => feature.properties.fillColor,
+      stroked: true,
+      getLineColor: [80, 80, 80, 60],
+      getLineWidth: 1,
+      lineWidthUnits: 'pixels',
+      lineWidthMinPixels: 0.5,
+      opacity,
+      pickable: true,
+      autoHighlight: true,
+      highlightColor: [255, 255, 255, 80],
+      parameters: {
+        depthTest: false,
+      },
+    });
+
+    overlayRef.current.setProps({ layers: [layer] });
+  }, [opacity, geoJsonData]);
 
   return null;
 }

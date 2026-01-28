@@ -42,11 +42,12 @@ interface DwdResponse {
 }
 
 // Bump this when the backend response format/behavior changes to invalidate client cache.
-const CLIENT_CACHE_VERSION = 2;
+const CLIENT_CACHE_VERSION = 3;
 
 /**
- * Sanity check: ensure bounds look like Germany/central Europe.
- * Rejects clearly wrong projections (e.g. lat ~76 / lon ~-23).
+ * Generous Central Europe bounding box for CRS validation.
+ * Intentionally wide to avoid false negatives on valid HYRAS-DE grids.
+ * lon: 2.0 … 20.0, lat: 44.0 … 58.0
  */
 function looksLikeGermanyBounds(bounds: [number, number, number, number]): boolean {
   const [minLon, minLat, maxLon, maxLat] = bounds;
@@ -55,10 +56,11 @@ function looksLikeGermanyBounds(bounds: [number, number, number, number]): boole
     Number.isFinite(minLat) &&
     Number.isFinite(maxLon) &&
     Number.isFinite(maxLat) &&
-    minLat > 40 &&
-    maxLat < 62 &&
-    minLon > -15 &&
-    maxLon < 35
+    // Generous Central Europe box to avoid rejecting valid grids
+    minLat >= 44.0 &&
+    maxLat <= 58.0 &&
+    minLon >= 2.0 &&
+    maxLon <= 20.0
   );
 }
 

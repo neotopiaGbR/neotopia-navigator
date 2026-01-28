@@ -15,7 +15,12 @@
  * for efficient rendering with deck.gl GeoJsonLayer.
  */
 
-import { gunzip } from 'https://deno.land/x/compress@v0.4.5/mod.ts';
+ import { gunzip } from 'https://deno.land/x/compress@v0.4.5/mod.ts';
+ import proj4 from 'https://esm.sh/proj4@2.12.1';
+
+ // esm.sh typings may expose proj4 as a callable function without the `defs` helper.
+ // Runtime still provides `defs`, so we keep this cast local and explicit.
+ const proj4Any = proj4 as unknown as any;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,15 +39,13 @@ const VARIABLE_PATHS: Record<string, string> = {
   'min': 'air_temperature_min/14_JJA',
 };
 
-// EPSG:3035 to WGS84 approximate transformation constants
-// For precise transformation, we'd need proj4, but this approximation works for Germany
-const EPSG3035_PARAMS = {
-  lat0: 52.0, // degrees
-  lon0: 10.0, // degrees
-  x0: 4321000, // false easting
-  y0: 3210000, // false northing
-  k0: 1.0,
-};
+// Define EPSG:3035 (ETRS89 / LAEA Europe) for accurate coordinate conversion.
+// This replaces the previous approximation which could produce invalid lat/lon.
+// Ref: https://epsg.io/3035
+proj4Any.defs(
+  'EPSG:3035',
+  '+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +units=m +no_defs'
+);
 
 interface GridMetadata {
   ncols: number;
@@ -69,36 +72,12 @@ interface RequestBody {
 }
 
 /**
- * Approximate EPSG:3035 (LAEA Europe) to WGS84 transformation
- * This is a simplified inverse projection - accuracy ~100m for Germany
+ * Accurate EPSG:3035 (ETRS89 / LAEA Europe) → WGS84 (EPSG:4326)
  */
 function epsg3035ToWgs84(x: number, y: number): { lat: number; lon: number } {
-  // LAEA parameters for EPSG:3035
-  const lat0 = 52.0 * Math.PI / 180;
-  const lon0 = 10.0 * Math.PI / 180;
-  const x0 = 4321000;
-  const y0 = 3210000;
-  const R = 6371000; // Earth radius in meters
-  
-  const dx = x - x0;
-  const dy = y - y0;
-  const rho = Math.sqrt(dx * dx + dy * dy);
-  
-  if (rho < 0.0001) {
-    return { lat: 52.0, lon: 10.0 };
-  }
-  
-  const c = 2 * Math.asin(rho / (2 * R));
-  const sinC = Math.sin(c);
-  const cosC = Math.cos(c);
-  
-  const lat = Math.asin(cosC * Math.sin(lat0) + (dy * sinC * Math.cos(lat0)) / rho);
-  const lon = lon0 + Math.atan2(dx * sinC, rho * Math.cos(lat0) * cosC - dy * Math.sin(lat0) * sinC);
-  
-  return {
-    lat: lat * 180 / Math.PI,
-    lon: lon * 180 / Math.PI,
-  };
+  // proj4 returns [lon, lat]
+  const [lon, lat] = proj4Any('EPSG:3035', 'EPSG:4326', [x, y]) as [number, number];
+  return { lat, lon };
 }
 
 /**

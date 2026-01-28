@@ -16,6 +16,7 @@ import { AirTemperatureOverlay } from './AirTemperatureOverlay';
 import { AirTemperatureLegend } from './AirTemperatureLegend';
 import { DwdTemperatureHealthCheck } from './DwdTemperatureHealthCheck';
 import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
+import { OverlayDiagnosticsPanel } from './OverlayDiagnosticsPanel';
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
 // Show health check panel in development mode only
@@ -527,6 +528,9 @@ const RegionMap: React.FC = () => {
       {/* DWD TEMPERATURE HEALTH CHECK - Dev/Admin only */}
       <DwdTemperatureHealthCheck visible={isDev || isAdmin} />
       
+      {/* OVERLAY DIAGNOSTICS PANEL - Dev/Admin only */}
+      <OverlayDiagnosticsPanel visible={isDev || isAdmin} mapRef={map} />
+      
       {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
       {mapReady && map.current && heatOverlayEnabled && (
         <GlobalLSTOverlay
@@ -537,13 +541,13 @@ const RegionMap: React.FC = () => {
       )}
       
       {/* TIER 2: ECOSTRESS Summer Composite - SINGLE aggregated layer
-          CRITICAL: Mount immediately when enabled, NOT gated on status === 'match'
-          The component handles its own loading/no-data states internally
+          CRITICAL: Mount immediately when enabled - visibility controlled by props
+          DO NOT gate on status === 'match' - causes mounting failures
       */}
       {mapReady && map.current && overlays.ecostress.enabled && (
         <EcostressCompositeOverlay
           map={map.current}
-          visible={overlays.ecostress.enabled && overlays.ecostress.metadata?.status === 'match'}
+          visible={true}
           opacity={heatLayers.ecostressOpacity / 100}
           allGranules={overlays.ecostress.metadata?.allGranules as Array<{
             cog_url: string;

@@ -8,7 +8,7 @@
  * - Uses singleton DeckOverlayManager instead of creating own MapboxOverlay
  * - BitmapLayer.image is HTMLCanvasElement (NOT DataURL)
  * - Mounts immediately when visible=true (no status gate)
- * - Explicit WGS84 bounds validation
+ * - Explicit WGS84 bounds validation via centralized boundsValidation
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -26,6 +26,13 @@ import {
   type CompositeResult,
   type CoverageConfidence,
 } from './compositeUtils';
+import { 
+  isValidWGS84Bounds, 
+  boundsIntersect, 
+  GERMANY_BBOX,
+  assertVisiblePixels,
+  logBoundsValidation,
+} from '@/lib/boundsValidation';
 
 export interface GranuleData {
   cog_url: string;
@@ -65,7 +72,6 @@ interface EcostressCompositeOverlayProps {
 }
 
 const LAYER_ID = 'ecostress-summer-composite';
-const GERMANY_BBOX: [number, number, number, number] = [5.5, 47.0, 15.5, 55.5];
 
 /**
  * Convert ImageData to HTMLCanvasElement (NOT DataURL!)
@@ -83,23 +89,17 @@ function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
 
 /**
  * Validate bounds are plausible WGS84 for Germany region
+ * Uses centralized validation from boundsValidation
  */
 function validateBounds(bounds: [number, number, number, number]): boolean {
-  const [west, south, east, north] = bounds;
-  
-  // Basic WGS84 check
-  if (west < -180 || east > 180 || south < -90 || north > 90) {
+  // Use centralized validation
+  if (!isValidWGS84Bounds(bounds)) {
     console.error('[EcostressCompositeOverlay] Bounds outside WGS84 range:', bounds);
     return false;
   }
   
-  // Check intersection with generous Germany bbox
-  const intersects = !(
-    east < GERMANY_BBOX[0] || west > GERMANY_BBOX[2] ||
-    north < GERMANY_BBOX[1] || south > GERMANY_BBOX[3]
-  );
-  
-  if (!intersects) {
+  // Check intersection with Germany bbox
+  if (!boundsIntersect(bounds, GERMANY_BBOX)) {
     console.error('[EcostressCompositeOverlay] Bounds do not intersect Germany:', bounds);
     return false;
   }

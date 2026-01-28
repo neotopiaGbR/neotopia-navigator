@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback } from 'react';
 
 export type BasemapType = 'map' | 'satellite' | 'terrain';
+export type AggregationMethod = 'median' | 'p90';
 
 export interface OverlayConfig {
   enabled: boolean;
@@ -17,6 +18,7 @@ export interface HeatLayerTierConfig {
   ecostressEnabled: boolean; // TIER 2: High-res overlay
   ecostressOpacity: number;
   ecostressMinCoverage: number; // Minimum coverage threshold (default 0.8 = 80%)
+  aggregationMethod: AggregationMethod; // Median or P90 for extreme heat
 }
 
 export interface MapLayersState {
@@ -38,6 +40,7 @@ interface MapLayersContextType extends MapLayersState {
   // Heat layer tier controls
   setHeatLayerOpacity: (tier: 'globalLST' | 'ecostress', opacity: number) => void;
   setEcostressMinCoverage: (coverage: number) => void;
+  setAggregationMethod: (method: AggregationMethod) => void;
 }
 
 const defaultOverlay: OverlayConfig = {
@@ -55,6 +58,7 @@ const defaultHeatLayers: HeatLayerTierConfig = {
   ecostressEnabled: true, // Try to enhance with ECOSTRESS
   ecostressOpacity: 80,
   ecostressMinCoverage: 0.8, // 80% coverage threshold
+  aggregationMethod: 'median', // Default to median aggregation
 };
 
 const MapLayersContext = createContext<MapLayersContextType | undefined>(undefined);
@@ -152,6 +156,13 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
     }));
   }, []);
 
+  const setAggregationMethod = useCallback((method: AggregationMethod) => {
+    setHeatLayers((prev) => ({
+      ...prev,
+      aggregationMethod: method,
+    }));
+  }, []);
+
   return (
     <MapLayersContext.Provider
       value={{
@@ -166,6 +177,7 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
         setOverlayMetadata,
         setHeatLayerOpacity,
         setEcostressMinCoverage,
+        setAggregationMethod,
       }}
     >
       {children}

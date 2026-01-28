@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, MapPin, Eye, EyeOff, ThermometerSun } from 'lucide-react';
+import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, ThermometerSun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { useMapLayers, BasemapType } from './MapLayersContext';
+import { useMapLayers, BasemapType, AggregationMethod } from './MapLayersContext';
 import HeatLayerProvenancePanel from './HeatLayerProvenancePanel';
 
 interface BasemapOption {
@@ -23,8 +23,8 @@ const BASEMAP_OPTIONS: BasemapOption[] = [
 
 const OVERLAY_INFO = {
   ecostress: {
-    name: 'Hitze-Hotspots',
-    description: 'Kombinierte Wärmekarte: Globale Basis (MODIS 1km) + lokale Details (ECOSTRESS 70m)',
+    name: 'Hitze-Hotspots – Sommer-Komposit',
+    description: 'Aggregierte Sommerwärme: Globale Basis (MODIS 1km) + hochauflösendes ECOSTRESS-Komposit (70m)',
     attribution: 'NASA GIBS + LP DAAC / ECOSTRESS',
     doi: 'https://doi.org/10.5067/ECOSTRESS/ECO_L2T_LSTE.002',
     legendLabel: 'Oberflächentemperatur (°C)',
@@ -38,6 +38,7 @@ const OVERLAY_INFO = {
       { color: '#f46d43', label: '50°C' },
       { color: '#d73027', label: '> 55°C' },
     ],
+    tooltipNote: 'Diese Ebene zeigt aggregierte Sommerwärme (Juni–August). Es handelt sich nicht um eine Einzelaufnahme.',
   },
   floodRisk: {
     name: 'Hochwasser-Risiko (RP100)',
@@ -70,6 +71,7 @@ const LayersControl: React.FC = () => {
     toggleOverlay,
     setOverlayOpacity,
     setHeatLayerOpacity,
+    setAggregationMethod,
   } = useMapLayers();
 
   return (
@@ -147,7 +149,7 @@ const LayersControl: React.FC = () => {
                 Thematische Overlays
               </h4>
 
-              {/* Heat Overlay (combined MODIS + ECOSTRESS) */}
+              {/* Heat Overlay (combined MODIS + ECOSTRESS Summer Composite) */}
               <HeatOverlayControl
                 info={OVERLAY_INFO.ecostress}
                 config={overlays.ecostress}
@@ -155,6 +157,7 @@ const LayersControl: React.FC = () => {
                 onToggle={() => toggleOverlay('ecostress')}
                 onGlobalOpacityChange={(val) => setHeatLayerOpacity('globalLST', val)}
                 onEcostressOpacityChange={(val) => setHeatLayerOpacity('ecostress', val)}
+                onAggregationMethodChange={setAggregationMethod}
               />
 
               {/* Flood Risk Overlay */}
@@ -193,7 +196,7 @@ const LayersControl: React.FC = () => {
   );
 };
 
-// === HEAT OVERLAY CONTROL (Combined MODIS + ECOSTRESS) ===
+// === HEAT OVERLAY CONTROL (Combined MODIS + ECOSTRESS Summer Composite) ===
 interface HeatOverlayControlProps {
   info: typeof OVERLAY_INFO.ecostress;
   config: {
@@ -210,10 +213,12 @@ interface HeatOverlayControlProps {
     ecostressEnabled: boolean;
     ecostressOpacity: number;
     ecostressMinCoverage: number;
+    aggregationMethod: AggregationMethod;
   };
   onToggle: () => void;
   onGlobalOpacityChange: (value: number) => void;
   onEcostressOpacityChange: (value: number) => void;
+  onAggregationMethodChange: (method: AggregationMethod) => void;
 }
 
 const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
@@ -223,6 +228,7 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
   onToggle,
   onGlobalOpacityChange,
   onEcostressOpacityChange,
+  onAggregationMethodChange,
 }) => {
   const [showLegend, setShowLegend] = useState(false);
   const [showProvenance, setShowProvenance] = useState(false);
@@ -230,6 +236,8 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
   const ecostressStatus = config.metadata?.status as string | null;
   const hasEcostressMatch = ecostressStatus === 'match';
   const hasNoCoverage = ecostressStatus === 'no_coverage';
+  
+  const granuleCount = (config.metadata?.granuleCount as number) || (config.metadata?.allGranules as any[])?.length || 0;
 
   return (
     <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
@@ -257,7 +265,7 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
       {config.loading && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <div className="h-3 w-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-          <span>Suche beste Aufnahmen...</span>
+          <span>Lade ECOSTRESS-Aufnahmen...</span>
         </div>
       )}
 
@@ -274,7 +282,7 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
             {hasEcostressMatch ? (
               <>
                 <Flame className="h-3 w-3" />
-                <span>Globale Basis + Hochauflösendes Detail aktiv</span>
+                <span>Sommer-Komposit aktiv ({granuleCount} Aufnahmen)</span>
               </>
             ) : (
               <>
@@ -296,6 +304,46 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
             </div>
           )}
 
+          {/* Aggregation Method Toggle */}
+          {hasEcostressMatch && (
+            <div className="space-y-1.5">
+              <span className="text-xs text-muted-foreground">Aggregationsmethode:</span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onAggregationMethodChange('median')}
+                  className={cn(
+                    'flex-1 px-2 py-1.5 text-xs rounded border transition-colors',
+                    heatLayers.aggregationMethod === 'median'
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background border-border hover:bg-muted'
+                  )}
+                >
+                  Median
+                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => onAggregationMethodChange('p90')}
+                      className={cn(
+                        'flex-1 px-2 py-1.5 text-xs rounded border transition-colors',
+                        heatLayers.aggregationMethod === 'p90'
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-background border-border hover:bg-muted'
+                      )}
+                    >
+                      P90 (Extreme)
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs max-w-[200px]">
+                      90. Perzentil zeigt extreme Hitze-Hotspots
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
+          )}
+
           {/* Opacity Controls */}
           <div className="space-y-3">
             {/* Global LST Opacity */}
@@ -314,11 +362,11 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
               />
             </div>
 
-            {/* ECOSTRESS Opacity (only when match) */}
+            {/* ECOSTRESS Composite Opacity (only when match) */}
             {hasEcostressMatch && (
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Hochauflösend (ECOSTRESS)</span>
+                  <span className="text-xs text-muted-foreground">Sommer-Komposit (ECOSTRESS)</span>
                   <span className="text-xs font-mono text-muted-foreground">{heatLayers.ecostressOpacity}%</span>
                 </div>
                 <Slider
@@ -392,15 +440,16 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
             />
           )}
 
-          {/* Acquisition info when ECOSTRESS match */}
-          {hasEcostressMatch && config.metadata?.acquisitionDatetime && (
-            <div className="text-[10px] text-muted-foreground/70">
-              ECOSTRESS Aufnahme: {new Date(String(config.metadata.acquisitionDatetime)).toLocaleDateString('de-DE', {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-              })}
-              {config.metadata.coveragePercent && ` • ${config.metadata.coveragePercent}% Abdeckung`}
+          {/* Summer composite info */}
+          {hasEcostressMatch && (
+            <div className="text-[10px] text-muted-foreground/70 space-y-1">
+              <p>
+                Sommer-Komposit: {granuleCount} Aufnahmen 
+                ({heatLayers.aggregationMethod === 'p90' ? '90. Perzentil' : 'Median'})
+              </p>
+              {info.tooltipNote && (
+                <p className="italic">{info.tooltipNote}</p>
+              )}
             </div>
           )}
         </div>

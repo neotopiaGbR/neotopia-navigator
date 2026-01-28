@@ -9,9 +9,8 @@ import { getBasemapStyle } from './basemapStyles';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
 import LayersControl from './LayersControl';
-import EcostressDebugOverlay from './EcostressDebugOverlay';
-import EcostressOverlay, { type DebugInfo } from './EcostressOverlay';
 import { GlobalLSTOverlay } from './GlobalLSTOverlay';
+import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
 
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
@@ -27,7 +26,7 @@ const RegionMap: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
-  const [ecostressDebugInfo, setEcostressDebugInfo] = useState<DebugInfo | null>(null);
+  const [compositeMetadata, setCompositeMetadata] = useState<CompositeMetadata | null>(null);
   const {
     regions,
     setRegions,
@@ -320,14 +319,13 @@ const RegionMap: React.FC = () => {
       }
     }
 
-    // ECOSTRESS LST overlay is now handled by the EcostressOverlay component
-    // using deck.gl client-side rendering via ecostress-proxy
-    // No server-side tile generation needed
+    // ECOSTRESS Summer Composite is rendered via EcostressCompositeOverlay component
+    // which performs client-side pixel aggregation (median/P90) of all granules
+    // into a single stable heat map layer
     
-    if (overlays.ecostress.enabled && overlays.ecostress.metadata?.cogUrl) {
-      devLog('ECOSTRESS_ENABLED', { 
-        cogUrl: overlays.ecostress.metadata.cogUrl,
-        datetime: overlays.ecostress.metadata.acquisitionDatetime,
+    if (overlays.ecostress.enabled && overlays.ecostress.metadata?.allGranules) {
+      devLog('ECOSTRESS_COMPOSITE_ENABLED', { 
+        granuleCount: (overlays.ecostress.metadata.allGranules as any[])?.length,
       });
     }
   }, [overlays]);
@@ -502,13 +500,12 @@ const RegionMap: React.FC = () => {
         />
       )}
       
-      {/* TIER 2: ECOSTRESS High-Res Overlay - only when good coverage */}
+      {/* TIER 2: ECOSTRESS Summer Composite - SINGLE aggregated layer */}
       {mapReady && map.current && overlays.ecostress.metadata?.status === 'match' && (
-        <EcostressOverlay
+        <EcostressCompositeOverlay
           map={map.current}
           visible={overlays.ecostress.enabled}
           opacity={heatLayers.ecostressOpacity / 100}
-          cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
           allGranules={overlays.ecostress.metadata?.allGranules as Array<{
             cog_url: string;
             cloud_mask_url?: string;
@@ -520,12 +517,10 @@ const RegionMap: React.FC = () => {
             cloud_percent: number;
           }> | undefined}
           regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
-          onDebugInfo={setEcostressDebugInfo}
+          aggregationMethod={heatLayers.aggregationMethod}
+          onMetadata={setCompositeMetadata}
         />
       )}
-      
-      {/* Debug Overlay (admin only) */}
-      <EcostressDebugOverlay debugInfo={ecostressDebugInfo} />
       
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80">

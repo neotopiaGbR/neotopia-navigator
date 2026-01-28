@@ -2,7 +2,7 @@
  * Air Temperature Overlay (2m) - Germany Summer Composite
  * 
  * Renders ERA5-Land 2m air temperature as a CONTINUOUS raster (no dots, no cells)
- * using deck.gl BitmapLayer.
+ * using deck.gl BitmapLayer via MapboxOverlay.
  *
  * Implementation notes:
  * - Client-side rasterization to a fixed grid over Germany bounds
@@ -19,9 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
-// NOTE: @deck.gl/mapbox only exports MapboxOverlay from its package entry.
-// MapboxLayer is available as an internal module.
-import MapboxLayer from '@deck.gl/mapbox/dist/mapbox-layer';
+import { MapboxOverlay } from '@deck.gl/mapbox';
 import { BitmapLayer } from '@deck.gl/layers';
 import { AirTemperatureData } from './MapLayersContext';
 import germanyBoundaryUrl from '@/assets/germany-boundary.json?url';
@@ -35,15 +33,13 @@ interface AirTemperatureOverlayProps {
   data: AirTemperatureData | null;
 }
 
-const LAYER_ID = 'era5-air-temperature-raster';
-
 export function AirTemperatureOverlay({
   map,
   visible,
   opacity = 0.6,
   data,
 }: AirTemperatureOverlayProps) {
-  const layerRef = useRef<MapboxLayer | null>(null);
+  const overlayRef = useRef<MapboxOverlay | null>(null);
   const boundaryRef = useRef<MultiPolygon | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
 
@@ -123,70 +119,49 @@ export function AirTemperatureOverlay({
     };
   }, [visible, data, bounds]);
 
-  // Mount/unmount deck.gl layer (MapboxLayer integration = reliable z-order in MapLibre)
+  // Mount/unmount deck.gl BitmapLayer via MapboxOverlay
   useEffect(() => {
     if (!map) return;
-    const addOrUpdate = () => {
-      if (!visible || !imageUrl || !bounds) {
-        if (map.getLayer(LAYER_ID)) {
-          try {
-            map.removeLayer(LAYER_ID);
-          } catch {
-            // ignore
-          }
-        }
-        layerRef.current = null;
-        return;
+
+    // Always remove existing overlay first
+    if (overlayRef.current) {
+      try {
+        map.removeControl(overlayRef.current as unknown as any);
+      } catch {
+        // ignore
       }
+      overlayRef.current = null;
+    }
 
-      const beforeId = map.getLayer('regions-fill') ? 'regions-fill' : undefined;
+    if (!visible || !imageUrl || !bounds) return;
 
-      // If style reload removed it, layerRef may be stale: always check map.getLayer
-      if (!map.getLayer(LAYER_ID)) {
-        const mbLayer = new MapboxLayer({
-          id: LAYER_ID,
-          type: BitmapLayer,
-          bounds: [bounds.minLon, bounds.minLat, bounds.maxLon, bounds.maxLat],
-          image: imageUrl,
-          opacity,
-          pickable: false,
-          parameters: { depthTest: false },
-        } as any);
+    const layer = new BitmapLayer({
+      id: 'era5-air-temperature-raster',
+      bounds: [bounds.minLon, bounds.minLat, bounds.maxLon, bounds.maxLat],
+      image: imageUrl,
+      opacity,
+      pickable: false,
+      parameters: { depthTest: false },
+    });
 
-        try {
-          map.addLayer(mbLayer as unknown as any, beforeId);
-          layerRef.current = mbLayer;
-          console.log('[AirTemperatureOverlay] MapboxLayer added:', { beforeId, bounds });
-        } catch (err) {
-          console.error('[AirTemperatureOverlay] Failed to add MapboxLayer:', err);
-        }
-      } else if (layerRef.current) {
-        try {
-          layerRef.current.setProps({
-            bounds: [bounds.minLon, bounds.minLat, bounds.maxLon, bounds.maxLat],
-            image: imageUrl,
-            opacity,
-          } as any);
-        } catch (err) {
-          console.warn('[AirTemperatureOverlay] Failed to update layer props:', err);
-        }
-      }
-    };
+    const overlay = new MapboxOverlay({ interleaved: false, layers: [layer] });
+    try {
+      map.addControl(overlay as unknown as any);
+      overlayRef.current = overlay;
+      console.log('[AirTemperatureOverlay] BitmapLayer added to map, bounds:', bounds);
+    } catch (err) {
+      console.error('[AirTemperatureOverlay] Failed to add overlay:', err);
+    }
 
-    addOrUpdate();
-
-    const onStyleLoad = () => addOrUpdate();
-    map.on('style.load', onStyleLoad);
     return () => {
-      map.off('style.load', onStyleLoad);
-      if (map.getLayer(LAYER_ID)) {
+      if (overlayRef.current) {
         try {
-          map.removeLayer(LAYER_ID);
+          map.removeControl(overlayRef.current as unknown as any);
         } catch {
           // ignore
         }
+        overlayRef.current = null;
       }
-      layerRef.current = null;
     };
   }, [map, visible, imageUrl, bounds, opacity]);
 

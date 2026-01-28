@@ -1,8 +1,8 @@
 /**
- * ECOSTRESS Heat Overlay using deck.gl GeoTIFFLayer
+ * ECOSTRESS Heat Overlay using deck.gl
  * 
  * Renders NASA ECOSTRESS Land Surface Temperature COGs client-side.
- * Uses the ecostress-proxy Edge Function for authenticated COG access.
+ * Uses ecostress-proxy Edge Function for authenticated Range-request access.
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -15,23 +15,19 @@ interface EcostressOverlayProps {
   map: MapLibreMap | null;
   visible: boolean;
   opacity?: number;
-  lat: number;
-  lon: number;
+  cogUrl: string | null;
+  bounds?: [number, number, number, number]; // [west, south, east, north]
 }
 
-interface TileInfo {
-  cogUrl: string;
-  datetime: string;
-  attribution: string;
-}
-
-// LST temperature range (Kelvin)
+// LST temperature range (Kelvin) for colorization
 const LST_MIN = 273; // 0°C
 const LST_MAX = 323; // 50°C
 
-// Heat colormap: blue → cyan → green → yellow → red
-function heatColor(value: number): [number, number, number, number] {
-  const t = Math.max(0, Math.min(1, value));
+/**
+ * Heat colormap: blue → cyan → green → yellow → red
+ */
+function heatToRGBA(kelvin: number): [number, number, number, number] {
+  const t = Math.max(0, Math.min(1, (kelvin - LST_MIN) / (LST_MAX - LST_MIN)));
   let r: number, g: number, b: number;
   
   if (t < 0.25) {
@@ -51,89 +47,67 @@ function heatColor(value: number): [number, number, number, number] {
   return [r, g, b, 220];
 }
 
-export function EcostressOverlay({ map, visible, opacity = 0.7, lat, lon }: EcostressOverlayProps) {
+export function EcostressOverlay({ map, visible, opacity = 0.7, cogUrl, bounds }: EcostressOverlayProps) {
   const overlayRef = useRef<MapboxOverlay | null>(null);
-  const [tileInfo, setTileInfo] = useState<TileInfo | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch latest ECOSTRESS tile info
-  const fetchTileInfo = useCallback(async () => {
-    if (!visible) return;
-    
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const dateTo = new Date().toISOString().split('T')[0];
-      const dateFrom = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      
-      const { data, error: fetchError } = await supabase.functions.invoke('ecostress-latest-tile', {
-        body: { lat, lon, date_from: dateFrom, date_to: dateTo },
-      });
-      
-      if (fetchError) throw fetchError;
-      
-      if (data?.cog_url) {
-        setTileInfo({
-          cogUrl: data.cog_url,
-          datetime: data.datetime,
-          attribution: data.attribution || 'NASA LP DAAC / ECOSTRESS',
-        });
-      } else {
-        setError('No ECOSTRESS data available for this location');
+  useEffect(() => {
+    if (!map) return;
+
+    // Remove existing overlay
+    if (overlayRef.current) {
+      try {
+        map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
+      } catch {
+        // Ignore if already removed
       }
-    } catch (err) {
-      console.error('[EcostressOverlay] Error fetching tile info:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load heat data');
-    } finally {
-      setLoading(false);
+      overlayRef.current = null;
     }
-  }, [lat, lon, visible]);
 
-  useEffect(() => {
-    fetchTileInfo();
-  }, [fetchTileInfo]);
-
-  // Set up deck.gl overlay
-  useEffect(() => {
-    if (!map || !visible || !tileInfo) {
-      // Remove overlay if not visible
-      if (overlayRef.current && map) {
-        try {
-          map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-        } catch {
-          // Ignore if already removed
-        }
-        overlayRef.current = null;
-      }
+    // Don't add if not visible or no COG URL
+    if (!visible || !cogUrl) {
       return;
     }
 
-    // Build proxied URL
-    const proxyUrl = `${SUPABASE_URL}/functions/v1/ecostress-proxy?url=${encodeURIComponent(tileInfo.cogUrl)}`;
+    // Build proxied URL for authenticated COG access
+    const proxyUrl = `${SUPABASE_URL}/functions/v1/ecostress-proxy?url=${encodeURIComponent(cogUrl)}`;
 
-    // For now, use a simple approach: load the COG and render as bitmap
-    // Full GeoTIFFLayer integration would require more setup
-    // This is a placeholder that shows the concept
-    
-    const overlay = new MapboxOverlay({
-      layers: [
-        // Placeholder - in production, use GeoTIFFLayer or TileLayer with COG
-        new BitmapLayer({
-          id: 'ecostress-bitmap',
-          bounds: [lon - 0.5, lat - 0.5, lon + 0.5, lat + 0.5], // Approximate bounds
-          image: proxyUrl,
-          opacity,
-        }),
-      ],
-    });
+    console.log('[EcostressOverlay] Adding layer with proxy URL:', proxyUrl.substring(0, 100));
 
     try {
+      // Use BitmapLayer with the proxied COG
+      // For full COG support, we'd need geotiff.js client-side parsing
+      // This is a simplified approach that works for overview images
+      
+      const layerBounds = bounds || [-180, -85, 180, 85];
+      
+      const overlay = new MapboxOverlay({
+        layers: [
+          new BitmapLayer({
+            id: 'ecostress-heat-layer',
+            bounds: layerBounds,
+            image: proxyUrl,
+            opacity,
+            // Note: BitmapLayer expects a standard image format
+            // For COG rendering, we need TileLayer with custom tile loading
+            loadOptions: {
+              fetch: {
+                headers: {
+                  'Accept': 'image/*,*/*',
+                },
+              },
+            },
+          }),
+        ],
+      });
+
       map.addControl(overlay as unknown as maplibregl.IControl);
       overlayRef.current = overlay;
+      setError(null);
+      
     } catch (err) {
       console.error('[EcostressOverlay] Failed to add overlay:', err);
+      setError(err instanceof Error ? err.message : 'Failed to add heat layer');
     }
 
     return () => {
@@ -146,26 +120,13 @@ export function EcostressOverlay({ map, visible, opacity = 0.7, lat, lon }: Ecos
         overlayRef.current = null;
       }
     };
-  }, [map, visible, tileInfo, opacity, lat, lon]);
+  }, [map, visible, cogUrl, opacity, bounds]);
 
-  // Update opacity when it changes
-  useEffect(() => {
-    // Opacity is handled by recreating layers in the main effect
-    // No-op here to avoid type issues with MapboxOverlay
-  }, [opacity, visible]);
-
-  if (loading) {
-    return (
-      <div className="absolute top-16 right-4 bg-background/90 backdrop-blur px-3 py-2 rounded-lg text-sm">
-        Loading heat data...
-      </div>
-    );
-  }
-
+  // Show error if any
   if (error && visible) {
     return (
-      <div className="absolute top-16 right-4 bg-destructive/10 text-destructive px-3 py-2 rounded-lg text-sm max-w-xs">
-        {error}
+      <div className="absolute top-16 right-4 bg-destructive/10 text-destructive px-3 py-2 rounded-lg text-sm max-w-xs z-10">
+        Heat layer error: {error}
       </div>
     );
   }

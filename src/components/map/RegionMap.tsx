@@ -11,6 +11,8 @@ import { RefreshCw } from 'lucide-react';
 import LayersControl from './LayersControl';
 import EcostressDebugOverlay from './EcostressDebugOverlay';
 import EcostressOverlay, { type DebugInfo } from './EcostressOverlay';
+import { GlobalLSTOverlay } from './GlobalLSTOverlay';
+
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
 const devLog = (tag: string, ...args: unknown[]) => {
@@ -35,10 +37,13 @@ const RegionMap: React.FC = () => {
     setHoveredRegionId,
   } = useRegion();
 
-  const { basemap, overlays } = useMapLayers();
+  const { basemap, overlays, heatLayers } = useMapLayers();
   
   // Check if any overlay is enabled (to adjust region fill style)
   const anyOverlayEnabled = overlays.ecostress.enabled || overlays.floodRisk.enabled;
+  
+  // Heat layer enabled = show both global LST and optionally ECOSTRESS
+  const heatOverlayEnabled = overlays.ecostress.enabled;
   
   // Initialize overlay data fetching
   useMapOverlays();
@@ -488,12 +493,21 @@ const RegionMap: React.FC = () => {
       {/* Layers Control */}
       <LayersControl />
       
-      {/* ECOSTRESS Heat Overlay (deck.gl client-side) - only render when status is "match" */}
+      {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
+      {mapReady && map.current && heatOverlayEnabled && (
+        <GlobalLSTOverlay
+          map={map.current}
+          visible={heatLayers.globalLSTEnabled}
+          opacity={heatLayers.globalLSTOpacity / 100}
+        />
+      )}
+      
+      {/* TIER 2: ECOSTRESS High-Res Overlay - only when good coverage */}
       {mapReady && map.current && overlays.ecostress.metadata?.status === 'match' && (
         <EcostressOverlay
           map={map.current}
           visible={overlays.ecostress.enabled}
-          opacity={overlays.ecostress.opacity / 100}
+          opacity={heatLayers.ecostressOpacity / 100}
           cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
           regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
           onDebugInfo={setEcostressDebugInfo}

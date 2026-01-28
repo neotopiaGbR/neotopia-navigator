@@ -11,12 +11,21 @@ export interface OverlayConfig {
   metadata: Record<string, unknown>;
 }
 
+export interface HeatLayerTierConfig {
+  globalLSTEnabled: boolean; // TIER 1: MODIS/VIIRS (always on when heat enabled)
+  globalLSTOpacity: number;
+  ecostressEnabled: boolean; // TIER 2: High-res overlay
+  ecostressOpacity: number;
+  ecostressMinCoverage: number; // Minimum coverage threshold (default 0.8 = 80%)
+}
+
 export interface MapLayersState {
   basemap: BasemapType;
   overlays: {
     ecostress: OverlayConfig;
     floodRisk: OverlayConfig;
   };
+  heatLayers: HeatLayerTierConfig;
 }
 
 interface MapLayersContextType extends MapLayersState {
@@ -26,6 +35,9 @@ interface MapLayersContextType extends MapLayersState {
   setOverlayLoading: (overlay: 'ecostress' | 'floodRisk', loading: boolean) => void;
   setOverlayError: (overlay: 'ecostress' | 'floodRisk', error: string | null) => void;
   setOverlayMetadata: (overlay: 'ecostress' | 'floodRisk', metadata: Record<string, unknown>) => void;
+  // Heat layer tier controls
+  setHeatLayerOpacity: (tier: 'globalLST' | 'ecostress', opacity: number) => void;
+  setEcostressMinCoverage: (coverage: number) => void;
 }
 
 const defaultOverlay: OverlayConfig = {
@@ -37,6 +49,14 @@ const defaultOverlay: OverlayConfig = {
   metadata: {},
 };
 
+const defaultHeatLayers: HeatLayerTierConfig = {
+  globalLSTEnabled: true, // Always on when heat overlay enabled
+  globalLSTOpacity: 60,
+  ecostressEnabled: true, // Try to enhance with ECOSTRESS
+  ecostressOpacity: 80,
+  ecostressMinCoverage: 0.8, // 80% coverage threshold
+};
+
 const MapLayersContext = createContext<MapLayersContextType | undefined>(undefined);
 
 export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -45,6 +65,7 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
     ecostress: { ...defaultOverlay },
     floodRisk: { ...defaultOverlay },
   });
+  const [heatLayers, setHeatLayers] = useState<HeatLayerTierConfig>(defaultHeatLayers);
 
   const toggleOverlay = useCallback((overlay: 'ecostress' | 'floodRisk') => {
     setOverlays((prev) => ({
@@ -58,13 +79,18 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
   }, []);
 
   const setOverlayOpacity = useCallback((overlay: 'ecostress' | 'floodRisk', opacity: number) => {
+    const clampedOpacity = Math.max(0, Math.min(100, opacity));
     setOverlays((prev) => ({
       ...prev,
       [overlay]: {
         ...prev[overlay],
-        opacity: Math.max(0, Math.min(100, opacity)),
+        opacity: clampedOpacity,
       },
     }));
+    // Sync with heat layer tiers for ecostress
+    if (overlay === 'ecostress') {
+      setHeatLayers((prev) => ({ ...prev, ecostressOpacity: clampedOpacity }));
+    }
   }, []);
 
   const setOverlayLoading = useCallback((overlay: 'ecostress' | 'floodRisk', loading: boolean) => {
@@ -95,7 +121,7 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
         [overlay]: {
           ...prev[overlay],
           metadata,
-          error: null, // Clear error on successful metadata update
+          error: null,
           loading: false,
           lastUpdated: new Date().toISOString(),
         },
@@ -104,17 +130,42 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
     []
   );
 
+  const setHeatLayerOpacity = useCallback((tier: 'globalLST' | 'ecostress', opacity: number) => {
+    const clampedOpacity = Math.max(0, Math.min(100, opacity));
+    setHeatLayers((prev) => ({
+      ...prev,
+      [`${tier}Opacity`]: clampedOpacity,
+    }));
+    // Sync ecostress opacity with overlay config
+    if (tier === 'ecostress') {
+      setOverlays((prev) => ({
+        ...prev,
+        ecostress: { ...prev.ecostress, opacity: clampedOpacity },
+      }));
+    }
+  }, []);
+
+  const setEcostressMinCoverage = useCallback((coverage: number) => {
+    setHeatLayers((prev) => ({
+      ...prev,
+      ecostressMinCoverage: Math.max(0, Math.min(1, coverage)),
+    }));
+  }, []);
+
   return (
     <MapLayersContext.Provider
       value={{
         basemap,
         overlays,
+        heatLayers,
         setBasemap,
         toggleOverlay,
         setOverlayOpacity,
         setOverlayLoading,
         setOverlayError,
         setOverlayMetadata,
+        setHeatLayerOpacity,
+        setEcostressMinCoverage,
       }}
     >
       {children}

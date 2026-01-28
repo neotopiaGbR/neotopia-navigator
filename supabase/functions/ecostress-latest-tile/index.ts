@@ -52,7 +52,7 @@ interface ScoredGranule extends CMRGranule {
 const ECOSTRESS_CONCEPT_ID = 'C2076090826-LPCLOUD';
 const CMR_API_URL = 'https://cmr.earthdata.nasa.gov/search/granules.json';
 const SEARCH_RADIUS_DEG = 2.0; // Larger search radius to find more candidates
-const DEFAULT_MIN_QUALITY = 0.15; // Minimum quality threshold
+const DEFAULT_MIN_QUALITY = 0.20; // Minimum quality threshold (coverage ≥80% recommended)
 
 function getDateDaysAgo(days: number): string {
   const date = new Date();

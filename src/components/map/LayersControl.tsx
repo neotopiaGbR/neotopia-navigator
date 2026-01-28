@@ -64,6 +64,14 @@ interface NearestCandidate {
   cloud_cover?: number;
 }
 
+interface BestRejectedGranule {
+  granule_id: string;
+  datetime: string;
+  quality_score: number;
+  coverage_percent: number;
+  cloud_percent: number;
+}
+
 const LayersControl: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const {
@@ -227,6 +235,13 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
   const isNoCoverage = ecostressStatus === 'no_coverage';
   const isMatch = ecostressStatus === 'match';
   const nearestCandidate = config.metadata?.nearestCandidate as NearestCandidate | null;
+  const bestRejected = config.metadata?.bestRejected as BestRejectedGranule | null;
+  
+  // Quality metrics for match state
+  const qualityScore = config.metadata?.qualityScore as number | undefined;
+  const coveragePercent = config.metadata?.coveragePercent as number | undefined;
+  const cloudPercent = config.metadata?.cloudPercent as number | undefined;
+  const candidatesChecked = config.metadata?.candidatesChecked as number | undefined;
 
   return (
     <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
@@ -267,15 +282,32 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
               <div className="flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
                 <p className="text-amber-700 dark:text-amber-300 font-medium">
-                  Keine Abdeckung
+                  Keine ausreichende Abdeckung
                 </p>
               </div>
               <p className="text-muted-foreground">
                 {String(config.metadata?.message || 'Keine ECOSTRESS-Aufnahme für diese Region im letzten Jahr verfügbar.')}
               </p>
               
-              {/* Nearest capture hint */}
-              {nearestCandidate && (
+              {/* Best rejected granule (quality too low) */}
+              {bestRejected && (
+                <div className="mt-2 p-2 rounded bg-background/80 border border-border space-y-1">
+                  <p className="text-muted-foreground font-medium">Beste verfügbare Aufnahme:</p>
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px]">
+                    <span className="text-muted-foreground">Qualität:</span>
+                    <span className="font-mono">{Math.round(bestRejected.quality_score * 100)}%</span>
+                    <span className="text-muted-foreground">Abdeckung:</span>
+                    <span className="font-mono">{bestRejected.coverage_percent}%</span>
+                    <span className="text-muted-foreground">Bewölkung:</span>
+                    <span className="font-mono">{bestRejected.cloud_percent}%</span>
+                    <span className="text-muted-foreground">Datum:</span>
+                    <span>{new Date(bestRejected.datetime).toLocaleDateString('de-DE')}</span>
+                  </div>
+                </div>
+              )}
+              
+              {/* Nearest capture hint (no intersection) */}
+              {nearestCandidate && !bestRejected && (
                 <div className="mt-2 p-2 rounded bg-background/80 border border-border space-y-1">
                   <p className="text-muted-foreground flex items-center gap-1">
                     <MapPin className="h-3 w-3" />
@@ -297,6 +329,13 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
                     {showBoundary ? 'Footprint ausblenden' : 'Footprint anzeigen'}
                   </button>
                 </div>
+              )}
+              
+              {/* Candidates checked info */}
+              {candidatesChecked != null && (
+                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                  {candidatesChecked} Aufnahmen geprüft
+                </p>
               )}
             </div>
           )}
@@ -356,11 +395,37 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
                 </div>
               )}
 
-              {/* Match info */}
-              <div className="p-2 rounded bg-green-500/10 border border-green-500/30 text-xs">
-                <p className="text-green-600 dark:text-green-400 font-medium">✓ Daten verfügbar</p>
+              {/* Match info with quality metrics */}
+              <div className="p-2 rounded bg-green-500/10 border border-green-500/30 text-xs space-y-2">
+                <p className="text-green-600 dark:text-green-400 font-medium">✓ Beste Aufnahme ausgewählt</p>
+                
+                {/* Quality metrics grid */}
+                {(qualityScore != null || coveragePercent != null) && (
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
+                    {qualityScore != null && (
+                      <>
+                        <span className="text-muted-foreground">Qualität:</span>
+                        <span className="font-mono font-medium">{Math.round(qualityScore * 100)}%</span>
+                      </>
+                    )}
+                    {coveragePercent != null && (
+                      <>
+                        <span className="text-muted-foreground">Abdeckung:</span>
+                        <span className="font-mono">{coveragePercent}%</span>
+                      </>
+                    )}
+                    {cloudPercent != null && (
+                      <>
+                        <span className="text-muted-foreground">Bewölkung:</span>
+                        <span className="font-mono">{cloudPercent}%</span>
+                      </>
+                    )}
+                  </div>
+                )}
+                
+                {/* Acquisition date */}
                 {config.metadata?.acquisitionDatetime && (
-                  <p className="text-muted-foreground mt-1">
+                  <p className="text-muted-foreground">
                     Aufnahme: {new Date(String(config.metadata.acquisitionDatetime)).toLocaleDateString('de-DE', {
                       day: '2-digit',
                       month: '2-digit',
@@ -368,6 +433,13 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
+                  </p>
+                )}
+                
+                {/* Candidates checked */}
+                {candidatesChecked != null && (
+                  <p className="text-[10px] text-muted-foreground/60">
+                    Ausgewählt aus {candidatesChecked} Aufnahmen
                   </p>
                 )}
               </div>

@@ -498,7 +498,6 @@ const RegionMap: React.FC = () => {
         visible={overlays.ecostress.enabled}
         opacity={overlays.ecostress.opacity / 100}
         cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
-        bounds={overlays.ecostress.metadata?.bounds as [number, number, number, number] | undefined}
       />
       
       {loading && (

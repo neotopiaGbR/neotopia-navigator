@@ -4,20 +4,24 @@
  * Renders a single, stable heat map from aggregated ECOSTRESS data.
  * Uses quality-weighted pixel aggregation with regional percentile normalization.
  * 
- * Scientific requirements:
- * - Quality filtering: discards granules with cloud >40% or coverage <60%
- * - Weighted aggregation: weights by cloud confidence, coverage, quality score
- * - Percentile normalization: uses P5-P95 to prevent tile-to-tile contrast jumps
- * - Single output layer: no overlapping swaths or rotated tiles
+ * CRITICAL FIXES:
+ * - Uses singleton DeckOverlayManager instead of creating own MapboxOverlay
+ * - BitmapLayer.image is HTMLCanvasElement (NOT DataURL)
+ * - Mounts immediately when visible=true (no status gate)
+ * - Explicit WGS84 bounds validation
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { MapboxOverlay } from '@deck.gl/mapbox';
-import { BitmapLayer } from '@deck.gl/layers';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { 
+  initDeckOverlay, 
+  updateLayer, 
+  removeLayer, 
+  isReady,
+  getDiagnostics,
+} from '../DeckOverlayManager';
+import { 
   createComposite, 
-  imageDataToDataUrl, 
   type AggregationMethod,
   type CompositeResult,
   type CoverageConfidence,
@@ -60,6 +64,49 @@ interface EcostressCompositeOverlayProps {
   onMetadata?: (metadata: CompositeMetadata | null) => void;
 }
 
+const LAYER_ID = 'ecostress-summer-composite';
+const GERMANY_BBOX: [number, number, number, number] = [5.5, 47.0, 15.5, 55.5];
+
+/**
+ * Convert ImageData to HTMLCanvasElement (NOT DataURL!)
+ * This is required for reliable WebGL texture upload
+ */
+function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = imageData.width;
+  canvas.height = imageData.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Failed to get canvas 2d context');
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+/**
+ * Validate bounds are plausible WGS84 for Germany region
+ */
+function validateBounds(bounds: [number, number, number, number]): boolean {
+  const [west, south, east, north] = bounds;
+  
+  // Basic WGS84 check
+  if (west < -180 || east > 180 || south < -90 || north > 90) {
+    console.error('[EcostressCompositeOverlay] Bounds outside WGS84 range:', bounds);
+    return false;
+  }
+  
+  // Check intersection with generous Germany bbox
+  const intersects = !(
+    east < GERMANY_BBOX[0] || west > GERMANY_BBOX[2] ||
+    north < GERMANY_BBOX[1] || south > GERMANY_BBOX[3]
+  );
+  
+  if (!intersects) {
+    console.error('[EcostressCompositeOverlay] Bounds do not intersect Germany:', bounds);
+    return false;
+  }
+  
+  return true;
+}
+
 export function EcostressCompositeOverlay({
   map,
   visible,
@@ -70,11 +117,11 @@ export function EcostressCompositeOverlay({
   onRenderStatus,
   onMetadata,
 }: EcostressCompositeOverlayProps) {
-  const overlayRef = useRef<MapboxOverlay | null>(null);
   const [compositeResult, setCompositeResult] = useState<CompositeResult | null>(null);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [canvasImage, setCanvasImage] = useState<HTMLCanvasElement | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'rendered' | 'error' | 'no_data'>('idle');
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const initRef = useRef(false);
   
   // Stabilize callback refs to prevent infinite loops
   const onRenderStatusRef = useRef(onRenderStatus);
@@ -90,13 +137,31 @@ export function EcostressCompositeOverlay({
   // Stabilize bbox by converting to string key
   const bboxKey = regionBbox ? regionBbox.join(',') : 'none';
 
-  // Create composite when granules change - use stable keys to prevent infinite loops
+  // Initialize DeckOverlayManager when map is ready
+  useEffect(() => {
+    if (!map || initRef.current) return;
+    
+    const init = () => {
+      initDeckOverlay(map, import.meta.env.DEV);
+      initRef.current = true;
+      console.log('[EcostressCompositeOverlay] DeckOverlayManager initialized');
+    };
+    
+    if (map.isStyleLoaded()) {
+      init();
+    } else {
+      map.once('style.load', init);
+    }
+  }, [map]);
+
+  // Create composite when granules change
   useEffect(() => {
     if (!visible || !allGranules || allGranules.length === 0 || !regionBbox) {
       setCompositeResult(null);
-      setImageUrl(null);
+      setCanvasImage(null);
       setStatus('idle');
       onMetadataRef.current?.(null);
+      removeLayer(LAYER_ID);
       return;
     }
 
@@ -138,9 +203,36 @@ export function EcostressCompositeOverlay({
           return;
         }
 
-        const dataUrl = imageDataToDataUrl(result.imageData);
+        // CRITICAL: Validate bounds before rendering
+        if (!validateBounds(result.bounds)) {
+          throw new Error(`Invalid composite bounds: ${JSON.stringify(result.bounds)}`);
+        }
+
+        // CRITICAL: Convert to HTMLCanvasElement (NOT DataURL!)
+        const canvas = imageDataToCanvas(result.imageData);
+        
+        // Validate canvas has non-transparent pixels
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const checkData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          let nonTransparent = 0;
+          for (let i = 3; i < checkData.data.length; i += 4) {
+            if (checkData.data[i] > 0) nonTransparent++;
+          }
+          console.log('[EcostressCompositeOverlay] Canvas validation:', {
+            width: canvas.width,
+            height: canvas.height,
+            nonTransparentPixels: nonTransparent,
+            totalPixels: checkData.data.length / 4,
+          });
+          
+          if (nonTransparent === 0) {
+            throw new Error('Composite canvas is fully transparent - no visible data');
+          }
+        }
+        
         setCompositeResult(result);
-        setImageUrl(dataUrl);
+        setCanvasImage(canvas);
         setStatus('rendered');
 
         const metadata: CompositeMetadata = {
@@ -168,14 +260,14 @@ export function EcostressCompositeOverlay({
           `Komposit: ${result.stats.successfulGranules} Aufnahmen, ${result.metadata.coverageConfidence.percent}% Abdeckung (${confidenceLabel})`
         );
 
-        console.log('[EcostressCompositeOverlay] Composite created:', {
+        console.log('[EcostressCompositeOverlay] ✅ Composite created:', {
           granules: result.stats.successfulGranules,
           discarded: result.stats.discardedGranules,
           pixels: result.stats.validPixels,
           coverage: `${result.metadata.coverageConfidence.percent}%`,
           confidence: result.metadata.coverageConfidence.level,
+          bounds: result.bounds,
           tempRange: `${(result.stats.min - 273.15).toFixed(1)}°C to ${(result.stats.max - 273.15).toFixed(1)}°C`,
-          normRange: `P5=${(result.stats.p5 - 273.15).toFixed(1)}°C, P95=${(result.stats.p95 - 273.15).toFixed(1)}°C`,
         });
       } catch (err) {
         if (cancelled) return;
@@ -195,90 +287,41 @@ export function EcostressCompositeOverlay({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, granuleKey, bboxKey, aggregationMethod]);
 
-  // Manage deck.gl overlay - SINGLE BitmapLayer only
+  // Update deck.gl layer when composite or visibility changes
   useEffect(() => {
-    if (!map) return;
-
-    // Remove existing overlay
-    if (overlayRef.current) {
-      try {
-        map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-      } catch {
-        // Ignore
-      }
-      overlayRef.current = null;
+    if (!isReady()) {
+      console.log('[EcostressCompositeOverlay] DeckOverlayManager not ready yet');
+      return;
     }
-
-    // Don't add if not visible or no image
-    if (!visible || !imageUrl || !compositeResult) {
+    
+    if (!visible || !canvasImage || !compositeResult) {
+      removeLayer(LAYER_ID);
       return;
     }
 
-    const addOverlay = () => {
-      console.log('[EcostressCompositeOverlay] Adding SINGLE composite BitmapLayer');
-
-      try {
-        // Create SINGLE BitmapLayer - no overlapping swaths
-        const layer = new BitmapLayer({
-          id: 'ecostress-summer-composite',
-          bounds: compositeResult.bounds,
-          image: imageUrl,
-          opacity,
-          pickable: false,
-          parameters: {
-            depthTest: false,
-          },
-        });
-
-        const overlay = new MapboxOverlay({
-          interleaved: false,
-          layers: [layer],
-        });
-
-        map.addControl(overlay as unknown as maplibregl.IControl);
-        overlayRef.current = overlay;
-
-        console.log('[EcostressCompositeOverlay] ✅ Single composite overlay mounted');
-      } catch (err) {
-        console.error('[EcostressCompositeOverlay] Failed to add overlay:', err);
-      }
-    };
-
-    if (map.isStyleLoaded()) {
-      addOverlay();
-    } else {
-      map.once('style.load', addOverlay);
-    }
-
-    return () => {
-      if (overlayRef.current && map) {
-        try {
-          map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-        } catch {
-          // Ignore cleanup errors
-        }
-        overlayRef.current = null;
-      }
-    };
-  }, [map, visible, imageUrl, compositeResult, opacity]);
-
-  // Update opacity without re-creating
-  useEffect(() => {
-    if (!overlayRef.current || !compositeResult || !imageUrl) return;
-
-    const layer = new BitmapLayer({
-      id: 'ecostress-summer-composite',
+    console.log('[EcostressCompositeOverlay] Updating BitmapLayer:', {
       bounds: compositeResult.bounds,
-      image: imageUrl,
       opacity,
-      pickable: false,
-      parameters: {
-        depthTest: false,
-      },
+      canvasSize: `${canvasImage.width}x${canvasImage.height}`,
     });
 
-    overlayRef.current.setProps({ layers: [layer] });
-  }, [opacity, compositeResult, imageUrl]);
+    updateLayer({
+      id: LAYER_ID,
+      type: 'bitmap',
+      visible: true,
+      image: canvasImage,
+      bounds: compositeResult.bounds,
+      opacity,
+    });
+
+    // Log diagnostics
+    const diag = getDiagnostics();
+    console.log('[EcostressCompositeOverlay] Deck diagnostics:', diag);
+
+    return () => {
+      removeLayer(LAYER_ID);
+    };
+  }, [visible, canvasImage, compositeResult, opacity]);
 
   // Render loading/status UI
   if (!visible) return null;

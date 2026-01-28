@@ -536,11 +536,14 @@ const RegionMap: React.FC = () => {
         />
       )}
       
-      {/* TIER 2: ECOSTRESS Summer Composite - SINGLE aggregated layer */}
-      {mapReady && map.current && overlays.ecostress.metadata?.status === 'match' && (
+      {/* TIER 2: ECOSTRESS Summer Composite - SINGLE aggregated layer
+          CRITICAL: Mount immediately when enabled, NOT gated on status === 'match'
+          The component handles its own loading/no-data states internally
+      */}
+      {mapReady && map.current && overlays.ecostress.enabled && (
         <EcostressCompositeOverlay
           map={map.current}
-          visible={overlays.ecostress.enabled}
+          visible={overlays.ecostress.enabled && overlays.ecostress.metadata?.status === 'match'}
           opacity={heatLayers.ecostressOpacity / 100}
           allGranules={overlays.ecostress.metadata?.allGranules as Array<{
             cog_url: string;
@@ -556,9 +559,7 @@ const RegionMap: React.FC = () => {
           aggregationMethod={heatLayers.aggregationMethod}
           onMetadata={(metadata) => {
             setCompositeMetadata(metadata);
-            // Update overlay metadata with composite results for UI display
             if (metadata) {
-              // This could be enhanced to sync metadata to context
               console.log('[RegionMap] Composite metadata:', {
                 confidence: metadata.coverageConfidence.level,
                 granules: metadata.successfulGranules,

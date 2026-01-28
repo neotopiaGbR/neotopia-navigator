@@ -84,53 +84,65 @@ function kelvinToRGBA(kelvin: number): [number, number, number, number] {
 
 /**
  * Convert UTM coordinates to WGS84 (lat/lon)
- * Uses simplified formula - accurate enough for visualization
+ * Based on Karney's formulas - accurate for visualization
  */
 function utmToWgs84(easting: number, northing: number, zone: number, isNorthernHemisphere: boolean): [number, number] {
   // WGS84 parameters
-  const a = 6378137; // semi-major axis
-  const e = 0.0818192; // eccentricity
-  const e1sq = 0.006739497;
+  const a = 6378137.0; // semi-major axis
+  const f = 1 / 298.257223563; // flattening
   const k0 = 0.9996; // scale factor
+  const e2 = 2 * f - f * f; // eccentricity squared
+  const e = Math.sqrt(e2);
+  const ep2 = e2 / (1 - e2); // second eccentricity squared
   
-  const arc = northing / k0;
-  const mu = arc / (a * (1 - Math.pow(e, 2) / 4 - 3 * Math.pow(e, 4) / 64 - 5 * Math.pow(e, 6) / 256));
+  // Remove false easting and false northing
+  const x = easting - 500000;
+  const y = isNorthernHemisphere ? northing : northing - 10000000;
   
-  const e1 = (1 - Math.sqrt(1 - e * e)) / (1 + Math.sqrt(1 - e * e));
-  const ca = 3 * e1 / 2 - 27 * Math.pow(e1, 3) / 32;
-  const cb = 21 * Math.pow(e1, 2) / 16 - 55 * Math.pow(e1, 4) / 32;
-  const cc = 151 * Math.pow(e1, 3) / 96;
-  const cd = 1097 * Math.pow(e1, 4) / 512;
+  // Central meridian
+  const lon0 = (zone - 1) * 6 - 180 + 3; // in degrees
+  const lon0Rad = lon0 * Math.PI / 180;
   
-  const phi1 = mu + ca * Math.sin(2 * mu) + cb * Math.sin(4 * mu) + cc * Math.sin(6 * mu) + cd * Math.sin(8 * mu);
+  // Footpoint latitude
+  const M = y / k0;
+  const mu = M / (a * (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256));
   
-  const n0 = a / Math.sqrt(1 - Math.pow(e * Math.sin(phi1), 2));
-  const r0 = a * (1 - e * e) / Math.pow(1 - Math.pow(e * Math.sin(phi1), 2), 1.5);
-  const fact1 = n0 * Math.tan(phi1) / r0;
+  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
   
-  const a1 = easting - 500000; // Distance from central meridian (false easting removed)
-  const dd0 = a1 / (n0 * k0);
-  const fact2 = dd0 * dd0 / 2;
-  const t0 = Math.pow(Math.tan(phi1), 2);
-  const q0 = e1sq * Math.pow(Math.cos(phi1), 2);
-  const fact3 = (5 + 3 * t0 + 10 * q0 - 4 * q0 * q0 - 9 * e1sq) * Math.pow(dd0, 4) / 24;
-  const fact4 = (61 + 90 * t0 + 298 * q0 + 45 * t0 * t0 - 252 * e1sq - 3 * q0 * q0) * Math.pow(dd0, 6) / 720;
+  const phi1 = mu 
+    + (3 * e1 / 2 - 27 * e1 * e1 * e1 / 32) * Math.sin(2 * mu)
+    + (21 * e1 * e1 / 16 - 55 * e1 * e1 * e1 * e1 / 32) * Math.sin(4 * mu)
+    + (151 * e1 * e1 * e1 / 96) * Math.sin(6 * mu)
+    + (1097 * e1 * e1 * e1 * e1 / 512) * Math.sin(8 * mu);
   
-  const lof1 = a1 / (n0 * k0);
-  const lof2 = (1 + 2 * t0 + q0) * Math.pow(dd0, 3) / 6;
-  const lof3 = (5 - 2 * q0 + 28 * t0 - 3 * Math.pow(q0, 2) + 8 * e1sq + 24 * Math.pow(t0, 2)) * Math.pow(dd0, 5) / 120;
-  const _a2 = (lof1 - lof2 + lof3) / Math.cos(phi1);
-  const _a3 = _a2 * 180 / Math.PI;
+  const sinPhi1 = Math.sin(phi1);
+  const cosPhi1 = Math.cos(phi1);
+  const tanPhi1 = Math.tan(phi1);
   
-  let lat = 180 * (phi1 - fact1 * (fact2 + fact3 + fact4)) / Math.PI;
+  const N1 = a / Math.sqrt(1 - e2 * sinPhi1 * sinPhi1);
+  const T1 = tanPhi1 * tanPhi1;
+  const C1 = ep2 * cosPhi1 * cosPhi1;
+  const R1 = a * (1 - e2) / Math.pow(1 - e2 * sinPhi1 * sinPhi1, 1.5);
+  const D = x / (N1 * k0);
   
-  if (!isNorthernHemisphere) {
-    lat = -lat;
-  }
+  // Latitude
+  const lat = phi1 - (N1 * tanPhi1 / R1) * (
+    D * D / 2
+    - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * D * D * D * D / 24
+    + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * D * D * D * D * D * D / 720
+  );
   
-  const lon = ((zone > 0 ? (6 * zone - 183) : 3) - _a3);
+  // Longitude
+  const lon = lon0Rad + (
+    D
+    - (1 + 2 * T1 + C1) * D * D * D / 6
+    + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * D * D * D * D * D / 120
+  ) / cosPhi1;
   
-  return [lon, lat];
+  const latDeg = lat * 180 / Math.PI;
+  const lonDeg = lon * 180 / Math.PI;
+  
+  return [lonDeg, isNorthernHemisphere ? latDeg : -latDeg];
 }
 
 /**

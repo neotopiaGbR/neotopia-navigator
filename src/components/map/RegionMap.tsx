@@ -9,6 +9,7 @@ import { useDwdTemperature } from '@/hooks/useDwdTemperature';
 import { getBasemapStyle } from './basemapStyles';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 import LayersControl from './LayersControl';
 import { GlobalLSTOverlay } from './GlobalLSTOverlay';
 import { AirTemperatureOverlay } from './AirTemperatureOverlay';
@@ -27,6 +28,7 @@ const devLog = (tag: string, ...args: unknown[]) => {
 };
 
 const RegionMap: React.FC = () => {
+  const { isAdmin } = useAuth();
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const [loading, setLoading] = useState(true);
@@ -523,7 +525,7 @@ const RegionMap: React.FC = () => {
       />
       
       {/* DWD TEMPERATURE HEALTH CHECK - Dev/Admin only */}
-      <DwdTemperatureHealthCheck visible={isDev} />
+      <DwdTemperatureHealthCheck visible={isDev || isAdmin} />
       
       {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
       {mapReady && map.current && heatOverlayEnabled && (

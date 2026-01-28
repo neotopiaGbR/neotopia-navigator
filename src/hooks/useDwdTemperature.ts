@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { SUPABASE_URL } from '@/integrations/supabase/client';
 import { useMapLayers, AirTemperatureData, AirTempAggregation } from '@/components/map/MapLayersContext';
 
 interface DwdResponse {
@@ -68,6 +69,9 @@ export function useDwdTemperature() {
     setAirTemperatureLoading(true);
 
     try {
+      const endpointUrl = `${SUPABASE_URL}/functions/v1/get-dwd-temperature`;
+      console.log('[useDwdTemperature] Invoking Edge Function:', endpointUrl);
+
       const { data: responseData, error } = await supabase.functions.invoke('get-dwd-temperature', {
         body: { 
           variable,
@@ -76,7 +80,12 @@ export function useDwdTemperature() {
       });
 
       if (error) {
-        throw new Error(error.message || 'Edge Function Fehler');
+        // Supabase JS frequently collapses network/CORS failures into this generic message.
+        const msg = error.message || 'Edge Function Fehler';
+        if (msg.includes('Failed to send a request to the Edge Function')) {
+          throw new Error(`Edge Function unreachable (network/CORS or not deployed). Endpoint: ${endpointUrl}`);
+        }
+        throw new Error(msg);
       }
 
       const response = responseData as DwdResponse;
@@ -117,6 +126,8 @@ export function useDwdTemperature() {
       setAirTemperatureError(
         err instanceof Error ? err.message : 'Fehler beim Laden der DWD-Temperaturdaten'
       );
+    } finally {
+      setAirTemperatureLoading(false);
     }
   }, [airTemperature.enabled, airTemperature.aggregation, airTemperature.data, setAirTemperatureLoading, setAirTemperatureError, setAirTemperatureData]);
 

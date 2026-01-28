@@ -10,6 +10,7 @@ import { Bug, CheckCircle, AlertCircle, ExternalLink, Copy, RefreshCw } from 'lu
 import { Button } from '@/components/ui/button';
 import { useMapLayers } from './MapLayersContext';
 import { useDwdTemperature } from '@/hooks/useDwdTemperature';
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, supabase } from '@/integrations/supabase/client';
 
 interface HealthCheckProps {
   visible?: boolean;
@@ -18,6 +19,11 @@ interface HealthCheckProps {
 export const DwdTemperatureHealthCheck: React.FC<HealthCheckProps> = ({ visible = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [testLoading, setTestLoading] = useState(false);
+  const [testStatus, setTestStatus] = useState<number | null>(null);
+  const [testJson, setTestJson] = useState<unknown>(null);
+  const [testRaw, setTestRaw] = useState<string | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
   const { airTemperature } = useMapLayers();
   const { refetch } = useDwdTemperature();
 
@@ -36,6 +42,46 @@ export const DwdTemperatureHealthCheck: React.FC<HealthCheckProps> = ({ visible 
   const year = metadata?.year || new Date().getFullYear() - 1;
   const variable = airTemperature.aggregation === 'daily_max' ? 'max' : 'mean';
   const sampleUrl = `https://opendata.dwd.de/climate_environment/CDC/grids_germany/seasonal/air_temperature_${variable}/14_JJA/grids_germany_seasonal_air_temp_${variable}_${year}14.asc.gz`;
+
+  const healthEndpointUrl = `${SUPABASE_URL}/functions/v1/dwd-health`;
+
+  const runHealthTest = async () => {
+    setTestLoading(true);
+    setTestStatus(null);
+    setTestJson(null);
+    setTestRaw(null);
+    setTestError(null);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      const res = await fetch(healthEndpointUrl, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_PUBLISHABLE_KEY,
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ year, variable }),
+      });
+
+      setTestStatus(res.status);
+
+      const text = await res.text();
+      setTestRaw(text);
+
+      try {
+        setTestJson(JSON.parse(text));
+      } catch {
+        setTestJson(null);
+      }
+    } catch (e) {
+      setTestError(e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      setTestLoading(false);
+    }
+  };
 
   return (
     <div className="absolute top-16 right-3 z-20">
@@ -173,6 +219,52 @@ export const DwdTemperatureHealthCheck: React.FC<HealthCheckProps> = ({ visible 
                 Test download (opens in new tab)
               </a>
               {copied && <span className="text-green-500 text-[10px]">Copied!</span>}
+            </div>
+
+            {/* Edge Function Health */}
+            <div className="space-y-2 p-3 rounded bg-muted/30 border border-border">
+              <h4 className="font-medium text-foreground">Edge Function Health</h4>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-[9px] p-2 bg-background rounded border border-border overflow-x-auto whitespace-nowrap">
+                    {healthEndpointUrl}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    onClick={() => handleCopy(healthEndpointUrl)}
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={runHealthTest}
+                  disabled={testLoading}
+                  className="w-full"
+                >
+                  <RefreshCw className={`h-3 w-3 mr-2 ${testLoading ? 'animate-spin' : ''}`} />
+                  Test Edge Function
+                </Button>
+
+                {(testError || testStatus !== null) && (
+                  <div className="space-y-2">
+                    <div className="text-muted-foreground">
+                      <span className="font-medium text-foreground">HTTP:</span>{' '}
+                      {testStatus ?? '—'}
+                      {testError ? (
+                        <span className="text-destructive"> — {testError}</span>
+                      ) : null}
+                    </div>
+                    <pre className="text-[10px] leading-relaxed bg-background border border-border rounded p-2 overflow-auto max-h-40">
+                      {testJson ? JSON.stringify(testJson, null, 2) : (testRaw ?? '—')}
+                    </pre>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Refetch Button */}

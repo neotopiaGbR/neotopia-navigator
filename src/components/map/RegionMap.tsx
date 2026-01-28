@@ -10,8 +10,7 @@ import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
 import LayersControl from './LayersControl';
 import EcostressDebugOverlay from './EcostressDebugOverlay';
-import EcostressOverlay from './EcostressOverlay';
-
+import EcostressOverlay, { type DebugInfo } from './EcostressOverlay';
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
 const devLog = (tag: string, ...args: unknown[]) => {
@@ -26,7 +25,7 @@ const RegionMap: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
-
+  const [ecostressDebugInfo, setEcostressDebugInfo] = useState<DebugInfo | null>(null);
   const {
     regions,
     setRegions,
@@ -489,16 +488,17 @@ const RegionMap: React.FC = () => {
       {/* Layers Control */}
       <LayersControl />
       
-      {/* Debug Overlay (admin only) */}
-      <EcostressDebugOverlay />
-      
       {/* ECOSTRESS Heat Overlay (deck.gl client-side) */}
       <EcostressOverlay
         map={map.current}
         visible={overlays.ecostress.enabled}
         opacity={overlays.ecostress.opacity / 100}
         cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
+        onDebugInfo={setEcostressDebugInfo}
       />
+      
+      {/* Debug Overlay (admin only) */}
+      <EcostressDebugOverlay debugInfo={ecostressDebugInfo} />
       
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80">

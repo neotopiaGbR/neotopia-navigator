@@ -75,14 +75,28 @@ export function EcostressCompositeOverlay({
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'rendered' | 'error' | 'no_data'>('idle');
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
+  
+  // Stabilize callback refs to prevent infinite loops
+  const onRenderStatusRef = useRef(onRenderStatus);
+  const onMetadataRef = useRef(onMetadata);
+  onRenderStatusRef.current = onRenderStatus;
+  onMetadataRef.current = onMetadata;
+  
+  // Stabilize granule list by tracking count and first granule ID
+  const granuleKey = allGranules 
+    ? `${allGranules.length}-${allGranules[0]?.granule_id || 'none'}`
+    : 'none';
+  
+  // Stabilize bbox by converting to string key
+  const bboxKey = regionBbox ? regionBbox.join(',') : 'none';
 
-  // Create composite when granules change
+  // Create composite when granules change - use stable keys to prevent infinite loops
   useEffect(() => {
     if (!visible || !allGranules || allGranules.length === 0 || !regionBbox) {
       setCompositeResult(null);
       setImageUrl(null);
       setStatus('idle');
-      onMetadata?.(null);
+      onMetadataRef.current?.(null);
       return;
     }
 
@@ -90,7 +104,7 @@ export function EcostressCompositeOverlay({
 
     async function buildComposite() {
       setStatus('loading');
-      onRenderStatus?.('loading', `Erstelle Sommer-Komposit aus ${allGranules!.length} Aufnahmen...`);
+      onRenderStatusRef.current?.('loading', `Erstelle Sommer-Komposit aus ${allGranules!.length} Aufnahmen...`);
       setProgress({ loaded: 0, total: allGranules!.length });
 
       try {
@@ -119,8 +133,8 @@ export function EcostressCompositeOverlay({
 
         if (!result) {
           setStatus('no_data');
-          onRenderStatus?.('no_data', 'Keine gültigen Daten für Komposit nach Qualitätsfilterung');
-          onMetadata?.(null);
+          onRenderStatusRef.current?.('no_data', 'Keine gültigen Daten für Komposit nach Qualitätsfilterung');
+          onMetadataRef.current?.(null);
           return;
         }
 
@@ -144,12 +158,12 @@ export function EcostressCompositeOverlay({
           coverageConfidence: result.metadata.coverageConfidence,
         };
 
-        onMetadata?.(metadata);
+        onMetadataRef.current?.(metadata);
         
         const confidenceLabel = result.metadata.coverageConfidence.level === 'high' ? 'Hoch' 
           : result.metadata.coverageConfidence.level === 'medium' ? 'Mittel' : 'Gering';
         
-        onRenderStatus?.(
+        onRenderStatusRef.current?.(
           'rendered', 
           `Komposit: ${result.stats.successfulGranules} Aufnahmen, ${result.metadata.coverageConfidence.percent}% Abdeckung (${confidenceLabel})`
         );
@@ -167,7 +181,7 @@ export function EcostressCompositeOverlay({
         if (cancelled) return;
         console.error('[EcostressCompositeOverlay] Failed to create composite:', err);
         setStatus('error');
-        onRenderStatus?.('error', err instanceof Error ? err.message : 'Unbekannter Fehler');
+        onRenderStatusRef.current?.('error', err instanceof Error ? err.message : 'Unbekannter Fehler');
       } finally {
         setProgress(null);
       }
@@ -178,7 +192,8 @@ export function EcostressCompositeOverlay({
     return () => {
       cancelled = true;
     };
-  }, [visible, allGranules, regionBbox, aggregationMethod, onRenderStatus, onMetadata]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, granuleKey, bboxKey, aggregationMethod]);
 
   // Manage deck.gl overlay - SINGLE BitmapLayer only
   useEffect(() => {

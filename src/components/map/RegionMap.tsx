@@ -5,7 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useRegion, Region } from '@/contexts/RegionContext';
 import { useMapLayers } from './MapLayersContext';
 import { useMapOverlays } from '@/hooks/useMapOverlays';
-import { useAirTemperature } from '@/hooks/useAirTemperature';
+import { useDwdTemperature } from '@/hooks/useDwdTemperature';
 import { getBasemapStyle } from './basemapStyles';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
@@ -49,8 +49,8 @@ const RegionMap: React.FC = () => {
   // Initialize overlay data fetching
   useMapOverlays();
   
-  // Initialize air temperature data fetching
-  useAirTemperature();
+  // Initialize DWD temperature data fetching (replaces ERA5)
+  useDwdTemperature();
 
   // Fetch regions from Supabase with timeout protection
   const fetchRegions = useCallback(async () => {

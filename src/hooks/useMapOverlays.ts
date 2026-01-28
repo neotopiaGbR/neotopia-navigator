@@ -163,6 +163,7 @@ export function useMapOverlays() {
           granuleId: response.granule_id,
           granuleBounds: response.granule_bounds,
           regionCentroid: response.region_centroid,
+          regionBbox: bbox, // Pass region bbox for client-side intersection check
           qcNotes: response.qc_notes,
           attribution: response.attribution,
           unit: response.value_unit,

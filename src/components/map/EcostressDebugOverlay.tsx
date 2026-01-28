@@ -231,6 +231,20 @@ const EcostressDebugOverlay: React.FC<EcostressDebugOverlayProps> = ({ debugInfo
                   {formatBounds(debugInfo.rasterBounds)}
                 </code>
               </div>
+              
+              <div className="mt-1">
+                <div className="text-muted-foreground">Data Extent (valid pixels):</div>
+                <code className="text-[10px] block mt-0.5 bg-muted p-1 rounded">
+                  {formatBounds(debugInfo.dataExtent)}
+                </code>
+              </div>
+              
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-muted-foreground">Intersects Region:</span>
+                <span className={debugInfo.intersectsRegion ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                  {debugInfo.intersectsRegion ? '✓ Yes' : '✗ No'}
+                </span>
+              </div>
             </div>
           )}
 

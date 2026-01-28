@@ -19,7 +19,8 @@ interface EcostressOverlayProps {
   visible: boolean;
   opacity?: number;
   cogUrl: string | null;
-  onRenderStatus?: (status: 'loading' | 'rendered' | 'error', message?: string) => void;
+  regionBbox?: [number, number, number, number]; // [minLon, minLat, maxLon, maxLat] for intersection check
+  onRenderStatus?: (status: 'loading' | 'rendered' | 'error' | 'no_intersection', message?: string) => void;
   onDebugInfo?: (info: DebugInfo) => void;
 }
 
@@ -28,6 +29,7 @@ export interface DebugInfo {
   proxyStatus: number | null;
   deckCanvasExists: boolean;
   rasterBounds: [number, number, number, number] | null;
+  dataExtent: [number, number, number, number] | null;
   rawBounds: number[] | null;
   crs: string | null;
   minPixel: number | null;
@@ -36,11 +38,13 @@ export interface DebugInfo {
   noDataPixels: number;
   imageWidth: number;
   imageHeight: number;
+  intersectsRegion: boolean;
 }
 
 interface RenderResult {
   imageData: ImageData;
   bounds: [number, number, number, number]; // [west, south, east, north] in WGS84
+  dataExtent: [number, number, number, number] | null; // Actual extent of valid pixels
   rawBounds: number[];
   crs: string | null;
   stats: { min: number; max: number; validPixels: number; noDataPixels: number };
@@ -271,11 +275,15 @@ async function fetchAndRenderCOG(cogUrl: string): Promise<RenderResult> {
   
   const lstData = rasters[0] as Float32Array | Float64Array | Uint16Array;
   
-  // First pass: find actual data range
+  // First pass: find actual data range AND compute valid pixel extent
   let min = Infinity;
   let max = -Infinity;
   let validPixels = 0;
   let noDataPixels = 0;
+  
+  // Track min/max pixel coordinates for valid data extent
+  let minPixelX = Infinity, maxPixelX = -Infinity;
+  let minPixelY = Infinity, maxPixelY = -Infinity;
   
   for (let i = 0; i < lstData.length; i++) {
     const value = lstData[i];
@@ -287,7 +295,32 @@ async function fetchAndRenderCOG(cogUrl: string): Promise<RenderResult> {
       validPixels++;
       if (value < min) min = value;
       if (value > max) max = value;
+      
+      // Track pixel extent
+      const pixelX = i % targetWidth;
+      const pixelY = Math.floor(i / targetWidth);
+      if (pixelX < minPixelX) minPixelX = pixelX;
+      if (pixelX > maxPixelX) maxPixelX = pixelX;
+      if (pixelY < minPixelY) minPixelY = pixelY;
+      if (pixelY > maxPixelY) maxPixelY = pixelY;
     }
+  }
+  
+  // Compute actual data extent in WGS84 coordinates
+  let dataExtent: [number, number, number, number] | null = null;
+  if (validPixels > 0) {
+    const [boundsWest, boundsSouth, boundsEast, boundsNorth] = wgs84Bounds;
+    const boundsWidth = boundsEast - boundsWest;
+    const boundsHeight = boundsNorth - boundsSouth;
+    
+    // Convert pixel extent to geographic extent
+    // Note: Y is inverted (pixel 0 = north)
+    const dataWest = boundsWest + (minPixelX / targetWidth) * boundsWidth;
+    const dataEast = boundsWest + ((maxPixelX + 1) / targetWidth) * boundsWidth;
+    const dataNorth = boundsNorth - (minPixelY / targetHeight) * boundsHeight;
+    const dataSouth = boundsNorth - ((maxPixelY + 1) / targetHeight) * boundsHeight;
+    
+    dataExtent = [dataWest, dataSouth, dataEast, dataNorth];
   }
   
   console.log('[EcostressOverlay] Data range analysis:', {
@@ -298,6 +331,8 @@ async function fetchAndRenderCOG(cogUrl: string): Promise<RenderResult> {
     maxK: max.toFixed(2),
     minC: (min - 273.15).toFixed(1),
     maxC: (max - 273.15).toFixed(1),
+    pixelExtent: validPixels > 0 ? { minX: minPixelX, maxX: maxPixelX, minY: minPixelY, maxY: maxPixelY } : null,
+    dataExtent,
   });
   
   if (validPixels === 0) {
@@ -334,11 +369,13 @@ async function fetchAndRenderCOG(cogUrl: string): Promise<RenderResult> {
     noDataPixels,
     tempRange: `${(min - 273.15).toFixed(1)}°C to ${(max - 273.15).toFixed(1)}°C`,
     wgs84Bounds,
+    dataExtent,
   });
   
   return {
     imageData,
     bounds: wgs84Bounds,
+    dataExtent,
     rawBounds,
     crs,
     stats: { min, max, validPixels, noDataPixels },
@@ -363,18 +400,32 @@ export function EcostressOverlay({
   visible, 
   opacity = 0.7, 
   cogUrl,
+  regionBbox,
   onRenderStatus,
   onDebugInfo,
 }: EcostressOverlayProps) {
   const overlayRef = useRef<MapboxOverlay | null>(null);
   const [renderState, setRenderState] = useState<{
-    status: 'idle' | 'loading' | 'rendered' | 'error';
+    status: 'idle' | 'loading' | 'rendered' | 'error' | 'no_intersection';
     message?: string;
     stats?: RenderResult['stats'];
   }>({ status: 'idle' });
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [bounds, setBounds] = useState<[number, number, number, number] | null>(null);
   const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
+
+  // Helper: check if two bboxes intersect
+  const bboxIntersects = (
+    bbox1: [number, number, number, number],
+    bbox2: [number, number, number, number]
+  ): boolean => {
+    return !(
+      bbox1[2] < bbox2[0] || // bbox1 right < bbox2 left
+      bbox1[0] > bbox2[2] || // bbox1 left > bbox2 right
+      bbox1[3] < bbox2[1] || // bbox1 top < bbox2 bottom
+      bbox1[1] > bbox2[3]    // bbox1 bottom > bbox2 top
+    );
+  };
 
   // Fetch and render COG when cogUrl changes
   useEffect(() => {
@@ -398,6 +449,7 @@ export function EcostressOverlay({
         proxyStatus: null,
         deckCanvasExists: false,
         rasterBounds: null,
+        dataExtent: null,
         rawBounds: null,
         crs: null,
         minPixel: null,
@@ -406,6 +458,7 @@ export function EcostressOverlay({
         noDataPixels: 0,
         imageWidth: 0,
         imageHeight: 0,
+        intersectsRegion: false,
       };
 
       try {
@@ -413,16 +466,24 @@ export function EcostressOverlay({
         
         if (cancelled) return;
 
-        const dataUrl = imageDataToDataUrl(result.imageData);
-        setImageUrl(dataUrl);
-        setBounds(result.bounds);
-        
+        // Check if actual data extent intersects with region
+        let intersectsRegion = true;
+        if (regionBbox && result.dataExtent) {
+          intersectsRegion = bboxIntersects(result.dataExtent, regionBbox);
+          console.log('[EcostressOverlay] Intersection check:', {
+            dataExtent: result.dataExtent,
+            regionBbox,
+            intersectsRegion,
+          });
+        }
+
         // Update debug info
         const fullDebug: DebugInfo = {
           proxyUrl: proxyUrl.substring(0, 80) + '...',
           proxyStatus: 200,
           deckCanvasExists: true,
           rasterBounds: result.bounds,
+          dataExtent: result.dataExtent,
           rawBounds: result.rawBounds,
           crs: result.crs,
           minPixel: result.stats.min,
@@ -431,9 +492,28 @@ export function EcostressOverlay({
           noDataPixels: result.stats.noDataPixels,
           imageWidth: result.imageData.width,
           imageHeight: result.imageData.height,
+          intersectsRegion,
         };
         setDebugInfo(fullDebug);
         onDebugInfo?.(fullDebug);
+
+        if (!intersectsRegion) {
+          // Data exists but doesn't cover the selected region
+          setRenderState({ 
+            status: 'no_intersection', 
+            message: 'Satellitenstreifen trifft die ausgewählte Region nicht',
+            stats: result.stats,
+          });
+          onRenderStatus?.('no_intersection', 'Data swath does not intersect selected region');
+          // Still set bounds/image for optional "show anyway" feature
+          setImageUrl(imageDataToDataUrl(result.imageData));
+          setBounds(result.bounds);
+          return;
+        }
+
+        const dataUrl = imageDataToDataUrl(result.imageData);
+        setImageUrl(dataUrl);
+        setBounds(result.bounds);
         
         setRenderState({ 
           status: 'rendered', 

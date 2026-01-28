@@ -128,13 +128,18 @@ export function useMapOverlays() {
     setOverlayLoading('ecostress', true);
 
     try {
+      // Use June-August of previous year for summer heat data
+      const previousYear = new Date().getFullYear() - 1;
+      const summerDateFrom = `${previousYear}-06-01`;
+      const summerDateTo = `${previousYear}-08-31`;
+      
       const { data, error } = await supabase.functions.invoke('ecostress-latest-tile', {
         body: {
           lat: coords.lat,
           lon: coords.lon,
           region_bbox: bbox,
-          date_from: getDateDaysAgo(365),
-          date_to: new Date().toISOString().split('T')[0],
+          date_from: summerDateFrom,
+          date_to: summerDateTo,
         },
       });
 

@@ -59,40 +59,95 @@ interface EcostressCompositeOverlayProps {
   onMetadata?: (metadata: CompositeMetadata | null) => void;
 }
 
+/**
+ * Convert ImageData to Canvas for BitmapLayer (more reliable than data URLs).
+ * Validates that the canvas is non-empty before returning.
+ */
 function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = imageData.width;
   canvas.height = imageData.height;
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Failed to get canvas context');
+  if (!ctx) throw new Error('[ECOSTRESS] Failed to get canvas 2D context');
   ctx.putImageData(imageData, 0, 0);
+  
+  // Verify canvas dimensions are valid
+  if (canvas.width === 0 || canvas.height === 0) {
+    throw new Error(`[ECOSTRESS] Canvas has zero dimensions: ${canvas.width}x${canvas.height}`);
+  }
+  
   return canvas;
 }
 
-function assertWgs84Bounds(bounds: [number, number, number, number]) {
-  const [w, s, e, n] = bounds;
-  if (![w, s, e, n].every((v) => Number.isFinite(v))) {
-    throw new Error(`ECOSTRESS bounds contain non-finite values: ${JSON.stringify(bounds)}`);
+/**
+ * Validate BitmapLayer bounds format.
+ * deck.gl BitmapLayer expects: [west, south, east, north] (minLon, minLat, maxLon, maxLat)
+ * This is the same as GeoJSON bbox order: [minX, minY, maxX, maxY]
+ */
+function assertBitmapLayerBounds(bounds: [number, number, number, number], label: string = 'bounds') {
+  const [west, south, east, north] = bounds;
+  
+  // Assert array format
+  if (!Array.isArray(bounds) || bounds.length !== 4) {
+    throw new Error(`[ECOSTRESS] ${label} must be [west, south, east, north] array, got: ${JSON.stringify(bounds)}`);
   }
-  if (w < -180 || e > 180 || s < -90 || n > 90) {
-    throw new Error(`ECOSTRESS bounds out of WGS84 range: ${JSON.stringify(bounds)}`);
+  
+  // Assert all values are finite numbers
+  if (![west, south, east, north].every((v) => Number.isFinite(v))) {
+    throw new Error(`[ECOSTRESS] ${label} contains non-finite values: [${west}, ${south}, ${east}, ${north}]`);
   }
-  if (w >= e || s >= n) {
-    throw new Error(`ECOSTRESS bounds invalid (west/east or south/north inverted): ${JSON.stringify(bounds)}`);
+  
+  // Assert WGS84 range
+  if (west < -180 || east > 180) {
+    throw new Error(`[ECOSTRESS] ${label} longitude out of range [-180, 180]: west=${west}, east=${east}`);
   }
+  if (south < -90 || north > 90) {
+    throw new Error(`[ECOSTRESS] ${label} latitude out of range [-90, 90]: south=${south}, north=${north}`);
+  }
+  
+  // Assert west < east and south < north (non-inverted)
+  if (west >= east) {
+    throw new Error(`[ECOSTRESS] ${label} inverted longitude: west=${west} >= east=${east}`);
+  }
+  if (south >= north) {
+    throw new Error(`[ECOSTRESS] ${label} inverted latitude: south=${south} >= north=${north}`);
+  }
+  
+  // Log validated bounds in standard format
+  console.log(`[ECOSTRESS] ✓ ${label} validated: [W=${west.toFixed(4)}, S=${south.toFixed(4)}, E=${east.toFixed(4)}, N=${north.toFixed(4)}]`);
 }
 
-function estimateOpaquePixels(imageData: ImageData, sampleStep = 8): number {
-  // Sample alpha channel (fast) to ensure we actually generated visible pixels.
+/**
+ * Count non-transparent pixels by sampling (fast validation).
+ * Throws if canvas appears completely transparent.
+ */
+function countOpaquePixels(imageData: ImageData, sampleStep = 16): { total: number; opaque: number; ratio: number } {
   const { data, width, height } = imageData;
-  let count = 0;
+  let opaque = 0;
+  let total = 0;
+  
   for (let y = 0; y < height; y += sampleStep) {
     for (let x = 0; x < width; x += sampleStep) {
-      const a = data[(y * width + x) * 4 + 3];
-      if (a > 0) count++;
+      const idx = (y * width + x) * 4;
+      const alpha = data[idx + 3];
+      total++;
+      if (alpha > 0) opaque++;
     }
   }
-  return count;
+  
+  return { total, opaque, ratio: total > 0 ? opaque / total : 0 };
+}
+
+function assertNonEmptyCanvas(imageData: ImageData, sampleStep = 16) {
+  const stats = countOpaquePixels(imageData, sampleStep);
+  
+  console.log(`[ECOSTRESS] Canvas pixel check: ${stats.opaque}/${stats.total} sampled pixels opaque (${(stats.ratio * 100).toFixed(1)}%)`);
+  
+  if (stats.opaque === 0) {
+    throw new Error(`[ECOSTRESS] Canvas is fully transparent! Sampled ${stats.total} pixels, all have alpha=0`);
+  }
+  
+  return stats;
 }
 
 function bboxIntersects(a: [number, number, number, number], b: [number, number, number, number]) {
@@ -166,35 +221,51 @@ export function EcostressCompositeOverlay({
     const debug = import.meta.env.DEV;
     const effectiveOpacity = debug ? 1 : opacity;
 
-    // Hard assertions (fail fast) — never silently render nothing.
-    assertWgs84Bounds(result.bounds);
-    const sampledOpaque = estimateOpaquePixels(result.imageData, 12);
-    if (sampledOpaque === 0) {
-      throw new Error('ECOSTRESS composite produced fully-transparent image (no opaque pixels sampled)');
+    // ═══════════════════════════════════════════════════════════════════════════
+    // HARD ASSERTIONS — fail fast, never silently render nothing
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    // 1. Validate BitmapLayer bounds format: [west, south, east, north]
+    assertBitmapLayerBounds(result.bounds, 'BitmapLayer bounds');
+    
+    // 2. Validate canvas has non-transparent pixels
+    const pixelStats = assertNonEmptyCanvas(result.imageData, 16);
+    
+    // 3. Validate canvas dimensions match ImageData
+    if (imageCanvas.width !== result.imageData.width || imageCanvas.height !== result.imageData.height) {
+      throw new Error(`[ECOSTRESS] Canvas size mismatch: canvas=${imageCanvas.width}x${imageCanvas.height}, imageData=${result.imageData.width}x${result.imageData.height}`);
     }
 
-    // View/bounds sanity logs
+    // ═══════════════════════════════════════════════════════════════════════════
+    // View state validation — verify data intersects viewport
+    // ═══════════════════════════════════════════════════════════════════════════
     try {
       const center = map.getCenter();
       const zoom = map.getZoom();
       const mb = map.getBounds();
       const viewBbox: [number, number, number, number] = [mb.getWest(), mb.getSouth(), mb.getEast(), mb.getNorth()];
-      console.log('[EcostressCompositeOverlay] ViewState vs Bounds', {
-        view: { lon: center.lng, lat: center.lat, zoom },
-        viewBbox,
-        dataBounds: result.bounds,
-        intersects: bboxIntersects(viewBbox, result.bounds),
-        image: { w: result.imageData.width, h: result.imageData.height, sampledOpaque },
-      });
+      const intersects = bboxIntersects(viewBbox, result.bounds);
+      
+      console.log('[EcostressCompositeOverlay] Viewport vs Data bounds:');
+      console.log(`  View:    [W=${viewBbox[0].toFixed(4)}, S=${viewBbox[1].toFixed(4)}, E=${viewBbox[2].toFixed(4)}, N=${viewBbox[3].toFixed(4)}] @ zoom ${zoom.toFixed(1)}`);
+      console.log(`  Data:    [W=${result.bounds[0].toFixed(4)}, S=${result.bounds[1].toFixed(4)}, E=${result.bounds[2].toFixed(4)}, N=${result.bounds[3].toFixed(4)}]`);
+      console.log(`  Intersects: ${intersects ? '✅ YES' : '⚠️ NO (data outside viewport!)'}`);
+      console.log(`  Canvas: ${imageCanvas.width}x${imageCanvas.height}, ${pixelStats.opaque} opaque pixels`);
+      
+      if (!intersects) {
+        console.warn('[EcostressCompositeOverlay] ⚠️ Data bounds do NOT intersect viewport — layer may not be visible at current zoom/pan!');
+      }
     } catch {
-      // ignore
+      // ignore view state errors
     }
     
-    console.log('[EcostressCompositeOverlay] Mounting overlay', {
+    console.log('[EcostressCompositeOverlay] Creating BitmapLayer with:', {
+      boundsFormat: '[west, south, east, north]',
       bounds: result.bounds,
       opacity: effectiveOpacity,
-      imageType: 'canvas',
+      imageType: 'HTMLCanvasElement',
       imageSize: `${imageCanvas.width}x${imageCanvas.height}`,
+      coordinateSystem: 'COORDINATE_SYSTEM.LNGLAT',
     });
 
     try {
@@ -246,22 +317,60 @@ export function EcostressCompositeOverlay({
       map.addControl(overlay as unknown as maplibregl.IControl);
       overlayRef.current = overlay;
       
-      console.log('[EcostressCompositeOverlay] ✅ Overlay mounted successfully');
+      console.log('[EcostressCompositeOverlay] ✅ Overlay mounted successfully with', debugLayers.length > 0 ? 'debug corners' : 'no debug');
 
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Verify deck.gl canvas is correctly sized
+      // A 300x150 canvas indicates the overlay didn't inherit map dimensions
+      // ═══════════════════════════════════════════════════════════════════════════
       if (import.meta.env.DEV) {
-        const canvases = Array.from(document.querySelectorAll('canvas')) as HTMLCanvasElement[];
-        const deckCanvas = canvases.find((c) => (c.id || '').toLowerCase().includes('deck') || String(c.className || '').toLowerCase().includes('deck'));
-        console.log('[EcostressCompositeOverlay] Deck canvas check', {
-          found: !!deckCanvas,
-          w: deckCanvas?.width,
-          h: deckCanvas?.height,
-          id: deckCanvas?.id,
-          className: deckCanvas?.className,
-        });
+        setTimeout(() => {
+          const canvases = Array.from(document.querySelectorAll('canvas')) as HTMLCanvasElement[];
+          const deckCanvas = canvases.find((c) => {
+            const id = (c.id || '').toLowerCase();
+            const cls = String(c.className || '').toLowerCase();
+            return id.includes('deck') || cls.includes('deck') || cls.includes('deckgl');
+          });
+          
+          if (deckCanvas) {
+            const mapCanvas = map.getCanvas();
+            const expectedWidth = mapCanvas?.width || 0;
+            const expectedHeight = mapCanvas?.height || 0;
+            const style = window.getComputedStyle(deckCanvas);
+            
+            const isDefaultSize = deckCanvas.width === 300 && deckCanvas.height === 150;
+            const sizeMismatch = deckCanvas.width !== expectedWidth || deckCanvas.height !== expectedHeight;
+            
+            console.log('[EcostressCompositeOverlay] Deck.gl canvas audit:', {
+              id: deckCanvas.id || '(none)',
+              deckSize: `${deckCanvas.width}x${deckCanvas.height}`,
+              mapSize: `${expectedWidth}x${expectedHeight}`,
+              isDefaultSize: isDefaultSize ? '⚠️ YES (BAD)' : '✅ NO',
+              sizeMismatch: sizeMismatch ? '⚠️ YES' : '✅ NO',
+              display: style.display,
+              visibility: style.visibility,
+              zIndex: style.zIndex,
+            });
+            
+            // If canvas has default dimensions, try to force a resize
+            if (isDefaultSize || sizeMismatch) {
+              console.warn('[EcostressCompositeOverlay] ⚠️ Deck canvas has wrong size — triggering resize...');
+              // Trigger map resize which should propagate to deck overlay
+              map.resize();
+              // Also try forcing deck overlay to redraw
+              if (overlayRef.current) {
+                overlayRef.current.setProps({ layers: [layer, ...debugLayers] });
+              }
+            }
+          } else {
+            console.error('[EcostressCompositeOverlay] ❌ Deck.gl canvas NOT FOUND in DOM!');
+          }
+        }, 150);
       }
+      
       return true;
     } catch (err) {
-      console.error('[EcostressCompositeOverlay] Failed to mount overlay:', err);
+      console.error('[EcostressCompositeOverlay] ❌ Failed to mount overlay:', err);
       return false;
     }
   }, [map, opacity]);
@@ -346,20 +455,24 @@ export function EcostressCompositeOverlay({
           return;
         }
 
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Validate composite result before storing
+        // ═══════════════════════════════════════════════════════════════════════════
+        
+        // 1. Validate bounds format
+        assertBitmapLayerBounds(result.bounds, 'Composite result bounds');
+        
+        // 2. Validate canvas has visible pixels
+        const pixelStats = assertNonEmptyCanvas(result.imageData, 16);
+        console.log(`[EcostressCompositeOverlay] Composite validated: ${pixelStats.opaque}/${pixelStats.total} sampled pixels opaque`);
+        
+        // 3. Convert to Canvas (more reliable than data URL)
+        const canvas = imageDataToCanvas(result.imageData);
+        
         // Store in ref to persist across re-renders
-         // Hard assertions for coordinate contract
-         assertWgs84Bounds(result.bounds);
-
-         const sampledOpaque = estimateOpaquePixels(result.imageData, 12);
-         if (sampledOpaque === 0) {
-           throw new Error('ECOSTRESS composite ImageData appears fully transparent (sampled alpha=0)');
-         }
-
-         // Use a Canvas directly (more robust than data URLs; avoids async image decoding).
-         const canvas = imageDataToCanvas(result.imageData);
         compositeDataRef.current = {
           result,
-           imageCanvas: canvas,
+          imageCanvas: canvas,
           granuleKey,
           bboxKey,
           method: aggregationMethod,

@@ -13,8 +13,12 @@ import LayersControl from './LayersControl';
 import { GlobalLSTOverlay } from './GlobalLSTOverlay';
 import { AirTemperatureOverlay } from './AirTemperatureOverlay';
 import { AirTemperatureLegend } from './AirTemperatureLegend';
+import { DwdTemperatureHealthCheck } from './DwdTemperatureHealthCheck';
 import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
+
+// Show health check panel in development mode only
+const isDev = import.meta.env.DEV;
 
 const devLog = (tag: string, ...args: unknown[]) => {
   if (import.meta.env.DEV) {
@@ -517,6 +521,9 @@ const RegionMap: React.FC = () => {
         loading={airTemperature.loading}
         error={airTemperature.error}
       />
+      
+      {/* DWD TEMPERATURE HEALTH CHECK - Dev/Admin only */}
+      <DwdTemperatureHealthCheck visible={isDev} />
       
       {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
       {mapReady && map.current && heatOverlayEnabled && (

@@ -13,9 +13,9 @@
 import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 
-// Quality thresholds
-export const MAX_CLOUD_PERCENT = 40;  // Discard granules with >40% cloud
-export const MIN_COVERAGE_PERCENT = 60; // Discard granules with <60% coverage
+// Quality thresholds - relaxed for cloudy regions like Central Europe
+export const MAX_CLOUD_PERCENT = 60;  // Discard granules with >60% cloud (was 40%, too strict for Berlin)
+export const MIN_COVERAGE_PERCENT = 40; // Discard granules with <40% coverage (was 60%)
 
 // LST temperature range (Kelvin) for colorization
 export const LST_MIN_K = 260; // -13°C (winter)

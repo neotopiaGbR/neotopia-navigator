@@ -11,10 +11,9 @@
  * - Explicit WGS84 bounds validation via centralized boundsValidation
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { 
-  initDeckOverlay, 
   updateLayer, 
   removeLayer, 
   isReady,
@@ -121,7 +120,6 @@ export function EcostressCompositeOverlay({
   const [canvasImage, setCanvasImage] = useState<HTMLCanvasElement | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'rendered' | 'error' | 'no_data'>('idle');
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
-  const initRef = useRef(false);
   
   // Stabilize callback refs to prevent infinite loops
   const onRenderStatusRef = useRef(onRenderStatus);
@@ -137,22 +135,8 @@ export function EcostressCompositeOverlay({
   // Stabilize bbox by converting to string key
   const bboxKey = regionBbox ? regionBbox.join(',') : 'none';
 
-  // Initialize DeckOverlayManager when map is ready
-  useEffect(() => {
-    if (!map || initRef.current) return;
-    
-    const init = () => {
-      initDeckOverlay(map, import.meta.env.DEV);
-      initRef.current = true;
-      console.log('[EcostressCompositeOverlay] DeckOverlayManager initialized');
-    };
-    
-    if (map.isStyleLoaded()) {
-      init();
-    } else {
-      map.once('style.load', init);
-    }
-  }, [map]);
+  // NOTE: DeckOverlayManager is initialized in RegionMap.tsx when map loads
+  // This component just uses updateLayer/removeLayer from the singleton
 
   // Create composite when granules change
   useEffect(() => {

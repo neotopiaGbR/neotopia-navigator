@@ -15,7 +15,6 @@
  * for efficient rendering with deck.gl GeoJsonLayer.
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 import { gunzip } from 'https://deno.land/x/compress@v0.4.5/mod.ts';
 
 const corsHeaders = {

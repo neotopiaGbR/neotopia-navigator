@@ -111,16 +111,15 @@ export function GlobalLSTOverlay({ map, visible, opacity = 0.6 }: GlobalLSTOverl
         }
       }
     };
-  }, [map, visible, opacity]); // Re-run when visibility or opacity changes
+  }, [map]); // Only depend on map instance
 
-  // Update opacity when it changes (without re-adding layer)
+  // Update visibility and opacity dynamically without re-adding layer
   useEffect(() => {
     if (!map || !isAddedRef.current) return;
     
     try {
       if (map.getLayer(LAYER_ID)) {
         map.setPaintProperty(LAYER_ID, 'raster-opacity', visible ? opacity : 0);
-        console.log('[GlobalLSTOverlay] Updated opacity:', { visible, opacity });
       }
     } catch (err) {
       console.error('[GlobalLSTOverlay] Failed to update opacity:', err);

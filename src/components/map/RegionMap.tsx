@@ -12,8 +12,8 @@ import { RefreshCw } from 'lucide-react';
 import LayersControl from './LayersControl';
 import { GlobalLSTOverlay } from './GlobalLSTOverlay';
 import { AirTemperatureOverlay } from './AirTemperatureOverlay';
+import { AirTemperatureLegend } from './AirTemperatureLegend';
 import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
-
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
 const devLog = (tag: string, ...args: unknown[]) => {
@@ -505,6 +505,16 @@ const RegionMap: React.FC = () => {
           data={airTemperature.data}
         />
       )}
+      
+      {/* AIR TEMPERATURE LEGEND - Always visible when layer enabled */}
+      <AirTemperatureLegend
+        visible={airTemperature.enabled && !airTemperature.loading && !!airTemperature.data}
+        normalization={airTemperature.metadata?.normalization || null}
+        aggregation={airTemperature.aggregation}
+        year={airTemperature.metadata?.year}
+        period={airTemperature.metadata?.period}
+        pointCount={airTemperature.metadata?.pointCount}
+      />
       
       {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
       {mapReady && map.current && heatOverlayEnabled && (

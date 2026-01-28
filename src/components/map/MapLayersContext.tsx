@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, ReactNode, useCallback } fr
 
 export type BasemapType = 'map' | 'satellite' | 'terrain';
 export type AggregationMethod = 'median' | 'p90' | 'max';
+export type AirTempAggregation = 'daily_max' | 'daily_mean';
 
 export interface OverlayConfig {
   enabled: boolean;
@@ -21,6 +22,45 @@ export interface HeatLayerTierConfig {
   aggregationMethod: AggregationMethod; // Median or P90 for extreme heat
 }
 
+export interface AirTemperatureConfig {
+  enabled: boolean;
+  opacity: number;
+  loading: boolean;
+  error: string | null;
+  aggregation: AirTempAggregation;
+  data: AirTemperatureData | null;
+  metadata: AirTemperatureMetadata | null;
+}
+
+export interface AirTemperatureData {
+  grid: Array<{ lat: number; lon: number; value: number }>;
+  bounds: [number, number, number, number];
+  year: number;
+  aggregation: AirTempAggregation;
+  period: string;
+  resolution_km: number;
+  normalization: {
+    p5: number;
+    p95: number;
+    min: number;
+    max: number;
+  };
+}
+
+export interface AirTemperatureMetadata {
+  year: number;
+  aggregation: AirTempAggregation;
+  period: string;
+  resolution_km: number;
+  normalization: {
+    p5: number;
+    p95: number;
+    min: number;
+    max: number;
+  };
+  pointCount: number;
+}
+
 export interface MapLayersState {
   basemap: BasemapType;
   overlays: {
@@ -28,19 +68,29 @@ export interface MapLayersState {
     floodRisk: OverlayConfig;
   };
   heatLayers: HeatLayerTierConfig;
+  airTemperature: AirTemperatureConfig;
 }
+
+type OverlayType = 'ecostress' | 'floodRisk';
 
 interface MapLayersContextType extends MapLayersState {
   setBasemap: (basemap: BasemapType) => void;
-  toggleOverlay: (overlay: 'ecostress' | 'floodRisk') => void;
-  setOverlayOpacity: (overlay: 'ecostress' | 'floodRisk', opacity: number) => void;
-  setOverlayLoading: (overlay: 'ecostress' | 'floodRisk', loading: boolean) => void;
-  setOverlayError: (overlay: 'ecostress' | 'floodRisk', error: string | null) => void;
-  setOverlayMetadata: (overlay: 'ecostress' | 'floodRisk', metadata: Record<string, unknown>) => void;
+  toggleOverlay: (overlay: OverlayType) => void;
+  setOverlayOpacity: (overlay: OverlayType, opacity: number) => void;
+  setOverlayLoading: (overlay: OverlayType, loading: boolean) => void;
+  setOverlayError: (overlay: OverlayType, error: string | null) => void;
+  setOverlayMetadata: (overlay: OverlayType, metadata: Record<string, unknown>) => void;
   // Heat layer tier controls
   setHeatLayerOpacity: (tier: 'globalLST' | 'ecostress', opacity: number) => void;
   setEcostressMinCoverage: (coverage: number) => void;
   setAggregationMethod: (method: AggregationMethod) => void;
+  // Air temperature layer controls
+  toggleAirTemperature: () => void;
+  setAirTemperatureOpacity: (opacity: number) => void;
+  setAirTemperatureAggregation: (aggregation: AirTempAggregation) => void;
+  setAirTemperatureLoading: (loading: boolean) => void;
+  setAirTemperatureError: (error: string | null) => void;
+  setAirTemperatureData: (data: AirTemperatureData | null) => void;
 }
 
 const defaultOverlay: OverlayConfig = {
@@ -61,6 +111,16 @@ const defaultHeatLayers: HeatLayerTierConfig = {
   aggregationMethod: 'median', // Default to median aggregation
 };
 
+const defaultAirTemperature: AirTemperatureConfig = {
+  enabled: false,
+  opacity: 60,
+  loading: false,
+  error: null,
+  aggregation: 'daily_max',
+  data: null,
+  metadata: null,
+};
+
 const MapLayersContext = createContext<MapLayersContextType | undefined>(undefined);
 
 export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -70,8 +130,9 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
     floodRisk: { ...defaultOverlay },
   });
   const [heatLayers, setHeatLayers] = useState<HeatLayerTierConfig>(defaultHeatLayers);
+  const [airTemperature, setAirTemperature] = useState<AirTemperatureConfig>(defaultAirTemperature);
 
-  const toggleOverlay = useCallback((overlay: 'ecostress' | 'floodRisk') => {
+  const toggleOverlay = useCallback((overlay: OverlayType) => {
     setOverlays((prev) => ({
       ...prev,
       [overlay]: {
@@ -108,18 +169,18 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
   }, []);
 
   const setOverlayError = useCallback((overlay: 'ecostress' | 'floodRisk', error: string | null) => {
-    setOverlays((prev) => ({
-      ...prev,
-      [overlay]: {
-        ...prev[overlay],
-        error,
-        loading: false,
-      },
-    }));
-  }, []);
+      setOverlays((prev) => ({
+        ...prev,
+        [overlay]: {
+          ...prev[overlay],
+          error,
+          loading: false,
+        },
+      }));
+    }, []);
 
   const setOverlayMetadata = useCallback(
-    (overlay: 'ecostress' | 'floodRisk', metadata: Record<string, unknown>) => {
+    (overlay: OverlayType, metadata: Record<string, unknown>) => {
       setOverlays((prev) => ({
         ...prev,
         [overlay]: {
@@ -163,12 +224,62 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
     }));
   }, []);
 
+  // Air Temperature layer controls
+  const toggleAirTemperature = useCallback(() => {
+    setAirTemperature((prev) => ({
+      ...prev,
+      enabled: !prev.enabled,
+      error: null,
+    }));
+  }, []);
+
+  const setAirTemperatureOpacity = useCallback((opacity: number) => {
+    setAirTemperature((prev) => ({
+      ...prev,
+      opacity: Math.max(0, Math.min(100, opacity)),
+    }));
+  }, []);
+
+  const setAirTemperatureAggregation = useCallback((aggregation: AirTempAggregation) => {
+    setAirTemperature((prev) => ({
+      ...prev,
+      aggregation,
+      data: null, // Reset data to trigger refetch
+    }));
+  }, []);
+
+  const setAirTemperatureLoading = useCallback((loading: boolean) => {
+    setAirTemperature((prev) => ({ ...prev, loading }));
+  }, []);
+
+  const setAirTemperatureError = useCallback((error: string | null) => {
+    setAirTemperature((prev) => ({ ...prev, error, loading: false }));
+  }, []);
+
+  const setAirTemperatureData = useCallback((data: AirTemperatureData | null) => {
+    setAirTemperature((prev) => ({
+      ...prev,
+      data,
+      loading: false,
+      error: null,
+      metadata: data ? {
+        year: data.year,
+        aggregation: data.aggregation,
+        period: data.period,
+        resolution_km: data.resolution_km,
+        normalization: data.normalization,
+        pointCount: data.grid.length,
+      } : null,
+    }));
+  }, []);
+
   return (
     <MapLayersContext.Provider
       value={{
         basemap,
         overlays,
         heatLayers,
+        airTemperature,
         setBasemap,
         toggleOverlay,
         setOverlayOpacity,
@@ -178,6 +289,12 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
         setHeatLayerOpacity,
         setEcostressMinCoverage,
         setAggregationMethod,
+        toggleAirTemperature,
+        setAirTemperatureOpacity,
+        setAirTemperatureAggregation,
+        setAirTemperatureLoading,
+        setAirTemperatureError,
+        setAirTemperatureData,
       }}
     >
       {children}

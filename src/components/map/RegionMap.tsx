@@ -5,11 +5,13 @@ import { supabase } from '@/integrations/supabase/client';
 import { useRegion, Region } from '@/contexts/RegionContext';
 import { useMapLayers } from './MapLayersContext';
 import { useMapOverlays } from '@/hooks/useMapOverlays';
+import { useAirTemperature } from '@/hooks/useAirTemperature';
 import { getBasemapStyle } from './basemapStyles';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
 import LayersControl from './LayersControl';
 import { GlobalLSTOverlay } from './GlobalLSTOverlay';
+import { AirTemperatureOverlay } from './AirTemperatureOverlay';
 import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
 
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
@@ -36,16 +38,19 @@ const RegionMap: React.FC = () => {
     setHoveredRegionId,
   } = useRegion();
 
-  const { basemap, overlays, heatLayers } = useMapLayers();
+  const { basemap, overlays, heatLayers, airTemperature } = useMapLayers();
   
   // Check if any overlay is enabled (to adjust region fill style)
-  const anyOverlayEnabled = overlays.ecostress.enabled || overlays.floodRisk.enabled;
+  const anyOverlayEnabled = overlays.ecostress.enabled || overlays.floodRisk.enabled || airTemperature.enabled;
   
   // Heat layer enabled = show both global LST and optionally ECOSTRESS
   const heatOverlayEnabled = overlays.ecostress.enabled;
   
   // Initialize overlay data fetching
   useMapOverlays();
+  
+  // Initialize air temperature data fetching
+  useAirTemperature();
 
   // Fetch regions from Supabase with timeout protection
   const fetchRegions = useCallback(async () => {
@@ -490,6 +495,16 @@ const RegionMap: React.FC = () => {
       
       {/* Layers Control */}
       <LayersControl />
+      
+      {/* AIR TEMPERATURE LAYER - Germany only, renders BELOW other heat layers */}
+      {mapReady && map.current && airTemperature.enabled && (
+        <AirTemperatureOverlay
+          map={map.current}
+          visible={airTemperature.enabled}
+          opacity={airTemperature.opacity / 100}
+          data={airTemperature.data}
+        />
+      )}
       
       {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
       {mapReady && map.current && heatOverlayEnabled && (

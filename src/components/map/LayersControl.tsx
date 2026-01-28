@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, ThermometerSun } from 'lucide-react';
+import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, ThermometerSun, Wind } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { useMapLayers, BasemapType, AggregationMethod } from './MapLayersContext';
+import { useMapLayers, BasemapType, AggregationMethod, AirTempAggregation } from './MapLayersContext';
 import HeatLayerProvenancePanel from './HeatLayerProvenancePanel';
 
 interface BasemapOption {
@@ -56,6 +56,22 @@ const OVERLAY_INFO = {
     ],
     disclaimer: 'Indikative Risikodarstellung. Für amtliche Hochwasserkarten lokale Behörden konsultieren.',
   },
+  airTemperature: {
+    name: 'Lufttemperatur (2 m) – Sommer-Durchschnitt',
+    description: 'Regionaler thermischer Kontext aus Klimareanalyse (ERA5-Land, ~9 km Auflösung)',
+    attribution: 'Copernicus Climate Change Service (C3S) / ERA5-Land',
+    license: 'CC BY 4.0',
+    legendLabel: 'Lufttemperatur (°C)',
+    legendColors: [
+      { color: 'rgb(70, 130, 180)', label: '< 18°C' },
+      { color: 'rgb(100, 180, 160)', label: '20°C' },
+      { color: 'rgb(140, 200, 120)', label: '22°C' },
+      { color: 'rgb(220, 200, 80)', label: '24°C' },
+      { color: 'rgb(230, 150, 60)', label: '26°C' },
+      { color: 'rgb(200, 80, 60)', label: '> 28°C' },
+    ],
+    tooltipNote: 'Diese Ebene zeigt bodennahe Lufttemperatur (2 m) aus Klimareanalyse. Es handelt sich nicht um eine Straßen-Hotspot-Karte.',
+  },
 };
 
 // NearestCandidate and BestRejectedGranule interfaces moved to HeatLayerProvenancePanel
@@ -67,11 +83,15 @@ const LayersControl: React.FC = () => {
     basemap,
     overlays,
     heatLayers,
+    airTemperature,
     setBasemap,
     toggleOverlay,
     setOverlayOpacity,
     setHeatLayerOpacity,
     setAggregationMethod,
+    toggleAirTemperature,
+    setAirTemperatureOpacity,
+    setAirTemperatureAggregation,
   } = useMapLayers();
 
   return (
@@ -160,6 +180,15 @@ const LayersControl: React.FC = () => {
                 onAggregationMethodChange={setAggregationMethod}
               />
 
+              {/* Air Temperature Overlay - Germany only */}
+              <AirTemperatureControl
+                info={OVERLAY_INFO.airTemperature}
+                config={airTemperature}
+                onToggle={toggleAirTemperature}
+                onOpacityChange={setAirTemperatureOpacity}
+                onAggregationChange={setAirTemperatureAggregation}
+              />
+
               {/* Flood Risk Overlay */}
               <OverlayControl
                 id="floodRisk"
@@ -179,6 +208,12 @@ const LayersControl: React.FC = () => {
                   <>
                     <br />
                     ECOSTRESS: {OVERLAY_INFO.ecostress.attribution}
+                  </>
+                )}
+                {airTemperature.enabled && (
+                  <>
+                    <br />
+                    Lufttemperatur: {OVERLAY_INFO.airTemperature.attribution}
                   </>
                 )}
                 {overlays.floodRisk.enabled && (
@@ -621,6 +656,191 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
               })}
             </p>
           )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// === AIR TEMPERATURE OVERLAY CONTROL (Germany only) ===
+interface AirTemperatureControlProps {
+  info: typeof OVERLAY_INFO.airTemperature;
+  config: {
+    enabled: boolean;
+    opacity: number;
+    loading: boolean;
+    error: string | null;
+    aggregation: AirTempAggregation;
+    metadata: {
+      year?: number;
+      period?: string;
+      normalization?: { p5: number; p95: number };
+      pointCount?: number;
+    } | null;
+  };
+  onToggle: () => void;
+  onOpacityChange: (value: number) => void;
+  onAggregationChange: (value: AirTempAggregation) => void;
+}
+
+const AirTemperatureControl: React.FC<AirTemperatureControlProps> = ({
+  info,
+  config,
+  onToggle,
+  onOpacityChange,
+  onAggregationChange,
+}) => {
+  const [showLegend, setShowLegend] = useState(false);
+
+  return (
+    <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+      {/* Header Row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Wind className="h-4 w-4 text-teal-500" />
+          <div>
+            <span className="text-sm font-medium">{info.name}</span>
+            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-600 dark:text-teal-400 font-medium">
+              Deutschland
+            </span>
+          </div>
+        </div>
+        <Switch checked={config.enabled} onCheckedChange={onToggle} />
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-muted-foreground">{info.description}</p>
+
+      {/* Error State */}
+      {config.error && (
+        <div className="flex items-center gap-2 p-2 rounded bg-destructive/10 text-destructive text-xs">
+          <AlertCircle className="h-3 w-3 shrink-0" />
+          <span>{config.error}</span>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {config.loading && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="h-3 w-3 border-2 border-teal-500/30 border-t-teal-500 rounded-full animate-spin" />
+          <span>Lade ERA5-Land Daten für Deutschland...</span>
+        </div>
+      )}
+
+      {/* Controls when enabled */}
+      {config.enabled && !config.loading && (
+        <div className="space-y-3 pt-2">
+          {/* Aggregation Toggle */}
+          <div className="space-y-1.5">
+            <span className="text-xs text-muted-foreground">Aggregationsmethode:</span>
+            <div className="flex gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onAggregationChange('daily_max')}
+                    className={cn(
+                      'flex-1 px-2 py-1.5 text-xs rounded border transition-colors',
+                      config.aggregation === 'daily_max'
+                        ? 'bg-teal-500 text-white border-teal-500'
+                        : 'bg-background border-border hover:bg-muted'
+                    )}
+                  >
+                    Tagesmax
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs max-w-[200px]">
+                    Mittelwert der täglichen Höchsttemperaturen (Juni–August)
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onAggregationChange('daily_mean')}
+                    className={cn(
+                      'flex-1 px-2 py-1.5 text-xs rounded border transition-colors',
+                      config.aggregation === 'daily_mean'
+                        ? 'bg-teal-500 text-white border-teal-500'
+                        : 'bg-background border-border hover:bg-muted'
+                    )}
+                  >
+                    Tagesmittel
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs max-w-[200px]">
+                    Mittelwert der 24-Stunden-Durchschnittstemperatur
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+
+          {/* Opacity Slider */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Deckkraft</span>
+              <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
+            </div>
+            <Slider
+              value={[config.opacity]}
+              min={0}
+              max={100}
+              step={5}
+              onValueChange={([val]) => onOpacityChange(val)}
+              className="w-full"
+            />
+          </div>
+
+          {/* Metadata */}
+          {config.metadata && (
+            <div className="p-2 rounded bg-teal-500/10 border border-teal-500/30 text-xs space-y-1">
+              <p className="text-teal-600 dark:text-teal-400 font-medium">
+                ✓ Sommer {config.metadata.year}: Jun–Aug
+              </p>
+              <p className="text-muted-foreground">
+                {config.aggregation === 'daily_max' ? 'Mittel Tagesmax' : 'Mittel Tagesmittel'} · ~9 km Auflösung
+              </p>
+              {config.metadata.normalization && (
+                <p className="text-muted-foreground">
+                  Skala: {config.metadata.normalization.p5.toFixed(1)}°C – {config.metadata.normalization.p95.toFixed(1)}°C (P5–P95)
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Legend Toggle */}
+          <button
+            onClick={() => setShowLegend(!showLegend)}
+            className="flex items-center gap-1 text-xs text-teal-600 dark:text-teal-400 hover:underline"
+          >
+            <Info className="h-3 w-3" />
+            {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+          </button>
+
+          {/* Legend */}
+          {showLegend && (
+            <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+              <span className="text-xs font-medium">{info.legendLabel}</span>
+              <div className="flex flex-wrap gap-1">
+                {info.legendColors.map((item, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <div
+                      className="w-4 h-3 rounded-sm border border-border/50"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tooltip note */}
+          <p className="text-[10px] text-muted-foreground/70 italic">
+            {info.tooltipNote}
+          </p>
         </div>
       )}
     </div>

@@ -41,6 +41,27 @@ interface DwdResponse {
   message?: string;
 }
 
+// Bump this when the backend response format/behavior changes to invalidate client cache.
+const CLIENT_CACHE_VERSION = 2;
+
+/**
+ * Sanity check: ensure bounds look like Germany/central Europe.
+ * Rejects clearly wrong projections (e.g. lat ~76 / lon ~-23).
+ */
+function looksLikeGermanyBounds(bounds: [number, number, number, number]): boolean {
+  const [minLon, minLat, maxLon, maxLat] = bounds;
+  return (
+    Number.isFinite(minLon) &&
+    Number.isFinite(minLat) &&
+    Number.isFinite(maxLon) &&
+    Number.isFinite(maxLat) &&
+    minLat > 40 &&
+    maxLat < 62 &&
+    minLon > -15 &&
+    maxLon < 35
+  );
+}
+
 export function useDwdTemperature() {
   const {
     airTemperature,
@@ -49,26 +70,7 @@ export function useDwdTemperature() {
     setAirTemperatureData,
   } = useMapLayers();
 
-  // Bump this when the backend response format/behavior changes to invalidate client cache.
-  const CLIENT_CACHE_VERSION = 2;
-
   const lastFetchRef = useRef<{ aggregation?: AirTempAggregation; cacheVersion?: number }>({});
-
-  const looksLikeGermanyBounds = useCallback((bounds: [number, number, number, number]) => {
-    const [minLon, minLat, maxLon, maxLat] = bounds;
-    // Very forgiving sanity box around Germany/central Europe.
-    // Reject clearly wrong projections (e.g. lat ~76 / lon ~-23).
-    return (
-      Number.isFinite(minLon) &&
-      Number.isFinite(minLat) &&
-      Number.isFinite(maxLon) &&
-      Number.isFinite(maxLat) &&
-      minLat > 40 &&
-      maxLat < 62 &&
-      minLon > -15 &&
-      maxLon < 35
-    );
-  }, []);
 
   const fetchDwdTemperature = useCallback(async (opts?: { force?: boolean }) => {
     const { enabled, aggregation, data } = airTemperature;
@@ -157,7 +159,7 @@ export function useDwdTemperature() {
     } finally {
       setAirTemperatureLoading(false);
     }
-  }, [airTemperature.enabled, airTemperature.aggregation, airTemperature.data, setAirTemperatureLoading, setAirTemperatureError, setAirTemperatureData, looksLikeGermanyBounds]);
+  }, [airTemperature.enabled, airTemperature.aggregation, airTemperature.data, setAirTemperatureLoading, setAirTemperatureError, setAirTemperatureData]);
 
   // Fetch when enabled or aggregation changes
   useEffect(() => {

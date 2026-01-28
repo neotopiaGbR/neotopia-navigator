@@ -75,9 +75,9 @@ Deno.serve(async (req) => {
     // Calculate tile ID (simple grid)
     const tileId = `${Math.floor(lat)}_${Math.floor(lon)}`;
     
-    // Date window - ECOSTRESS has sparse coverage, use wider window
+    // Date window - ECOSTRESS has sparse coverage, use full year to ensure data availability
     const endDate = date_to || new Date().toISOString().split('T')[0];
-    const startDate = date_from || getDateDaysAgo(60); // Expand to 60 days for better coverage
+    const startDate = date_from || getDateDaysAgo(365); // Full year for guaranteed coverage
 
     // Check cache first
     const { data: cachedData } = await supabase

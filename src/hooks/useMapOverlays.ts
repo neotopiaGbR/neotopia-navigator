@@ -102,7 +102,8 @@ export function useMapOverlays() {
         body: {
           lat: coords.lat,
           lon: coords.lon,
-          date_from: getDateDaysAgo(21),
+          // Use full year range to ensure data availability
+          date_from: getDateDaysAgo(365),
           date_to: new Date().toISOString().split('T')[0],
         },
       });

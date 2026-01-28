@@ -17,6 +17,8 @@ import { AirTemperatureLegend } from './AirTemperatureLegend';
 import { DwdTemperatureHealthCheck } from './DwdTemperatureHealthCheck';
 import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
 import { OverlayDiagnosticsPanel } from './OverlayDiagnosticsPanel';
+import { initDeckOverlay, finalizeDeckOverlay } from './DeckOverlayManager';
+
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
 // Show health check panel in development mode only
@@ -141,6 +143,14 @@ const RegionMap: React.FC = () => {
 
       map.current.on('load', () => {
         devLog('MAP_READY', {});
+        
+        // CRITICAL: Initialize deck.gl overlay manager ONCE when map loads
+        // This ensures a single MapboxOverlay instance exists for ALL layers
+        if (map.current) {
+          initDeckOverlay(map.current, import.meta.env.DEV);
+          devLog('DECK_OVERLAY_INITIALIZED', {});
+        }
+        
         setMapReady(true);
       });
 
@@ -152,6 +162,8 @@ const RegionMap: React.FC = () => {
     }
 
     return () => {
+      // CRITICAL: Cleanup deck.gl overlay manager before removing map
+      finalizeDeckOverlay();
       map.current?.remove();
       map.current = null;
       setMapReady(false);
@@ -169,13 +181,17 @@ const RegionMap: React.FC = () => {
     
     // Restore position after style change
     map.current.once('style.load', () => {
-      map.current?.setCenter(currentCenter);
-      map.current?.setZoom(currentZoom);
-      // Re-add regions after style change
-      addRegionsToMap();
-      // Re-add overlays
-      updateOverlays();
+      if (!map.current) return;
+      
+      map.current.setCenter(currentCenter);
+      map.current.setZoom(currentZoom);
+      
+      // CRITICAL: Re-initialize deck.gl overlay after style change
+      // Style changes destroy WebGL context, overlay must be re-attached
+      initDeckOverlay(map.current, import.meta.env.DEV);
+      devLog('DECK_OVERLAY_REINITIALIZED_AFTER_STYLE_CHANGE', {});
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basemap, mapReady]);
 
   // Add regions to map

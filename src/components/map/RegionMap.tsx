@@ -488,8 +488,8 @@ const RegionMap: React.FC = () => {
       {/* Layers Control */}
       <LayersControl />
       
-      {/* ECOSTRESS Heat Overlay (deck.gl client-side) - only render when map is ready */}
-      {mapReady && map.current && (
+      {/* ECOSTRESS Heat Overlay (deck.gl client-side) - only render when status is "match" */}
+      {mapReady && map.current && overlays.ecostress.metadata?.status === 'match' && (
         <EcostressOverlay
           map={map.current}
           visible={overlays.ecostress.enabled}

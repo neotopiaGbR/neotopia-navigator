@@ -10,16 +10,29 @@ import { supabase } from '@/integrations/supabase/client';
 import { useMapLayers } from '@/components/map/MapLayersContext';
 import { useRegion } from '@/contexts/RegionContext';
 
+interface NearestCandidate {
+  granule_id: string;
+  datetime: string;
+  bounds: [number, number, number, number];
+  distance_km: number;
+  cloud_cover?: number;
+}
+
 interface EcostressResponse {
-  status: 'ok' | 'no_data' | 'auth_required' | 'error';
+  status: 'match' | 'no_coverage' | 'no_data' | 'auth_required' | 'error';
   cog_url?: string;
   cloud_mask_url?: string;
   datetime?: string;
+  granule_id?: string;
+  granule_bounds?: [number, number, number, number];
+  region_centroid?: { lat: number; lon: number };
   qc_notes?: string;
+  message?: string;
   attribution?: string;
   value_unit?: string;
   colormap_suggestion?: string;
   error?: string;
+  nearest_candidate?: NearestCandidate;
 }
 
 interface FloodRiskLayer {
@@ -64,7 +77,6 @@ export function useMapOverlays() {
     });
     
     if (!selectedRegion) {
-      // Only show error if overlay is enabled but no region selected
       if (overlays.ecostress.enabled) {
         setOverlayError('ecostress', 'Bitte wählen Sie eine Region auf der Karte aus');
       }
@@ -76,20 +88,22 @@ export function useMapOverlays() {
       return;
     }
 
-    // Get centroid from geometry
+    // Get centroid and bbox from geometry
     const coords = getCentroidFromGeom(selectedRegion.geom);
+    const bbox = getBboxFromGeom(selectedRegion.geom);
+    
     if (!coords) {
       setOverlayError('ecostress', 'Region-Geometrie ungültig');
       return;
     }
 
-    // Check if we already fetched for this region
     const fetchKey = `${coords.lat.toFixed(3)},${coords.lon.toFixed(3)}`;
-    console.log('[useMapOverlays] ECOSTRESS query coordinates:', { 
-      lat: coords.lat.toFixed(4), 
-      lon: coords.lon.toFixed(4), 
+    console.log('[useMapOverlays] ECOSTRESS query:', { 
+      centroid: { lat: coords.lat.toFixed(4), lon: coords.lon.toFixed(4) },
+      bbox,
       regionId: selectedRegion.id,
     });
+    
     if (lastFetchRef.current.ecostress === fetchKey) {
       console.log('[useMapOverlays] Skipping ECOSTRESS fetch - already fetched for this region');
       return;
@@ -102,7 +116,7 @@ export function useMapOverlays() {
         body: {
           lat: coords.lat,
           lon: coords.lon,
-          // Use full year range to ensure data availability
+          region_bbox: bbox,
           date_from: getDateDaysAgo(365),
           date_to: new Date().toISOString().split('T')[0],
         },
@@ -113,14 +127,10 @@ export function useMapOverlays() {
       }
 
       const response = data as EcostressResponse;
+      console.log('[useMapOverlays] ECOSTRESS response:', { status: response.status, hasMatch: !!response.cog_url });
 
       if (response.status === 'auth_required') {
         setOverlayError('ecostress', 'ECOSTRESS erfordert Earthdata-Zugangsdaten in Supabase Secrets');
-        return;
-      }
-
-      if (response.status === 'no_data') {
-        setOverlayError('ecostress', response.qc_notes || 'Keine ECOSTRESS-Daten für diese Region verfügbar');
         return;
       }
 
@@ -129,18 +139,42 @@ export function useMapOverlays() {
         return;
       }
 
-      // Success
-      lastFetchRef.current.ecostress = fetchKey;
-      setOverlayMetadata('ecostress', {
-        cogUrl: response.cog_url,
-        cloudMaskUrl: response.cloud_mask_url,
-        acquisitionDatetime: response.datetime,
-        qcNotes: response.qc_notes,
-        attribution: response.attribution,
-        unit: response.value_unit,
-        colormap: response.colormap_suggestion,
-      });
-      setOverlayLoading('ecostress', false);
+      // NO COVERAGE - granule doesn't intersect region
+      if (response.status === 'no_coverage' || response.status === 'no_data') {
+        lastFetchRef.current.ecostress = fetchKey;
+        setOverlayMetadata('ecostress', {
+          status: 'no_coverage',
+          message: response.message || 'Keine ECOSTRESS-Daten für diese Region verfügbar',
+          nearestCandidate: response.nearest_candidate || null,
+          attribution: response.attribution,
+        });
+        setOverlayLoading('ecostress', false);
+        return;
+      }
+
+      // MATCH - granule intersects region
+      if (response.status === 'match') {
+        lastFetchRef.current.ecostress = fetchKey;
+        setOverlayMetadata('ecostress', {
+          status: 'match',
+          cogUrl: response.cog_url,
+          cloudMaskUrl: response.cloud_mask_url,
+          acquisitionDatetime: response.datetime,
+          granuleId: response.granule_id,
+          granuleBounds: response.granule_bounds,
+          regionCentroid: response.region_centroid,
+          qcNotes: response.qc_notes,
+          attribution: response.attribution,
+          unit: response.value_unit,
+          colormap: response.colormap_suggestion,
+        });
+        setOverlayLoading('ecostress', false);
+        return;
+      }
+
+      // Unknown status - treat as error
+      setOverlayError('ecostress', 'Unbekannter Antwortstatus');
+      
     } catch (err) {
       console.error('[useMapOverlays] ECOSTRESS error:', err);
       setOverlayError(
@@ -159,7 +193,6 @@ export function useMapOverlays() {
     });
     
     if (!selectedRegion) {
-      // Only show error if overlay is enabled but no region selected
       if (overlays.floodRisk.enabled) {
         setOverlayError('floodRisk', 'Bitte wählen Sie eine Region auf der Karte aus');
       }
@@ -203,7 +236,6 @@ export function useMapOverlays() {
         return;
       }
 
-      // Check if we got layers
       if (!response.layers || response.layers.length === 0) {
         setOverlayError('floodRisk', response.message || 'Keine Hochwasser-Layer verfügbar');
         return;
@@ -235,7 +267,6 @@ export function useMapOverlays() {
   useEffect(() => {
     if (!overlays.ecostress.enabled) return;
 
-    // Clear existing debounce
     if (debounceRef.current.ecostress) {
       clearTimeout(debounceRef.current.ecostress);
     }
@@ -308,6 +339,43 @@ function getCentroidFromGeom(geom: GeoJSON.Geometry): { lat: number; lon: number
     }
 
     return null;
+  } catch {
+    return null;
+  }
+}
+
+// Utility to get bounding box from GeoJSON geometry
+function getBboxFromGeom(geom: GeoJSON.Geometry): [number, number, number, number] | null {
+  try {
+    let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+
+    function processCoords(coords: number[]) {
+      if (coords[0] < minLon) minLon = coords[0];
+      if (coords[0] > maxLon) maxLon = coords[0];
+      if (coords[1] < minLat) minLat = coords[1];
+      if (coords[1] > maxLat) maxLat = coords[1];
+    }
+
+    if (geom.type === 'Point') {
+      processCoords(geom.coordinates);
+    } else if (geom.type === 'Polygon') {
+      for (const ring of geom.coordinates) {
+        for (const coord of ring) {
+          processCoords(coord);
+        }
+      }
+    } else if (geom.type === 'MultiPolygon') {
+      for (const polygon of geom.coordinates) {
+        for (const ring of polygon) {
+          for (const coord of ring) {
+            processCoords(coord);
+          }
+        }
+      }
+    }
+
+    if (minLon === Infinity) return null;
+    return [minLon, minLat, maxLon, maxLat];
   } catch {
     return null;
   }

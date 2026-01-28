@@ -38,7 +38,8 @@ function hashToSeed(input: string): number {
 }
 
 async function fetchJsonWithRetry(url: string, maxRetries = 3) {
-  const timeoutMs = 12_000;
+  // Multi-location responses can be large; allow more time before aborting.
+  const timeoutMs = 30_000;
   let lastErr: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -163,64 +164,63 @@ Deno.serve(async (req) => {
 
     console.log(`[ERA5] Sampling ${sampledPoints.length} points (step=${sampleStep})`);
 
-    // Fetch data in parallel batches (throttled to avoid rate limiting)
-    const batchSize = 8;
+    // Fetch data using Open-Meteo multi-location mode (comma-separated latitude/longitude lists)
+    // This dramatically reduces request count and avoids rate-limit dropouts that were
+    // disproportionately removing late-processed (northern) points.
+    const chunkSize = 150;
     const results: GridPoint[] = [];
-    
-    for (let i = 0; i < sampledPoints.length; i += batchSize) {
-      const batch = sampledPoints.slice(i, i + batchSize);
-      
-      const batchPromises = batch.map(async (point) => {
-        try {
-          const url = `https://archive-api.open-meteo.com/v1/archive?` +
-            `latitude=${point.lat}&longitude=${point.lon}` +
-            `&start_date=${year}-06-01&end_date=${year}-08-31` +
-            `&daily=temperature_2m_max,temperature_2m_mean` +
-            `&timezone=Europe/Berlin`;
 
-          const data = await fetchJsonWithRetry(url, 3);
-          
-          if (!data.daily) {
-            return null;
-          }
-          
-          // Calculate summer mean of daily max or daily mean
-          const values = aggregation === 'daily_max' 
-            ? data.daily.temperature_2m_max 
-            : data.daily.temperature_2m_mean;
-          
-          if (!values || values.length === 0) {
-            return null;
-          }
-          
-          // Filter out null values and calculate mean
-          const validValues = values.filter((v: number | null) => v !== null) as number[];
-          if (validValues.length === 0) {
-            return null;
-          }
-          
-          const meanValue = validValues.reduce((a: number, b: number) => a + b, 0) / validValues.length;
-          
-          return {
-            lat: point.lat,
-            lon: point.lon,
-            value: Math.round(meanValue * 10) / 10, // Round to 1 decimal
-          };
-        } catch (err) {
-          console.warn(`[ERA5] Error for ${point.lat},${point.lon}:`, err instanceof Error ? err.message : err);
-          return null;
+    for (let i = 0; i < sampledPoints.length; i += chunkSize) {
+      const chunk = sampledPoints.slice(i, i + chunkSize);
+
+      const latList = chunk.map((p) => p.lat).join(',');
+      const lonList = chunk.map((p) => p.lon).join(',');
+
+      const url = `https://archive-api.open-meteo.com/v1/archive?` +
+        `latitude=${latList}&longitude=${lonList}` +
+        `&start_date=${year}-06-01&end_date=${year}-08-31` +
+        `&daily=temperature_2m_max,temperature_2m_mean` +
+        `&timezone=Europe/Berlin`;
+
+      try {
+        const payload = await fetchJsonWithRetry(url, 3);
+        const responses = Array.isArray(payload) ? payload : [payload];
+
+        for (let idx = 0; idx < responses.length; idx++) {
+          const r = responses[idx];
+          const daily = r?.daily;
+          if (!daily) continue;
+
+          const values = aggregation === 'daily_max'
+            ? daily.temperature_2m_max
+            : daily.temperature_2m_mean;
+          if (!values || values.length === 0) continue;
+
+          const validValues = (values as Array<number | null>).filter((v) => v !== null) as number[];
+          if (validValues.length === 0) continue;
+
+          const meanValue = validValues.reduce((a, b) => a + b, 0) / validValues.length;
+
+          // Prefer coordinates echoed by Open-Meteo, fallback to chunk ordering
+          const lat = typeof r?.latitude === 'number' ? r.latitude : chunk[idx]?.lat;
+          const lon = typeof r?.longitude === 'number' ? r.longitude : chunk[idx]?.lon;
+          if (typeof lat !== 'number' || typeof lon !== 'number') continue;
+
+          results.push({
+            lat,
+            lon,
+            value: Math.round(meanValue * 10) / 10,
+          });
         }
-      });
-      
-      const batchResults = await Promise.all(batchPromises);
-      results.push(...batchResults.filter((r): r is GridPoint => r !== null));
+      } catch (err) {
+        console.warn(`[ERA5] Chunk error (${i}-${i + chunk.length}):`, err instanceof Error ? err.message : err);
+      }
 
-      // Small delay between batches to reduce upstream rate limiting
-      await sleep(120);
-      
-      // Progress log
-      if (i % (batchSize * 5) === 0) {
-        console.log(`[ERA5] Progress: ${i + batchSize}/${sampledPoints.length} points`);
+      // Light throttling between chunks
+      await sleep(100);
+
+      if (i % (chunkSize * 5) === 0) {
+        console.log(`[ERA5] Progress: ${Math.min(i + chunkSize, sampledPoints.length)}/${sampledPoints.length} points (chunks)`);
       }
     }
 

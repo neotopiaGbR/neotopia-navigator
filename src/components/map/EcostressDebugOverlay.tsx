@@ -4,10 +4,11 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Bug, RefreshCw, X, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
+import { Bug, RefreshCw, X, CheckCircle, AlertTriangle, XCircle, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useMapLayers } from './MapLayersContext';
 import { useAuth } from '@/contexts/AuthContext';
+import type { DebugInfo } from './EcostressOverlay';
 
 interface ProxyRequest {
   url: string;
@@ -18,7 +19,11 @@ interface ProxyRequest {
   error?: string;
 }
 
-const EcostressDebugOverlay: React.FC = () => {
+interface EcostressDebugOverlayProps {
+  debugInfo?: DebugInfo | null;
+}
+
+const EcostressDebugOverlay: React.FC<EcostressDebugOverlayProps> = ({ debugInfo }) => {
   const { overlays } = useMapLayers();
   const { profile } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
@@ -83,7 +88,34 @@ const EcostressDebugOverlay: React.FC = () => {
     setSummary({ success: 0, partial: 0, error: 0 });
   };
 
+  // Check for deck canvas
+  const checkDeckCanvas = useCallback(() => {
+    const canvas = document.querySelector('canvas.deck-canvas') as HTMLCanvasElement;
+    return canvas ? {
+      exists: true,
+      width: canvas.width,
+      height: canvas.height,
+      visible: canvas.style.display !== 'none' && canvas.style.visibility !== 'hidden',
+    } : { exists: false, width: 0, height: 0, visible: false };
+  }, []);
+
+  const [deckCanvasInfo, setDeckCanvasInfo] = useState(checkDeckCanvas());
+  
+  useEffect(() => {
+    if (isOpen) {
+      const interval = setInterval(() => {
+        setDeckCanvasInfo(checkDeckCanvas());
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [isOpen, checkDeckCanvas]);
+
   if (!isAdmin || !isEnabled) return null;
+
+  const formatBounds = (bounds: [number, number, number, number] | number[] | null) => {
+    if (!bounds || bounds.length < 4) return 'N/A';
+    return `[${bounds[0].toFixed(4)}, ${bounds[1].toFixed(4)}, ${bounds[2].toFixed(4)}, ${bounds[3].toFixed(4)}]`;
+  };
 
   return (
     <>
@@ -105,9 +137,9 @@ const EcostressDebugOverlay: React.FC = () => {
 
       {/* Debug Panel */}
       {isOpen && (
-        <div className="absolute top-12 left-3 z-20 w-96 max-h-[60vh] bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden">
+        <div className="absolute top-12 left-3 z-20 w-[420px] max-h-[70vh] bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 bg-yellow-100 dark:bg-yellow-900/30 border-b border-border">
-            <h3 className="text-sm font-semibold">ECOSTRESS Proxy Diagnostics</h3>
+            <h3 className="text-sm font-semibold">ECOSTRESS Debug Panel</h3>
             <div className="flex gap-1">
               <Button variant="ghost" size="icon" className="h-6 w-6" onClick={clearHistory}>
                 <RefreshCw className="h-3 w-3" />
@@ -137,20 +169,85 @@ const EcostressDebugOverlay: React.FC = () => {
             </div>
           </div>
 
+          {/* Deck.gl Canvas Status */}
+          <div className="px-4 py-2 border-b border-border bg-muted/30">
+            <div className="flex items-center gap-2 text-xs">
+              <MapPin className="h-3 w-3" />
+              <span className="font-medium">Deck.gl Canvas:</span>
+              {deckCanvasInfo.exists ? (
+                <span className="text-green-600">
+                  ✓ {deckCanvasInfo.width}x{deckCanvasInfo.height} 
+                  {deckCanvasInfo.visible ? ' (visible)' : ' (hidden!)'}
+                </span>
+              ) : (
+                <span className="text-red-600">✗ Not found in DOM</span>
+              )}
+            </div>
+          </div>
+
+          {/* Render Debug Info */}
+          {debugInfo && (
+            <div className="px-4 py-2 border-b border-border text-xs space-y-1">
+              <div className="font-medium text-sm mb-2">Render State</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                <div>
+                  <span className="text-muted-foreground">Proxy Status:</span>
+                  <span className={debugInfo.proxyStatus === 200 || debugInfo.proxyStatus === 206 ? 'text-green-600 ml-1' : 'text-red-600 ml-1'}>
+                    {debugInfo.proxyStatus || 'N/A'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">CRS:</span>
+                  <span className="ml-1">{debugInfo.crs || 'Unknown'}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Image:</span>
+                  <span className="ml-1">{debugInfo.imageWidth}x{debugInfo.imageHeight}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Valid px:</span>
+                  <span className="ml-1 text-green-600">{debugInfo.validPixels.toLocaleString()}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Min K:</span>
+                  <span className="ml-1">{debugInfo.minPixel?.toFixed(2) || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Max K:</span>
+                  <span className="ml-1">{debugInfo.maxPixel?.toFixed(2) || 'N/A'}</span>
+                </div>
+              </div>
+              
+              <div className="mt-2">
+                <div className="text-muted-foreground">Raw Bounds (native CRS):</div>
+                <code className="text-[10px] block mt-0.5 bg-muted p-1 rounded">
+                  {formatBounds(debugInfo.rawBounds as [number, number, number, number] | null)}
+                </code>
+              </div>
+              
+              <div className="mt-1">
+                <div className="text-muted-foreground">WGS84 Bounds (lon/lat):</div>
+                <code className="text-[10px] block mt-0.5 bg-muted p-1 rounded">
+                  {formatBounds(debugInfo.rasterBounds)}
+                </code>
+              </div>
+            </div>
+          )}
+
           {/* COG URL */}
           {overlays.ecostress.metadata?.cogUrl && (
             <div className="px-4 py-2 border-b border-border bg-muted/30">
               <p className="text-[10px] text-muted-foreground break-all">
-                <strong>COG:</strong> {String(overlays.ecostress.metadata.cogUrl).substring(0, 80)}...
+                <strong>COG:</strong> {String(overlays.ecostress.metadata.cogUrl).substring(0, 100)}...
               </p>
             </div>
           )}
 
           {/* Request Log */}
-          <div className="max-h-48 overflow-y-auto">
+          <div className="max-h-40 overflow-y-auto">
             {requests.length === 0 ? (
-              <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-                Enable heat overlay to see proxy requests
+              <div className="px-4 py-4 text-center text-sm text-muted-foreground">
+                Waiting for proxy requests...
               </div>
             ) : (
               <div className="divide-y divide-border">
@@ -186,10 +283,11 @@ const EcostressDebugOverlay: React.FC = () => {
           {/* Verification Instructions */}
           <div className="px-4 py-3 border-t border-border bg-muted/20">
             <p className="text-[10px] text-muted-foreground">
-              <strong>Verification:</strong> Check DevTools → Network for <code>ecostress-proxy</code> requests.
-              <br />✓ <strong>206 Partial Content</strong> = Range requests working (COG)
-              <br />✓ <strong>200 OK</strong> = Full file fetched
-              <br />✗ <strong>4xx/5xx</strong> = Auth or fetch error
+              <strong>Checklist:</strong>
+              <br />✓ Proxy returns 200/206
+              <br />✓ WGS84 bounds look correct (lon ~13, lat ~52 for Berlin)
+              <br />✓ Deck canvas exists and is visible
+              <br />✓ Valid pixels {'>'} 0
             </p>
           </div>
         </div>

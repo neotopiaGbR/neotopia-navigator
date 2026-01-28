@@ -124,8 +124,12 @@ export function useDwdTemperature() {
 
       // Sanity check: if projection is broken, the overlay renders far away ("no data shown").
       if (!looksLikeGermanyBounds(response.data.bounds)) {
+        const sample = response.data.grid?.[0];
         throw new Error(
-          'DWD data returned implausible coordinates (projection mismatch). Please redeploy the latest get-dwd-temperature function and click refresh.'
+          `DWD data returned implausible coordinates (projection mismatch). ` +
+          `bounds=${JSON.stringify(response.data.bounds)} ` +
+          (sample ? `sample={lat:${sample.lat},lon:${sample.lon}} ` : '') +
+          `→ deploy the updated get-dwd-temperature function and retry.`
         );
       }
 

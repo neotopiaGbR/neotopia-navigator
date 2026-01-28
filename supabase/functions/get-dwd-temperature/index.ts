@@ -47,6 +47,16 @@ proj4Any.defs(
   '+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +units=m +no_defs'
 );
 
+// Some DWD/related grid products are published in UTM. We auto-detect the CRS
+// via corner reprojection and fall back gracefully.
+// Ref: https://epsg.io/25832 , https://epsg.io/25833
+proj4Any.defs('EPSG:25832', '+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs');
+proj4Any.defs('EPSG:25833', '+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs');
+
+type SourceCrs = 'EPSG:3035' | 'EPSG:25832' | 'EPSG:25833';
+
+const SOURCE_CRS_CANDIDATES: SourceCrs[] = ['EPSG:3035', 'EPSG:25832', 'EPSG:25833'];
+
 interface GridMetadata {
   ncols: number;
   nrows: number;
@@ -72,12 +82,74 @@ interface RequestBody {
 }
 
 /**
- * Accurate EPSG:3035 (ETRS89 / LAEA Europe) → WGS84 (EPSG:4326)
+ * Project from a known source CRS → WGS84 (EPSG:4326)
  */
-function epsg3035ToWgs84(x: number, y: number): { lat: number; lon: number } {
+function projectToWgs84(sourceCrs: SourceCrs, x: number, y: number): { lat: number; lon: number } {
   // proj4 returns [lon, lat]
-  const [lon, lat] = proj4Any('EPSG:3035', 'EPSG:4326', [x, y]) as [number, number];
+  const [lon, lat] = proj4Any(sourceCrs, 'EPSG:4326', [x, y]) as [number, number];
   return { lat, lon };
+}
+
+function looksLikeGermanyBounds(bounds: [number, number, number, number]): boolean {
+  const [minLon, minLat, maxLon, maxLat] = bounds;
+  return (
+    Number.isFinite(minLon) &&
+    Number.isFinite(minLat) &&
+    Number.isFinite(maxLon) &&
+    Number.isFinite(maxLat) &&
+    // very forgiving box around central Europe
+    minLat > 40 &&
+    maxLat < 62 &&
+    minLon > -15 &&
+    maxLon < 35
+  );
+}
+
+function detectSourceCrs(metadata: GridMetadata): { sourceCrs: SourceCrs; bounds: [number, number, number, number] } {
+  const xMin = metadata.xllcorner;
+  const yMin = metadata.yllcorner;
+  const xMax = metadata.xllcorner + metadata.ncols * metadata.cellsize;
+  const yMax = metadata.yllcorner + metadata.nrows * metadata.cellsize;
+
+  const corners: Array<[number, number]> = [
+    [xMin, yMin],
+    [xMin, yMax],
+    [xMax, yMin],
+    [xMax, yMax],
+  ];
+
+  const tried: Array<{ crs: SourceCrs; bounds?: [number, number, number, number] }> = [];
+
+  for (const crs of SOURCE_CRS_CANDIDATES) {
+    try {
+      const pts = corners.map(([x, y]) => projectToWgs84(crs, x, y));
+      const lons = pts.map(p => p.lon);
+      const lats = pts.map(p => p.lat);
+      const bounds: [number, number, number, number] = [
+        Math.min(...lons),
+        Math.min(...lats),
+        Math.max(...lons),
+        Math.max(...lats),
+      ];
+      tried.push({ crs, bounds });
+      if (looksLikeGermanyBounds(bounds)) {
+        return { sourceCrs: crs, bounds };
+      }
+    } catch {
+      tried.push({ crs });
+    }
+  }
+
+  console.warn('[DWD] CRS auto-detect failed. Tried:', tried);
+  // Default to the documented CRS but keep bounds computed from it for transparency.
+  const fallbackPts = corners.map(([x, y]) => projectToWgs84('EPSG:3035', x, y));
+  const fallbackBounds: [number, number, number, number] = [
+    Math.min(...fallbackPts.map(p => p.lon)),
+    Math.min(...fallbackPts.map(p => p.lat)),
+    Math.max(...fallbackPts.map(p => p.lon)),
+    Math.max(...fallbackPts.map(p => p.lat)),
+  ];
+  return { sourceCrs: 'EPSG:3035', bounds: fallbackBounds };
 }
 
 /**
@@ -146,7 +218,8 @@ function parseAsciiGrid(text: string): { metadata: GridMetadata; data: number[][
 function gridToCells(
   metadata: GridMetadata, 
   data: number[][], 
-  sampleStep: number = 1
+  sampleStep: number = 1,
+  sourceCrs: SourceCrs = 'EPSG:3035'
 ): { cells: GridCell[]; stats: { min: number; max: number; p5: number; p95: number; mean: number } } {
   const cells: GridCell[] = [];
   const validValues: number[] = [];
@@ -171,7 +244,12 @@ function gridToCells(
       const y = metadata.yllcorner + ((data.length - 1 - row) + 0.5) * metadata.cellsize;
       
       // Transform to WGS84
-      const { lat, lon } = epsg3035ToWgs84(x, y);
+      const { lat, lon } = projectToWgs84(sourceCrs, x, y);
+
+      // Guard against projection glitches poisoning bounds and rendering.
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        continue;
+      }
       
       cells.push({
         x,
@@ -268,20 +346,14 @@ Deno.serve(async (req) => {
     // Parse ASCII grid
     const { metadata, data } = parseAsciiGrid(text);
     console.log(`[DWD] Parsed grid: ${metadata.ncols}x${metadata.nrows}, cellsize=${metadata.cellsize}m`);
+
+    // Detect CRS + bounds robustly (prevents "renders off-map" failures)
+    const { sourceCrs, bounds } = detectSourceCrs(metadata);
+    console.log(`[DWD] CRS detected: ${sourceCrs}, bounds: [${bounds.map(v => v.toFixed(4)).join(', ')}]`);
     
     // Convert to cells with sampling
-    const { cells, stats } = gridToCells(metadata, data, sampleStep);
+    const { cells, stats } = gridToCells(metadata, data, sampleStep, sourceCrs);
     console.log(`[DWD] Extracted ${cells.length} cells, temp range: ${stats.min.toFixed(1)}°C to ${stats.max.toFixed(1)}°C`);
-    
-    // Calculate bounds in WGS84
-    const lons = cells.map(c => c.lon);
-    const lats = cells.map(c => c.lat);
-    const bounds: [number, number, number, number] = [
-      Math.min(...lons),
-      Math.min(...lats),
-      Math.max(...lons),
-      Math.max(...lats),
-    ];
     
     return new Response(JSON.stringify({
       status: 'ok',
@@ -294,6 +366,7 @@ Deno.serve(async (req) => {
         period: `${year}-06-01 to ${year}-08-31`,
         resolution_km: 1,
         cellsize_m: metadata.cellsize * sampleStep, // Effective resolution after sampling
+        crs_used: sourceCrs,
         normalization: {
           p5: Math.round(stats.p5 * 10) / 10,
           p95: Math.round(stats.p95 * 10) / 10,

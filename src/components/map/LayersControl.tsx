@@ -725,7 +725,7 @@ const AirTemperatureControl: React.FC<AirTemperatureControlProps> = ({
       {config.loading && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <div className="h-3 w-3 border-2 border-teal-500/30 border-t-teal-500 rounded-full animate-spin" />
-          <span>Lade ERA5-Land Daten für Deutschland...</span>
+          <span>Lade DWD HYRAS-DE Daten für Deutschland...</span>
         </div>
       )}
 
@@ -799,14 +799,19 @@ const AirTemperatureControl: React.FC<AirTemperatureControlProps> = ({
           {config.metadata && (
             <div className="p-2 rounded bg-teal-500/10 border border-teal-500/30 text-xs space-y-1">
               <p className="text-teal-600 dark:text-teal-400 font-medium">
-                ✓ Sommer {config.metadata.year}: Jun–Aug
+                ✓ Sommer {config.metadata.year}: Jun–Aug (HYRAS-DE)
               </p>
               <p className="text-muted-foreground">
-                {config.aggregation === 'daily_max' ? 'Mittel Tagesmax' : 'Mittel Tagesmittel'} · ~9 km Auflösung
+                {config.aggregation === 'daily_max' ? 'Mittel Tagesmax' : 'Mittel Tagesmittel'} · 1 km Auflösung
               </p>
               {config.metadata.normalization && (
                 <p className="text-muted-foreground">
                   Skala: {config.metadata.normalization.p5.toFixed(1)}°C – {config.metadata.normalization.p95.toFixed(1)}°C (P5–P95)
+                </p>
+              )}
+              {config.metadata.pointCount && (
+                <p className="text-muted-foreground">
+                  {config.metadata.pointCount.toLocaleString('de-DE')} Gitterzellen
                 </p>
               )}
             </div>
@@ -839,9 +844,12 @@ const AirTemperatureControl: React.FC<AirTemperatureControlProps> = ({
             </div>
           )}
 
-          {/* Tooltip note */}
+          {/* Attribution */}
           <p className="text-[10px] text-muted-foreground/70 italic">
             {info.tooltipNote}
+          </p>
+          <p className="text-[10px] text-muted-foreground/50">
+            © {info.attribution}
           </p>
         </div>
       )}

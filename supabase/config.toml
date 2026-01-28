@@ -33,5 +33,5 @@ verify_jwt = false
 [functions.ecostress-proxy]
 verify_jwt = false
 
-[functions.get-era5-air-temperature]
+[functions.get-dwd-temperature]
 verify_jwt = false

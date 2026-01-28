@@ -1,23 +1,23 @@
 /**
  * Air Temperature Overlay (2m) - Germany Summer Composite
  * 
- * Renders ERA5-Land 2m air temperature as EXPLICIT 0.1° GRID CELL POLYGONS
+ * Renders DWD HYRAS-DE 1km air temperature as GRID CELL POLYGONS
  * using native MapLibre GeoJSON source/layer for reliable rendering.
  *
  * Implementation notes:
- * - Each data point becomes a visible 0.1° (~9km) polygon cell
+ * - Each data point becomes a visible ~3km polygon cell (when sampled)
  * - Cells without data are left transparent (no interpolation)
- * - Uses perceptual blue→yellow→red color scale
+ * - Uses perceptual blue→yellow→red color scale (15°C–32°C)
  * - Germany-wide normalization (P5–P95) from backend
  * 
- * Data source: Copernicus ERA5-Land via Open-Meteo Archive API
- * License: CC BY 4.0 (Copernicus Climate Change Service)
+ * Data source: Deutscher Wetterdienst (DWD), HYRAS-DE
+ * License: CC BY 4.0
  */
 
 import { useEffect, useRef, useMemo } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { AirTemperatureData } from './MapLayersContext';
-import { gridToGeoJson, colorForT } from './airTemperature/gridToGeoJson';
+import { gridToGeoJson, buildTemperatureColorExpression } from './airTemperature/gridToGeoJson';
 
 interface AirTemperatureOverlayProps {
   map: MapLibreMap | null;
@@ -26,9 +26,9 @@ interface AirTemperatureOverlayProps {
   data: AirTemperatureData | null;
 }
 
-const SOURCE_ID = 'era5-air-temperature-source';
-const FILL_LAYER_ID = 'era5-air-temperature-fill';
-const OUTLINE_LAYER_ID = 'era5-air-temperature-outline';
+const SOURCE_ID = 'dwd-air-temperature-source';
+const FILL_LAYER_ID = 'dwd-air-temperature-fill';
+const OUTLINE_LAYER_ID = 'dwd-air-temperature-outline';
 
 export function AirTemperatureOverlay({
   map,
@@ -52,24 +52,8 @@ export function AirTemperatureOverlay({
     return geojson;
   }, [data]);
 
-  // Build color expression for MapLibre fill-color based on the 't' property
-  const buildColorExpression = (): any => {
-    // MapLibre expression: interpolate colors based on 't' value (0-1)
-    // Using the same color stops as gridToGeoJson.ts
-    return [
-      'interpolate',
-      ['linear'],
-      ['get', 't'],
-      0.0, 'rgb(49, 54, 149)',    // Deep blue (cold)
-      0.2, 'rgb(69, 117, 180)',   // Blue
-      0.35, 'rgb(116, 173, 209)', // Cyan-blue
-      0.5, 'rgb(171, 217, 233)',  // Light cyan
-      0.6, 'rgb(254, 224, 144)',  // Light yellow
-      0.75, 'rgb(253, 174, 97)',  // Orange
-      0.9, 'rgb(244, 109, 67)',   // Orange-red
-      1.0, 'rgb(215, 48, 39)',    // Red (hot)
-    ];
-  };
+  // Use shared color expression from gridToGeoJson
+  const colorExpression = buildTemperatureColorExpression();
 
   // Add/update the layer
   useEffect(() => {
@@ -105,7 +89,7 @@ export function AirTemperatureOverlay({
           type: 'fill',
           source: SOURCE_ID,
           paint: {
-            'fill-color': buildColorExpression(),
+            'fill-color': colorExpression,
             'fill-opacity': opacity,
           },
         }, beforeLayer);

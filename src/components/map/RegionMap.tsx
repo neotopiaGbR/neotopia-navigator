@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
 import LayersControl from './LayersControl';
 import EcostressDebugOverlay from './EcostressDebugOverlay';
+import EcostressOverlay from './EcostressOverlay';
 
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
@@ -315,57 +316,15 @@ const RegionMap: React.FC = () => {
       }
     }
 
-    // Handle ECOSTRESS LST overlay (server-side COG tiles)
-    const ecostressLayerId = 'ecostress-overlay';
-    const ecostressSourceId = 'ecostress-source';
+    // ECOSTRESS LST overlay is now handled by the EcostressOverlay component
+    // using deck.gl client-side rendering via ecostress-proxy
+    // No server-side tile generation needed
     
     if (overlays.ecostress.enabled && overlays.ecostress.metadata?.cogUrl) {
-      // Remove existing if present
-      if (map.current.getLayer(ecostressLayerId)) {
-        map.current.removeLayer(ecostressLayerId);
-      }
-      if (map.current.getSource(ecostressSourceId)) {
-        map.current.removeSource(ecostressSourceId);
-      }
-      
-      // Build tile URL using our Edge Function proxy
-      const cogUrl = encodeURIComponent(overlays.ecostress.metadata.cogUrl as string);
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://bxchawikvnvxzerlsffs.supabase.co';
-      const tileUrl = `${supabaseUrl}/functions/v1/ecostress-tiles?z={z}&x={x}&y={y}&cog_url=${cogUrl}`;
-      
-      map.current.addSource(ecostressSourceId, {
-        type: 'raster',
-        tiles: [tileUrl],
-        tileSize: 256,
-        attribution: 'NASA LP DAAC / ECOSTRESS',
-      });
-      
-      // Add layer below regions
-      const insertBeforeLayer = map.current.getLayer('regions-fill') ? 'regions-fill' : undefined;
-      map.current.addLayer(
-        {
-          id: ecostressLayerId,
-          type: 'raster',
-          source: ecostressSourceId,
-          paint: {
-            'raster-opacity': overlays.ecostress.opacity / 100,
-          },
-        },
-        insertBeforeLayer
-      );
-      
-      devLog('ECOSTRESS_LAYER_ADDED', { 
+      devLog('ECOSTRESS_ENABLED', { 
         cogUrl: overlays.ecostress.metadata.cogUrl,
         datetime: overlays.ecostress.metadata.acquisitionDatetime,
       });
-    } else {
-      // Remove ECOSTRESS overlay if disabled
-      if (map.current.getLayer(ecostressLayerId)) {
-        map.current.removeLayer(ecostressLayerId);
-      }
-      if (map.current.getSource(ecostressSourceId)) {
-        map.current.removeSource(ecostressSourceId);
-      }
     }
   }, [overlays]);
 
@@ -532,6 +491,15 @@ const RegionMap: React.FC = () => {
       
       {/* Debug Overlay (admin only) */}
       <EcostressDebugOverlay />
+      
+      {/* ECOSTRESS Heat Overlay (deck.gl client-side) */}
+      <EcostressOverlay
+        map={map.current}
+        visible={overlays.ecostress.enabled}
+        opacity={overlays.ecostress.opacity / 100}
+        cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
+        bounds={overlays.ecostress.metadata?.bounds as [number, number, number, number] | undefined}
+      />
       
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80">

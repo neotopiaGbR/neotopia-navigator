@@ -17,6 +17,7 @@ import { AirTemperatureLegend } from './AirTemperatureLegend';
 import { DwdTemperatureHealthCheck } from './DwdTemperatureHealthCheck';
 import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
 import LayerDiagnosticsPanel from './LayerDiagnosticsPanel';
+import DeckRenderProof from './DeckRenderProof';
 
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
@@ -541,14 +542,23 @@ const RegionMap: React.FC = () => {
         />
       )}
       
+      {/* DEV: DECK RENDER PROOF - Binary test for deck.gl pipeline */}
+      {/* If magenta dot + TEST bitmap are visible, deck.gl is working */}
+      {import.meta.env.DEV && mapReady && map.current && overlays.ecostress.enabled && (
+        <DeckRenderProof
+          map={map.current}
+          enabled={overlays.ecostress.enabled}
+        />
+      )}
+      
       {/* TIER 2: ECOSTRESS Summer Composite - SINGLE aggregated layer */}
-      {/* Render when enabled AND we have granule data, regardless of 'match' status */}
-      {mapReady && map.current && overlays.ecostress.enabled && (
+      {/* CRITICAL FIX: Don't gate on metadata.status === 'match' — just use enabled + has granules */}
+      {mapReady && map.current && overlays.ecostress.enabled && overlays.ecostress.metadata?.allGranules && (
         <EcostressCompositeOverlay
           map={map.current}
-          visible={overlays.ecostress.enabled && overlays.ecostress.metadata?.status === 'match'}
+          visible={true} // Explicitly true — visibility is controlled by the enabled check above
           opacity={heatLayers.ecostressOpacity / 100}
-          allGranules={overlays.ecostress.metadata?.allGranules as Array<{
+          allGranules={overlays.ecostress.metadata.allGranules as Array<{
             cog_url: string;
             cloud_mask_url?: string;
             datetime: string;
@@ -557,7 +567,7 @@ const RegionMap: React.FC = () => {
             quality_score: number;
             coverage_percent: number;
             cloud_percent: number;
-          }> | undefined}
+          }>}
           regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
           aggregationMethod={heatLayers.aggregationMethod}
           onMetadata={(metadata) => {

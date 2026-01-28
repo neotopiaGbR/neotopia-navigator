@@ -99,33 +99,57 @@
 
 /* MapLibre + deck.gl overlay hardening
    Ensures deck canvas stays on top of the MapLibre canvas (but below UI overlays).
-   CRITICAL: width/height must be 100% to prevent the 300x150 default canvas bug. */
+   CRITICAL: width/height must be 100% to prevent the 300x150 default canvas bug.
+   z-index: 10 ensures deck renders ABOVE MapLibre canvas but below UI controls. */
 @layer components {
+  /* The MapboxOverlay container and any deck canvas wrapper */
   .maplibregl-map .deckgl-overlay,
-  .maplibregl-map #deckgl-overlay {
+  .maplibregl-map #deckgl-overlay,
+  .maplibregl-map [class*="deckgl"],
+  .maplibregl-map [id*="deckgl"] {
     position: absolute !important;
     inset: 0 !important;
     width: 100% !important;
     height: 100% !important;
-    z-index: 1 !important;
+    z-index: 10 !important;
     pointer-events: none !important;
+    overflow: visible !important;
   }
 
+  /* All deck.gl canvases - match ANY canvas that might be from deck */
   .maplibregl-map canvas.deckgl-canvas,
   .maplibregl-map canvas.deck-canvas,
   .maplibregl-map canvas#deckgl-canvas,
   .maplibregl-map canvas#deck-canvas,
   .maplibregl-map canvas#deckgl-overlay,
-  .maplibregl-map canvas[id*="deck"] {
+  .maplibregl-map canvas[id*="deck"],
+  .maplibregl-map canvas[class*="deck"] {
     position: absolute !important;
     inset: 0 !important;
     width: 100% !important;
     height: 100% !important;
-    z-index: 1 !important;
+    z-index: 10 !important;
     pointer-events: none !important;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
   }
 
+  /* MapLibre's own canvas should be at z-index 0 */
   .maplibregl-map canvas.maplibregl-canvas {
     z-index: 0 !important;
+  }
+  
+  /* Ensure the map container allows overflow for deck canvas positioning */
+  .maplibregl-map {
+    overflow: visible !important;
+  }
+  
+  /* MapboxOverlay control container - ensure it's not clipped */
+  .maplibregl-ctrl-bottom-left,
+  .maplibregl-ctrl-bottom-right,
+  .maplibregl-ctrl-top-left,
+  .maplibregl-ctrl-top-right {
+    z-index: 20 !important;
   }
 }

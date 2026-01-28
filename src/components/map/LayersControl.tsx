@@ -331,12 +331,32 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
                           : 'bg-background border-border hover:bg-muted'
                       )}
                     >
-                      P90 (Extreme)
+                      P90
                     </button>
                   </TooltipTrigger>
                   <TooltipContent>
                     <p className="text-xs max-w-[200px]">
                       90. Perzentil zeigt extreme Hitze-Hotspots
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => onAggregationMethodChange('max')}
+                      className={cn(
+                        'flex-1 px-2 py-1.5 text-xs rounded border transition-colors',
+                        heatLayers.aggregationMethod === 'max'
+                          ? 'bg-red-600 text-white border-red-600'
+                          : 'bg-background border-border hover:bg-muted'
+                      )}
+                    >
+                      Max
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs max-w-[200px]">
+                      Maximum zeigt die heißesten gemessenen Werte
                     </p>
                   </TooltipContent>
                 </Tooltip>

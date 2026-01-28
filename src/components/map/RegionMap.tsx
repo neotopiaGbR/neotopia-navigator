@@ -509,6 +509,16 @@ const RegionMap: React.FC = () => {
           visible={overlays.ecostress.enabled}
           opacity={heatLayers.ecostressOpacity / 100}
           cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
+          allGranules={overlays.ecostress.metadata?.allGranules as Array<{
+            cog_url: string;
+            cloud_mask_url?: string;
+            datetime: string;
+            granule_id: string;
+            granule_bounds: [number, number, number, number];
+            quality_score: number;
+            coverage_percent: number;
+            cloud_percent: number;
+          }> | undefined}
           regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
           onDebugInfo={setEcostressDebugInfo}
         />

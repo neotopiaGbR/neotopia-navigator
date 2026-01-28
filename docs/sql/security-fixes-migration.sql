@@ -6,8 +6,6 @@
 -- 0. CREATE has_role HELPER FUNCTION (MUST RUN FIRST)
 -- =====================================================
 
--- Security definer function to check user role from profiles table
--- Prevents infinite recursion in RLS policies
 CREATE OR REPLACE FUNCTION public.has_role(p_user_id uuid, p_role text)
 RETURNS boolean
 LANGUAGE sql
@@ -23,7 +21,6 @@ AS $$
   );
 $$;
 
--- Grant execute to authenticated users
 GRANT EXECUTE ON FUNCTION public.has_role(uuid, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.has_role(uuid, text) TO service_role;
 
@@ -31,7 +28,6 @@ GRANT EXECUTE ON FUNCTION public.has_role(uuid, text) TO service_role;
 -- 1. ENABLE RLS ON TABLES (Errors)
 -- =====================================================
 
--- data_sources: authenticated read, admin write
 ALTER TABLE public.data_sources ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Authenticated users can read data_sources" ON public.data_sources;
@@ -47,7 +43,6 @@ CREATE POLICY "Admins can manage data_sources"
   USING (public.has_role(auth.uid(), 'admin'))
   WITH CHECK (public.has_role(auth.uid(), 'admin'));
 
--- data_products: authenticated read, admin write
 ALTER TABLE public.data_products ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Authenticated users can read data_products" ON public.data_products;
@@ -63,7 +58,6 @@ CREATE POLICY "Admins can manage data_products"
   USING (public.has_role(auth.uid(), 'admin'))
   WITH CHECK (public.has_role(auth.uid(), 'admin'));
 
--- import_jobs: admin only
 ALTER TABLE public.import_jobs ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Admins can read import_jobs" ON public.import_jobs;
@@ -79,7 +73,6 @@ CREATE POLICY "Admins can manage import_jobs"
   USING (public.has_role(auth.uid(), 'admin'))
   WITH CHECK (public.has_role(auth.uid(), 'admin'));
 
--- grid_regions: authenticated read, service role write
 ALTER TABLE public.grid_regions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Authenticated users can read grid_regions" ON public.grid_regions;
@@ -92,7 +85,6 @@ CREATE POLICY "Authenticated users can read grid_regions"
 -- 2. FIX FUNCTION SEARCH PATH (Warnings)
 -- =====================================================
 
--- Fix handle_new_user
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -106,8 +98,10 @@ BEGIN
 END;
 $$;
 
--- Fix list_datasets (recreate with search_path)
-CREATE OR REPLACE FUNCTION public.list_datasets()
+-- DROP existing list_datasets to allow signature change
+DROP FUNCTION IF EXISTS public.list_datasets();
+
+CREATE FUNCTION public.list_datasets()
 RETURNS TABLE (
   dataset_key text,
   name text,
@@ -138,7 +132,6 @@ AS $$
   ORDER BY name;
 $$;
 
--- Fix get_region_indicators (recreate with search_path)
 CREATE OR REPLACE FUNCTION public.get_region_indicators(p_region_id uuid, p_year integer DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -176,7 +169,6 @@ BEGIN
 END;
 $$;
 
--- Fix ensure_grid_region (recreate with search_path)
 CREATE OR REPLACE FUNCTION public.ensure_grid_region(p_lat double precision, p_lon double precision)
 RETURNS uuid
 LANGUAGE plpgsql
@@ -240,8 +232,8 @@ $$;
 DROP POLICY IF EXISTS "Anyone can read regions" ON public.regions;
 DROP POLICY IF EXISTS "Service role can insert regions" ON public.regions;
 DROP POLICY IF EXISTS "Service role can update regions" ON public.regions;
-
 DROP POLICY IF EXISTS "Authenticated users can read regions" ON public.regions;
+
 CREATE POLICY "Authenticated users can read regions"
   ON public.regions FOR SELECT
   TO authenticated

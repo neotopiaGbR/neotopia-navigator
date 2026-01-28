@@ -433,10 +433,20 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
                 candidatesChecked: config.metadata?.candidatesChecked as number | undefined,
                 message: config.metadata?.message as string | undefined,
                 bestRejected: config.metadata?.bestRejected as any,
+                // Summer composite fields
+                granuleCount: granuleCount,
+                successfulGranules: config.metadata?.successfulGranules as number | undefined,
+                discardedGranules: config.metadata?.discardedGranules as number | undefined,
+                aggregationMethod: heatLayers.aggregationMethod,
+                timeWindow: config.metadata?.timeWindow as { from: string; to: string } | undefined,
+                coverageConfidence: config.metadata?.coverageConfidence as any,
+                p5Temp: config.metadata?.p5Temp as number | undefined,
+                p95Temp: config.metadata?.p95Temp as number | undefined,
               }}
               ecostressLoading={config.loading}
               globalLSTOpacity={heatLayers.globalLSTOpacity}
               ecostressOpacity={heatLayers.ecostressOpacity}
+              aggregationMethod={heatLayers.aggregationMethod}
             />
           )}
 

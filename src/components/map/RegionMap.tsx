@@ -518,7 +518,18 @@ const RegionMap: React.FC = () => {
           }> | undefined}
           regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
           aggregationMethod={heatLayers.aggregationMethod}
-          onMetadata={setCompositeMetadata}
+          onMetadata={(metadata) => {
+            setCompositeMetadata(metadata);
+            // Update overlay metadata with composite results for UI display
+            if (metadata) {
+              // This could be enhanced to sync metadata to context
+              console.log('[RegionMap] Composite metadata:', {
+                confidence: metadata.coverageConfidence.level,
+                granules: metadata.successfulGranules,
+                discarded: metadata.discardedGranules,
+              });
+            }
+          }}
         />
       )}
       

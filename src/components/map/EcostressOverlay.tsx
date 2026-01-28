@@ -501,38 +501,45 @@ export function EcostressOverlay({
         
         // Verify deck canvas exists and is visible
         setTimeout(() => {
-          const deckCanvas = document.querySelector('canvas.deck-canvas') as HTMLCanvasElement;
+          // MapboxOverlay creates canvas with id="deckgl-overlay", not class="deck-canvas"
+          const deckCanvas = document.querySelector('#deckgl-overlay') as HTMLCanvasElement 
+            || document.querySelector('canvas.deck-canvas') as HTMLCanvasElement;
+          
           if (deckCanvas) {
-            console.log('[EcostressOverlay] Deck canvas found:', {
+            console.log('[EcostressOverlay] ✅ Deck canvas found:', {
+              id: deckCanvas.id,
+              className: deckCanvas.className,
               width: deckCanvas.width,
               height: deckCanvas.height,
-              display: deckCanvas.style.display,
-              zIndex: deckCanvas.style.zIndex,
-              parentElement: deckCanvas.parentElement?.className,
+              display: deckCanvas.style.display || 'default',
+              visibility: deckCanvas.style.visibility || 'default',
+              opacity: deckCanvas.style.opacity || 'default',
+              zIndex: deckCanvas.style.zIndex || 'default',
+              position: deckCanvas.style.position || 'default',
             });
             
-            // Ensure proper z-index and visibility
-            deckCanvas.style.pointerEvents = 'none';
-            deckCanvas.style.position = 'absolute';
-            deckCanvas.style.top = '0';
-            deckCanvas.style.left = '0';
+            // Check computed styles
+            const computed = window.getComputedStyle(deckCanvas);
+            console.log('[EcostressOverlay] Computed canvas styles:', {
+              display: computed.display,
+              visibility: computed.visibility,
+              opacity: computed.opacity,
+              zIndex: computed.zIndex,
+              position: computed.position,
+            });
             
             // Update debug info
             if (debugInfo) {
               setDebugInfo({ ...debugInfo, deckCanvasExists: true });
             }
           } else {
-            console.warn('[EcostressOverlay] No deck canvas found in DOM after adding overlay!');
-            // Log all canvases for debugging
+            console.warn('[EcostressOverlay] ❌ No deck canvas found in DOM!');
             const allCanvases = document.querySelectorAll('canvas');
-            console.log('[EcostressOverlay] All canvases in DOM:', Array.from(allCanvases).map(c => ({
-              className: c.className,
-              id: c.id,
-              width: c.width,
-              height: c.height,
+            console.log('[EcostressOverlay] All canvases:', Array.from(allCanvases).map(c => ({
+              id: c.id, className: c.className, width: c.width, height: c.height,
             })));
           }
-        }, 500); // Increased delay to ensure deck.gl has time to create canvas
+        }, 500);
         
       } catch (err) {
         console.error('[EcostressOverlay] Failed to add overlay:', err);

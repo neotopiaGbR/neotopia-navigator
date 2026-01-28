@@ -13,6 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.2.6",
     "@deck.gl/core": "^9.0.38",
     "@deck.gl/geo-layers": "^9.0.38",
     "@deck.gl/layers": "^9.0.38",

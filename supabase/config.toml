@@ -32,3 +32,6 @@ verify_jwt = false
 
 [functions.get-flood-risk-layers]
 verify_jwt = false
+
+[functions.ecostress-proxy]
+verify_jwt = false

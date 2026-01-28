@@ -15,19 +15,15 @@ import { GlobalLSTOverlay } from './GlobalLSTOverlay';
 import { AirTemperatureOverlay } from './AirTemperatureOverlay';
 import { AirTemperatureLegend } from './AirTemperatureLegend';
 import { DwdTemperatureHealthCheck } from './DwdTemperatureHealthCheck';
-import { EcostressCompositeOverlay, type CompositeMetadata } from './ecostress';
 import LayerDiagnosticsPanel from './LayerDiagnosticsPanel';
-import DeckRenderProof from './DeckRenderProof';
+import { DeckOverlayManager } from './DeckOverlayManager';
+import { EcostressLayer, type CompositeMetadata } from './EcostressLayer';
 
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
-
-// Show health check panel in development mode only
 const isDev = import.meta.env.DEV;
 
 const devLog = (tag: string, ...args: unknown[]) => {
-  if (import.meta.env.DEV) {
-    console.log(`[RegionMap:${tag}]`, ...args);
-  }
+  if (isDev) console.log(`[RegionMap:${tag}]`, ...args);
 };
 
 const RegionMap: React.FC = () => {
@@ -38,6 +34,7 @@ const RegionMap: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [compositeMetadata, setCompositeMetadata] = useState<CompositeMetadata | null>(null);
+  
   const {
     regions,
     setRegions,
@@ -49,19 +46,16 @@ const RegionMap: React.FC = () => {
 
   const { basemap, overlays, heatLayers, airTemperature } = useMapLayers();
   
-  // Check if any overlay is enabled (to adjust region fill style)
+  // Check if any overlay is enabled
   const anyOverlayEnabled = overlays.ecostress.enabled || overlays.floodRisk.enabled || airTemperature.enabled;
-  
-  // Heat layer enabled = show both global LST and optionally ECOSTRESS
   const heatOverlayEnabled = overlays.ecostress.enabled;
   
-  // Initialize overlay data fetching
   useMapOverlays();
-  
-  // Initialize DWD temperature data fetching (replaces ERA5)
   useDwdTemperature();
 
-  // Fetch regions from Supabase with timeout protection
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FETCH REGIONS
+  // ═══════════════════════════════════════════════════════════════════════════
   const fetchRegions = useCallback(async () => {
     devLog('REGIONS_FETCH_START', {});
     setLoading(true);
@@ -72,9 +66,7 @@ const RegionMap: React.FC = () => {
     });
 
     try {
-      const fetchPromise = supabase
-        .from('regions')
-        .select('id, name, geom');
+      const fetchPromise = supabase.from('regions').select('id, name, geom');
 
       const { data, error: fetchError } = await Promise.race([
         fetchPromise,
@@ -82,11 +74,7 @@ const RegionMap: React.FC = () => {
       ]) as Awaited<typeof fetchPromise>;
 
       if (fetchError) {
-        devLog('REGIONS_FETCH_ERROR', {
-          code: fetchError.code,
-          message: fetchError.message,
-          hint: fetchError.hint,
-        });
+        devLog('REGIONS_FETCH_ERROR', { code: fetchError.code, message: fetchError.message });
         setError(`Fehler: ${fetchError.message}`);
         setRegions([]);
         return;
@@ -108,10 +96,7 @@ const RegionMap: React.FC = () => {
       setRegions(parsedRegions);
     } catch (err) {
       const isTimeout = err instanceof Error && err.message === 'REGIONS_FETCH_TIMEOUT';
-      devLog('REGIONS_FETCH_ERROR', {
-        type: isTimeout ? 'timeout' : 'network_error',
-        message: err instanceof Error ? err.message : 'Unknown error',
-      });
+      devLog('REGIONS_FETCH_ERROR', { type: isTimeout ? 'timeout' : 'network_error' });
       setError(isTimeout 
         ? 'Zeitüberschreitung beim Laden der Regionen' 
         : 'Netzwerkfehler beim Laden der Regionen'
@@ -122,12 +107,11 @@ const RegionMap: React.FC = () => {
     }
   }, [setRegions]);
 
-  // Initial fetch
-  useEffect(() => {
-    fetchRegions();
-  }, [fetchRegions]);
+  useEffect(() => { fetchRegions(); }, [fetchRegions]);
 
-  // Initialize map
+  // ═══════════════════════════════════════════════════════════════════════════
+  // INITIALIZE MAP
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
@@ -160,7 +144,9 @@ const RegionMap: React.FC = () => {
     };
   }, []);
 
-  // Update basemap when changed
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UPDATE BASEMAP
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (!map.current || !mapReady) return;
     
@@ -169,23 +155,21 @@ const RegionMap: React.FC = () => {
     
     map.current.setStyle(getBasemapStyle(basemap));
     
-    // Restore position after style change
     map.current.once('style.load', () => {
       map.current?.setCenter(currentCenter);
       map.current?.setZoom(currentZoom);
-      // Re-add regions after style change
       addRegionsToMap();
-      // Re-add overlays
       updateOverlays();
     });
   }, [basemap, mapReady]);
 
-  // Add regions to map
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ADD REGIONS TO MAP
+  // ═══════════════════════════════════════════════════════════════════════════
   const addRegionsToMap = useCallback(() => {
     if (!map.current || regions.length === 0) return;
 
     try {
-      // Remove existing source/layers if they exist
       if (map.current.getSource('regions')) {
         if (map.current.getLayer('regions-fill')) map.current.removeLayer('regions-fill');
         if (map.current.getLayer('regions-outline')) map.current.removeLayer('regions-outline');
@@ -198,18 +182,12 @@ const RegionMap: React.FC = () => {
         features: regions.map((region) => ({
           type: 'Feature',
           id: region.id,
-          properties: {
-            id: region.id,
-            name: region.name,
-          },
+          properties: { id: region.id, name: region.name },
           geometry: region.geom,
         })),
       };
 
-      map.current.addSource('regions', {
-        type: 'geojson',
-        data: geojson,
-      });
+      map.current.addSource('regions', { type: 'geojson', data: geojson });
 
       map.current.addLayer({
         id: 'regions-fill',
@@ -236,10 +214,8 @@ const RegionMap: React.FC = () => {
           'line-color': '#00ff00',
           'line-width': [
             'case',
-            ['==', ['get', 'id'], selectedRegionId || ''],
-            3,
-            ['==', ['get', 'id'], hoveredRegionId || ''],
-            2,
+            ['==', ['get', 'id'], selectedRegionId || ''], 3,
+            ['==', ['get', 'id'], hoveredRegionId || ''], 2,
             1,
           ],
         },
@@ -263,41 +239,28 @@ const RegionMap: React.FC = () => {
     }
   }, [regions, selectedRegionId, hoveredRegionId, anyOverlayEnabled]);
 
-  // Update overlays (WMS/XYZ layers)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UPDATE NON-DECK OVERLAYS (WMS/XYZ)
+  // ═══════════════════════════════════════════════════════════════════════════
   const updateOverlays = useCallback(() => {
     if (!map.current) return;
 
-    // Handle Flood Risk overlay (WMS or XYZ)
     const floodLayerId = 'flood-risk-overlay';
     const floodSourceId = 'flood-risk-source';
 
     if (overlays.floodRisk.enabled && overlays.floodRisk.metadata?.layers) {
       const layers = overlays.floodRisk.metadata.layers as any[];
-      // Prefer WMS, then XYZ
-      const activeLayer = layers.find((l) => l.type === 'wms') || layers.find((l) => l.type === 'xyz' || l.key?.includes('gsw'));
+      const activeLayer = layers.find((l) => l.type === 'wms') || layers.find((l) => l.type === 'xyz');
       
       if (activeLayer) {
-        // Remove existing if present
-        if (map.current.getLayer(floodLayerId)) {
-          map.current.removeLayer(floodLayerId);
-        }
-        if (map.current.getSource(floodSourceId)) {
-          map.current.removeSource(floodSourceId);
-        }
+        if (map.current.getLayer(floodLayerId)) map.current.removeLayer(floodLayerId);
+        if (map.current.getSource(floodSourceId)) map.current.removeSource(floodSourceId);
 
         let tilesUrl: string;
-        
         if (activeLayer.type === 'wms' && activeLayer.layer_name) {
-          // WMS source
           tilesUrl = `${activeLayer.url}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=${activeLayer.layer_name}&STYLES=&FORMAT=image/png&TRANSPARENT=true&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256`;
-        } else if (activeLayer.key === 'jrc_gsw_occurrence') {
-          // JRC Global Surface Water - special XYZ pattern
-          tilesUrl = `${activeLayer.url}/{z}/{x}/{y}.png`;
         } else {
-          // Generic XYZ
-          tilesUrl = activeLayer.url.includes('{z}') 
-            ? activeLayer.url 
-            : `${activeLayer.url}/{z}/{x}/{y}.png`;
+          tilesUrl = activeLayer.url.includes('{z}') ? activeLayer.url : `${activeLayer.url}/{z}/{x}/{y}.png`;
         }
 
         map.current.addSource(floodSourceId, {
@@ -307,62 +270,38 @@ const RegionMap: React.FC = () => {
           attribution: activeLayer.attribution,
         });
 
-        // Add layer below regions
-        const insertBeforeLayer = map.current.getLayer('regions-fill') ? 'regions-fill' : undefined;
-        map.current.addLayer(
-          {
-            id: floodLayerId,
-            type: 'raster',
-            source: floodSourceId,
-            paint: {
-              'raster-opacity': overlays.floodRisk.opacity / 100,
-            },
-          },
-          insertBeforeLayer
-        );
+        map.current.addLayer({
+          id: floodLayerId,
+          type: 'raster',
+          source: floodSourceId,
+          paint: { 'raster-opacity': overlays.floodRisk.opacity / 100 },
+        }, map.current.getLayer('regions-fill') ? 'regions-fill' : undefined);
         
-        devLog('FLOOD_LAYER_ADDED', { key: activeLayer.key, url: tilesUrl });
+        devLog('FLOOD_LAYER_ADDED', { key: activeLayer.key });
       }
     } else {
-      // Remove flood overlay if disabled
-      if (map.current.getLayer(floodLayerId)) {
-        map.current.removeLayer(floodLayerId);
-      }
-      if (map.current.getSource(floodSourceId)) {
-        map.current.removeSource(floodSourceId);
-      }
-    }
-
-    // ECOSTRESS Summer Composite is rendered via EcostressCompositeOverlay component
-    // which performs client-side pixel aggregation (median/P90) of all granules
-    // into a single stable heat map layer
-    
-    if (overlays.ecostress.enabled && overlays.ecostress.metadata?.allGranules) {
-      devLog('ECOSTRESS_COMPOSITE_ENABLED', { 
-        granuleCount: (overlays.ecostress.metadata.allGranules as any[])?.length,
-      });
+      if (map.current.getLayer(floodLayerId)) map.current.removeLayer(floodLayerId);
+      if (map.current.getSource(floodSourceId)) map.current.removeSource(floodSourceId);
     }
   }, [overlays]);
 
-  // Effect to add/update regions when ready or overlay mode changes
+  // Effect: Add/update regions
   useEffect(() => {
     if (!map.current || !mapReady || regions.length === 0) return;
     addRegionsToMap();
   }, [regions, mapReady, addRegionsToMap, anyOverlayEnabled]);
 
-  // Effect to update overlays
+  // Effect: Update overlays
   useEffect(() => {
     if (!map.current || !mapReady) return;
-    
-    // Wait for style to be loaded
     if (map.current.isStyleLoaded()) {
       updateOverlays();
     } else {
       map.current.once('style.load', updateOverlays);
     }
-  }, [mapReady, overlays.floodRisk.enabled, overlays.floodRisk.opacity, overlays.floodRisk.metadata, overlays.ecostress.enabled, overlays.ecostress.opacity, overlays.ecostress.metadata, updateOverlays]);
+  }, [mapReady, overlays.floodRisk.enabled, overlays.floodRisk.opacity, overlays.floodRisk.metadata, updateOverlays]);
 
-  // Update paint properties when selection/hover changes
+  // Effect: Update paint properties
   useEffect(() => {
     if (!map.current || !map.current.getLayer('regions-fill')) return;
 
@@ -380,89 +319,60 @@ const RegionMap: React.FC = () => {
 
       map.current.setPaintProperty('regions-outline', 'line-width', [
         'case',
-        ['==', ['get', 'id'], selectedRegionId || ''],
-        3,
-        ['==', ['get', 'id'], hoveredRegionId || ''],
-        2,
+        ['==', ['get', 'id'], selectedRegionId || ''], 3,
+        ['==', ['get', 'id'], hoveredRegionId || ''], 2,
         1,
       ]);
 
-      map.current.setFilter('regions-highlight', [
-        '==',
-        ['get', 'id'],
-        selectedRegionId || '',
-      ]);
+      map.current.setFilter('regions-highlight', ['==', ['get', 'id'], selectedRegionId || '']);
     } catch (err) {
       devLog('PAINT_UPDATE_ERROR', { message: err instanceof Error ? err.message : 'Unknown' });
     }
   }, [selectedRegionId, hoveredRegionId, anyOverlayEnabled]);
 
-  // Mouse interactions
+  // Effect: Mouse interactions
   useEffect(() => {
     if (!map.current || !mapReady) return;
 
     const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
       if (!map.current) return;
-
       try {
-        const features = map.current.queryRenderedFeatures(e.point, {
-          layers: ['regions-fill'],
-        });
-
+        const features = map.current.queryRenderedFeatures(e.point, { layers: ['regions-fill'] });
         if (features.length > 0) {
           map.current.getCanvas().style.cursor = 'pointer';
           const featureId = features[0].properties?.id;
-          if (featureId && featureId !== hoveredRegionId) {
-            setHoveredRegionId(featureId);
-          }
+          if (featureId && featureId !== hoveredRegionId) setHoveredRegionId(featureId);
         } else {
           map.current.getCanvas().style.cursor = '';
-          if (hoveredRegionId) {
-            setHoveredRegionId(null);
-          }
+          if (hoveredRegionId) setHoveredRegionId(null);
         }
-      } catch (err) {
-        // Silently ignore interaction errors
-      }
+      } catch {}
     };
 
     const handleMouseLeave = () => {
-      if (map.current) {
-        map.current.getCanvas().style.cursor = '';
-      }
+      if (map.current) map.current.getCanvas().style.cursor = '';
       setHoveredRegionId(null);
     };
 
     const handleClick = (e: maplibregl.MapMouseEvent) => {
       if (!map.current) return;
-
       try {
-        const features = map.current.queryRenderedFeatures(e.point, {
-          layers: ['regions-fill'],
-        });
-
+        const features = map.current.queryRenderedFeatures(e.point, { layers: ['regions-fill'] });
         if (features.length > 0) {
           const featureId = features[0].properties?.id;
-          if (featureId) {
-            setSelectedRegionId(featureId === selectedRegionId ? null : featureId);
-          }
+          if (featureId) setSelectedRegionId(featureId === selectedRegionId ? null : featureId);
         }
-      } catch (err) {
-        // Silently ignore click errors
-      }
+      } catch {}
     };
 
     const attachListeners = () => {
       if (!map.current?.getLayer('regions-fill')) return;
-      
       map.current.on('mousemove', 'regions-fill', handleMouseMove);
       map.current.on('mouseleave', 'regions-fill', handleMouseLeave);
       map.current.on('click', 'regions-fill', handleClick);
     };
 
-    if (map.current.getLayer('regions-fill')) {
-      attachListeners();
-    }
+    if (map.current.getLayer('regions-fill')) attachListeners();
 
     return () => {
       if (map.current) {
@@ -470,26 +380,21 @@ const RegionMap: React.FC = () => {
           map.current.off('mousemove', 'regions-fill', handleMouseMove);
           map.current.off('mouseleave', 'regions-fill', handleMouseLeave);
           map.current.off('click', 'regions-fill', handleClick);
-        } catch (err) {
-          // Ignore cleanup errors
-        }
+        } catch {}
       }
     };
   }, [mapReady, regions.length, hoveredRegionId, selectedRegionId, setHoveredRegionId, setSelectedRegionId]);
 
-  // Error state with retry button
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
   if (error) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-background">
         <div className="text-center">
           <p className="text-destructive">Fehler beim Laden der Regionen</p>
           <p className="mt-2 text-sm text-muted-foreground">{error}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={fetchRegions}
-          >
+          <Button variant="outline" size="sm" className="mt-4" onClick={fetchRegions}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Erneut versuchen
           </Button>
@@ -505,7 +410,7 @@ const RegionMap: React.FC = () => {
       {/* Layers Control */}
       <LayersControl />
       
-      {/* AIR TEMPERATURE LAYER - Germany only, renders BELOW other heat layers */}
+      {/* AIR TEMPERATURE LAYER - Native MapLibre (not deck.gl) */}
       {mapReady && map.current && airTemperature.enabled && (
         <AirTemperatureOverlay
           map={map.current}
@@ -515,7 +420,7 @@ const RegionMap: React.FC = () => {
         />
       )}
       
-      {/* AIR TEMPERATURE LEGEND - Top-right, always visible when layer enabled */}
+      {/* AIR TEMPERATURE LEGEND */}
       <AirTemperatureLegend
         visible={airTemperature.enabled}
         normalization={airTemperature.metadata?.normalization || null}
@@ -527,13 +432,13 @@ const RegionMap: React.FC = () => {
         error={airTemperature.error}
       />
       
-      {/* DWD TEMPERATURE HEALTH CHECK - Dev/Admin only */}
+      {/* DWD TEMPERATURE HEALTH CHECK */}
       <DwdTemperatureHealthCheck visible={isDev || isAdmin} />
       
-      {/* LAYER DIAGNOSTICS PANEL - Dev/Admin only */}
+      {/* LAYER DIAGNOSTICS PANEL */}
       <LayerDiagnosticsPanel map={map.current} />
       
-      {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}
+      {/* TIER 1: Global LST Base Layer (MODIS) */}
       {mapReady && map.current && heatOverlayEnabled && (
         <GlobalLSTOverlay
           map={map.current}
@@ -542,45 +447,44 @@ const RegionMap: React.FC = () => {
         />
       )}
       
-      {/* DEV: DECK RENDER PROOF - Binary test for deck.gl pipeline */}
-      {/* If magenta dot + TEST bitmap are visible, deck.gl is working */}
-      {import.meta.env.DEV && mapReady && map.current && overlays.ecostress.enabled && (
-        <DeckRenderProof
+      {/* ═══════════════════════════════════════════════════════════════════════
+          DECK OVERLAY MANAGER + ECOSTRESS LAYER
+          Single unified deck.gl instance for all overlays
+          ═══════════════════════════════════════════════════════════════════════ */}
+      {mapReady && map.current && (
+        <DeckOverlayManager 
           map={map.current}
-          enabled={overlays.ecostress.enabled}
-        />
-      )}
-      
-      {/* TIER 2: ECOSTRESS Summer Composite - SINGLE aggregated layer */}
-      {/* CRITICAL FIX: Don't gate on metadata.status === 'match' — just use enabled + has granules */}
-      {mapReady && map.current && overlays.ecostress.enabled && overlays.ecostress.metadata?.allGranules && (
-        <EcostressCompositeOverlay
-          map={map.current}
-          visible={true} // Explicitly true — visibility is controlled by the enabled check above
-          opacity={heatLayers.ecostressOpacity / 100}
-          allGranules={overlays.ecostress.metadata.allGranules as Array<{
-            cog_url: string;
-            cloud_mask_url?: string;
-            datetime: string;
-            granule_id: string;
-            granule_bounds: [number, number, number, number];
-            quality_score: number;
-            coverage_percent: number;
-            cloud_percent: number;
-          }>}
-          regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
-          aggregationMethod={heatLayers.aggregationMethod}
-          onMetadata={(metadata) => {
-            setCompositeMetadata(metadata);
-            if (metadata) {
-              console.log('[RegionMap] Composite metadata:', {
-                confidence: metadata.coverageConfidence.level,
-                granules: metadata.successfulGranules,
-                discarded: metadata.discardedGranules,
-              });
-            }
-          }}
-        />
+          showProofLayers={isDev && overlays.ecostress.enabled}
+        >
+          {/* ECOSTRESS Heat Layer */}
+          {overlays.ecostress.enabled && overlays.ecostress.metadata?.allGranules && (
+            <EcostressLayer
+              visible={overlays.ecostress.enabled}
+              opacity={heatLayers.ecostressOpacity / 100}
+              allGranules={overlays.ecostress.metadata.allGranules as Array<{
+                cog_url: string;
+                cloud_mask_url?: string;
+                datetime: string;
+                granule_id: string;
+                granule_bounds: [number, number, number, number];
+                quality_score: number;
+                coverage_percent: number;
+                cloud_percent: number;
+              }>}
+              regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
+              aggregationMethod={heatLayers.aggregationMethod}
+              onMetadata={(metadata) => {
+                setCompositeMetadata(metadata);
+                if (metadata) {
+                  console.log('[RegionMap] ECOSTRESS composite:', {
+                    granules: metadata.successfulGranules,
+                    coverage: metadata.coverageConfidence.percent,
+                  });
+                }
+              }}
+            />
+          )}
+        </DeckOverlayManager>
       )}
       
       {loading && (
@@ -591,16 +495,12 @@ const RegionMap: React.FC = () => {
           </div>
         </div>
       )}
+      
       {!loading && regions.length === 0 && !error && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/60">
           <div className="text-center">
             <p className="text-muted-foreground">Keine Regionen verfügbar</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-4"
-              onClick={fetchRegions}
-            >
+            <Button variant="outline" size="sm" className="mt-4" onClick={fetchRegions}>
               <RefreshCw className="mr-2 h-4 w-4" />
               Erneut laden
             </Button>

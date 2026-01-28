@@ -18,6 +18,14 @@ interface NearestCandidate {
   cloud_cover?: number;
 }
 
+interface BestRejectedGranule {
+  granule_id: string;
+  datetime: string;
+  quality_score: number;
+  coverage_percent: number;
+  cloud_percent: number;
+}
+
 interface EcostressResponse {
   status: 'match' | 'no_coverage' | 'no_data' | 'auth_required' | 'error';
   cog_url?: string;
@@ -33,6 +41,14 @@ interface EcostressResponse {
   colormap_suggestion?: string;
   error?: string;
   nearest_candidate?: NearestCandidate;
+  // Quality metrics
+  quality_score?: number;
+  coverage_percent?: number;
+  cloud_percent?: number;
+  recency_score?: number;
+  candidates_checked?: number;
+  intersecting_count?: number;
+  best_rejected?: BestRejectedGranule;
 }
 
 interface FloodRiskLayer {
@@ -139,13 +155,16 @@ export function useMapOverlays() {
         return;
       }
 
-      // NO COVERAGE - granule doesn't intersect region
+      // NO COVERAGE - granule doesn't intersect region or quality too low
       if (response.status === 'no_coverage' || response.status === 'no_data') {
         lastFetchRef.current.ecostress = fetchKey;
         setOverlayMetadata('ecostress', {
           status: 'no_coverage',
           message: response.message || 'Keine ECOSTRESS-Daten für diese Region verfügbar',
           nearestCandidate: response.nearest_candidate || null,
+          bestRejected: response.best_rejected || null,
+          candidatesChecked: response.candidates_checked,
+          intersectingCount: response.intersecting_count,
           attribution: response.attribution,
         });
         setOverlayLoading('ecostress', false);
@@ -168,6 +187,13 @@ export function useMapOverlays() {
           attribution: response.attribution,
           unit: response.value_unit,
           colormap: response.colormap_suggestion,
+          // Quality metrics from new scoring system
+          qualityScore: response.quality_score,
+          coveragePercent: response.coverage_percent,
+          cloudPercent: response.cloud_percent,
+          recencyScore: response.recency_score,
+          candidatesChecked: response.candidates_checked,
+          intersectingCount: response.intersecting_count,
         });
         setOverlayLoading('ecostress', false);
         return;

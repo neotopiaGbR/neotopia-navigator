@@ -2,8 +2,10 @@
  * ecostress-latest-tile Edge Function
  * 
  * Discovers NASA ECOSTRESS LST tiles that INTERSECT the selected region.
- * Only returns "match" status if granule footprint contains region centroid.
- * Returns "no_coverage" with nearest candidate if no intersection found.
+ * Uses quality-based scoring to select the BEST granule, not just the newest.
+ * 
+ * Scoring formula:
+ *   score = 0.4 * coverage_ratio + 0.3 * valid_pixel_estimate + 0.2 * (1 - cloud_ratio) + 0.1 * recency
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
@@ -19,6 +21,7 @@ interface RequestBody {
   region_bbox?: [number, number, number, number]; // [minLon, minLat, maxLon, maxLat]
   date_from?: string;
   date_to?: string;
+  min_quality_threshold?: number; // Minimum quality score (0-1), default 0.2
 }
 
 interface CMRGranule {
@@ -36,56 +39,25 @@ interface CMRResponse {
   feed: { entry: CMRGranule[] };
 }
 
-interface GranuleWithBounds extends CMRGranule {
+interface ScoredGranule extends CMRGranule {
   wgs84Bounds: [number, number, number, number]; // [minLon, minLat, maxLon, maxLat]
   distanceToCentroid: number;
   intersectsRegion: boolean;
+  coverageRatio: number; // 0-1: how much of region is covered
+  cloudRatio: number; // 0-1: cloud cover percentage
+  recencyScore: number; // 0-1: how recent (1 = today, 0 = oldest)
+  qualityScore: number; // Combined weighted score
 }
 
 const ECOSTRESS_CONCEPT_ID = 'C2076090826-LPCLOUD';
 const CMR_API_URL = 'https://cmr.earthdata.nasa.gov/search/granules.json';
-const TILE_SIZE_DEG = 1.0; // Search radius around point
+const SEARCH_RADIUS_DEG = 2.0; // Larger search radius to find more candidates
+const DEFAULT_MIN_QUALITY = 0.15; // Minimum quality threshold
 
 function getDateDaysAgo(days: number): string {
   const date = new Date();
   date.setDate(date.getDate() - days);
   return date.toISOString().split('T')[0];
-}
-
-/**
- * Parse MGRS tile ID to get approximate WGS84 bounds
- * MGRS format: 32UQC = Zone 32, Band U, 100km square QC
- */
-function mgrsToApproxBounds(mgrsId: string): [number, number, number, number] | null {
-  const match = mgrsId.match(/(\d{2})([C-X])([A-Z]{2})/i);
-  if (!match) return null;
-  
-  const zone = parseInt(match[1], 10);
-  const latBand = match[2].toUpperCase();
-  
-  // Approximate center longitude for UTM zone
-  const zoneCenterLon = (zone - 1) * 6 - 180 + 3;
-  
-  // Approximate latitude band (rough mapping)
-  const latBandMap: Record<string, number> = {
-    'C': -80, 'D': -72, 'E': -64, 'F': -56, 'G': -48, 'H': -40, 'J': -32, 'K': -24,
-    'L': -16, 'M': -8, 'N': 0, 'P': 8, 'Q': 16, 'R': 24, 'S': 32, 'T': 40,
-    'U': 48, 'V': 56, 'W': 64, 'X': 72,
-  };
-  
-  const latBandCenter = latBandMap[latBand] ?? 50;
-  
-  // ECOSTRESS tiles are roughly 109km x 109km
-  // At mid-latitudes, this is approximately 1° lat x 1.5° lon
-  const latHalf = 0.55;
-  const lonHalf = 0.85;
-  
-  return [
-    zoneCenterLon - lonHalf,
-    latBandCenter - latHalf,
-    zoneCenterLon + lonHalf,
-    latBandCenter + latHalf,
-  ];
 }
 
 /**
@@ -131,13 +103,43 @@ function parseGranuleBounds(granule: CMRGranule): [number, number, number, numbe
 }
 
 /**
+ * Parse MGRS tile ID to get approximate WGS84 bounds
+ */
+function mgrsToApproxBounds(mgrsId: string): [number, number, number, number] | null {
+  const match = mgrsId.match(/(\d{2})([C-X])([A-Z]{2})/i);
+  if (!match) return null;
+  
+  const zone = parseInt(match[1], 10);
+  const latBand = match[2].toUpperCase();
+  
+  // Approximate center longitude for UTM zone
+  const zoneCenterLon = (zone - 1) * 6 - 180 + 3;
+  
+  // Approximate latitude band
+  const latBandMap: Record<string, number> = {
+    'C': -80, 'D': -72, 'E': -64, 'F': -56, 'G': -48, 'H': -40, 'J': -32, 'K': -24,
+    'L': -16, 'M': -8, 'N': 0, 'P': 8, 'Q': 16, 'R': 24, 'S': 32, 'T': 40,
+    'U': 48, 'V': 56, 'W': 64, 'X': 72,
+  };
+  
+  const latBandCenter = latBandMap[latBand] ?? 50;
+  
+  // ECOSTRESS tiles are roughly 109km x 109km (~1° lat x 1.5° lon at mid-latitudes)
+  const latHalf = 0.55;
+  const lonHalf = 0.85;
+  
+  return [
+    zoneCenterLon - lonHalf,
+    latBandCenter - latHalf,
+    zoneCenterLon + lonHalf,
+    latBandCenter + latHalf,
+  ];
+}
+
+/**
  * Check if point is inside bounding box
  */
-function pointInBbox(
-  lon: number, 
-  lat: number, 
-  bbox: [number, number, number, number]
-): boolean {
+function pointInBbox(lon: number, lat: number, bbox: [number, number, number, number]): boolean {
   const [minLon, minLat, maxLon, maxLat] = bbox;
   return lon >= minLon && lon <= maxLon && lat >= minLat && lat <= maxLat;
 }
@@ -158,7 +160,37 @@ function bboxIntersects(
 }
 
 /**
- * Calculate distance between point and bbox center (in degrees, approximate)
+ * Calculate intersection area ratio (granule ∩ region / region area)
+ */
+function calculateCoverageRatio(
+  granuleBbox: [number, number, number, number],
+  regionBbox: [number, number, number, number]
+): number {
+  const [g0, g1, g2, g3] = granuleBbox;
+  const [r0, r1, r2, r3] = regionBbox;
+  
+  // Calculate intersection
+  const intMinLon = Math.max(g0, r0);
+  const intMinLat = Math.max(g1, r1);
+  const intMaxLon = Math.min(g2, r2);
+  const intMaxLat = Math.min(g3, r3);
+  
+  // No intersection
+  if (intMinLon >= intMaxLon || intMinLat >= intMaxLat) {
+    return 0;
+  }
+  
+  const intersectionArea = (intMaxLon - intMinLon) * (intMaxLat - intMinLat);
+  const regionArea = (r2 - r0) * (r3 - r1);
+  
+  if (regionArea === 0) return 0;
+  
+  // Clamp to 1.0 (in case granule fully covers region)
+  return Math.min(1.0, intersectionArea / regionArea);
+}
+
+/**
+ * Calculate distance between point and bbox center (in km)
  */
 function distanceToBboxCenter(
   lon: number, 
@@ -168,7 +200,7 @@ function distanceToBboxCenter(
   const centerLon = (bbox[0] + bbox[2]) / 2;
   const centerLat = (bbox[1] + bbox[3]) / 2;
   
-  // Haversine distance in km
+  // Haversine distance
   const R = 6371;
   const dLat = (centerLat - lat) * Math.PI / 180;
   const dLon = (centerLon - lon) * Math.PI / 180;
@@ -179,6 +211,74 @@ function distanceToBboxCenter(
   return R * c;
 }
 
+/**
+ * Calculate quality score for a granule
+ * Weights: coverage=0.4, valid_pixels=0.3, cloud=0.2, recency=0.1
+ */
+function calculateQualityScore(
+  granuleBbox: [number, number, number, number],
+  regionBbox: [number, number, number, number],
+  cloudCover: number | undefined,
+  acquisitionDate: Date,
+  oldestDate: Date,
+  newestDate: Date
+): { score: number; coverageRatio: number; cloudRatio: number; recencyScore: number } {
+  // Coverage ratio (0-1)
+  const coverageRatio = calculateCoverageRatio(granuleBbox, regionBbox);
+  
+  // Cloud ratio (0-1, lower is better)
+  const cloudRatio = (cloudCover ?? 50) / 100; // Default to 50% if unknown
+  
+  // Recency score (0-1, newer is better)
+  const dateRange = newestDate.getTime() - oldestDate.getTime();
+  const recencyScore = dateRange > 0 
+    ? (acquisitionDate.getTime() - oldestDate.getTime()) / dateRange
+    : 1;
+  
+  // Estimated valid pixel ratio based on coverage and cloud
+  // This is an approximation - actual valid pixels require reading the COG
+  const estimatedValidRatio = coverageRatio * (1 - cloudRatio * 0.8);
+  
+  // Combined score with weights
+  const score = 
+    0.4 * coverageRatio +
+    0.3 * estimatedValidRatio +
+    0.2 * (1 - cloudRatio) +
+    0.1 * recencyScore;
+  
+  return { score, coverageRatio, cloudRatio, recencyScore };
+}
+
+/**
+ * Find COG URL from granule links
+ */
+function findCogUrl(granule: CMRGranule): { lstUrl: string | null; cloudMaskUrl: string | null } {
+  const dataLinks = granule.links.filter(
+    (link) => link.rel === 'http://esipfed.org/ns/fedsearch/1.1/data#' || link.href.includes('.tif')
+  );
+
+  const lstLink = dataLinks.find((l) => {
+    const href = l.href.toLowerCase();
+    const isLstFile = href.endsWith('_lst.tif') || href.includes('_lst_');
+    const isAuxFile = href.includes('_water') || href.includes('_cloud') || 
+                      href.includes('_qc') || href.includes('_emis');
+    return isLstFile && !isAuxFile;
+  });
+
+  const fallbackLstLink = !lstLink ? dataLinks.find((l) => {
+    const href = l.href.toLowerCase();
+    return href.includes('lste') && href.endsWith('.tif') && !href.includes('_emis');
+  }) : null;
+
+  const finalLstLink = lstLink || fallbackLstLink;
+  const cloudMaskLink = dataLinks.find((l) => l.href.includes('QC') || l.href.includes('cloud'));
+
+  const lstUrl = finalLstLink?.href || 
+    `https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/ECO_L2T_LSTE.002/${granule.id}/${granule.id}_LST.tif`;
+
+  return { lstUrl, cloudMaskUrl: cloudMaskLink?.href || null };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -186,7 +286,7 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json() as RequestBody;
-    const { lat, lon, region_bbox, date_from, date_to } = body;
+    const { lat, lon, region_bbox, date_from, date_to, min_quality_threshold } = body;
 
     if (typeof lat !== 'number' || typeof lon !== 'number') {
       return new Response(
@@ -199,68 +299,33 @@ Deno.serve(async (req) => {
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const tileId = `${Math.floor(lat)}_${Math.floor(lon)}`;
     const endDate = date_to || new Date().toISOString().split('T')[0];
     const startDate = date_from || getDateDaysAgo(365);
+    const minQuality = min_quality_threshold ?? DEFAULT_MIN_QUALITY;
 
     // Build region bbox if not provided (1km grid cell around centroid)
     const regionBbox: [number, number, number, number] = region_bbox || [
       lon - 0.005, lat - 0.005, lon + 0.005, lat + 0.005
     ];
 
-    console.log('[ECOSTRESS] Query params:', {
+    console.log('[ECOSTRESS] Quality-based selection query:', {
       regionCentroid: { lat, lon },
       regionBbox,
       dateRange: `${startDate} to ${endDate}`,
+      minQualityThreshold: minQuality,
     });
 
-    // Check cache first
-    const { data: cachedData } = await supabase
-      .from('raster_sources_cache')
-      .select('*')
-      .eq('tile_id', tileId)
-      .eq('source_type', 'ecostress_lst')
-      .gte('date_window_start', startDate)
-      .lte('date_window_end', endDate)
-      .gt('expires_at', new Date().toISOString())
-      .order('acquisition_datetime', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    // Validate cached result still intersects (in case region changed)
-    if (cachedData?.cog_url) {
-      const cachedBounds = cachedData.granule_bounds as [number, number, number, number] | null;
-      if (cachedBounds && pointInBbox(lon, lat, cachedBounds)) {
-        console.log('[ECOSTRESS] Cache hit with valid intersection for tile:', tileId);
-        return new Response(
-          JSON.stringify({
-            status: 'match',
-            cog_url: cachedData.cog_url,
-            cloud_mask_url: cachedData.cloud_mask_url,
-            datetime: cachedData.acquisition_datetime,
-            granule_bounds: cachedBounds,
-            qc_notes: cachedData.qc_notes,
-            attribution: 'NASA LP DAAC / ECOSTRESS',
-            value_unit: 'Kelvin',
-            colormap_suggestion: 'thermal',
-            cached: true,
-          }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-    }
-
-    // Query NASA CMR with larger bbox to find all candidates
-    const searchBbox = `${lon - TILE_SIZE_DEG},${lat - TILE_SIZE_DEG},${lon + TILE_SIZE_DEG},${lat + TILE_SIZE_DEG}`;
+    // Query NASA CMR with larger bbox to find ALL candidates
+    const searchBbox = `${lon - SEARCH_RADIUS_DEG},${lat - SEARCH_RADIUS_DEG},${lon + SEARCH_RADIUS_DEG},${lat + SEARCH_RADIUS_DEG}`;
     const cmrParams = new URLSearchParams({
       concept_id: ECOSTRESS_CONCEPT_ID,
       bounding_box: searchBbox,
       temporal: `${startDate}T00:00:00Z,${endDate}T23:59:59Z`,
       sort_key: '-start_date',
-      page_size: '50', // Get more results to find intersecting tiles
+      page_size: '200', // Get more granules for comprehensive scoring
     });
 
-    console.log('[ECOSTRESS] Querying CMR:', { lat, lon, searchBbox });
+    console.log('[ECOSTRESS] Querying CMR for all candidates:', { lat, lon, searchBbox });
 
     const cmrResponse = await fetch(`${CMR_API_URL}?${cmrParams}`, {
       headers: { Accept: 'application/json' },
@@ -283,13 +348,16 @@ Deno.serve(async (req) => {
           status: 'no_coverage',
           message: `Keine ECOSTRESS-Daten im Umkreis von ${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E im Zeitraum ${startDate} bis ${endDate} gefunden.`,
           attribution: 'NASA LP DAAC / ECOSTRESS',
+          candidates_checked: 0,
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Parse bounds and calculate intersection for each granule
-    const granulesWithBounds: GranuleWithBounds[] = [];
+    // Parse bounds and score each granule
+    const oldestDate = new Date(startDate);
+    const newestDate = new Date(endDate);
+    const scoredGranules: ScoredGranule[] = [];
     
     for (const granule of granules) {
       const bounds = parseGranuleBounds(granule);
@@ -298,69 +366,108 @@ Deno.serve(async (req) => {
         continue;
       }
       
-      const intersectsRegion = pointInBbox(lon, lat, bounds) || 
-                               bboxIntersects(regionBbox, bounds);
+      const intersectsRegion = pointInBbox(lon, lat, bounds) || bboxIntersects(regionBbox, bounds);
       const distanceToCentroid = distanceToBboxCenter(lon, lat, bounds);
       
-      granulesWithBounds.push({
+      if (!intersectsRegion) {
+        // Track non-intersecting for "nearest" fallback
+        scoredGranules.push({
+          ...granule,
+          wgs84Bounds: bounds,
+          distanceToCentroid,
+          intersectsRegion: false,
+          coverageRatio: 0,
+          cloudRatio: (granule.cloud_cover ?? 50) / 100,
+          recencyScore: 0,
+          qualityScore: 0,
+        });
+        continue;
+      }
+      
+      // Calculate quality score for intersecting granules
+      const acquisitionDate = new Date(granule.time_start);
+      const { score, coverageRatio, cloudRatio, recencyScore } = calculateQualityScore(
+        bounds,
+        regionBbox,
+        granule.cloud_cover,
+        acquisitionDate,
+        oldestDate,
+        newestDate
+      );
+      
+      scoredGranules.push({
         ...granule,
         wgs84Bounds: bounds,
         distanceToCentroid,
-        intersectsRegion,
+        intersectsRegion: true,
+        coverageRatio,
+        cloudRatio,
+        recencyScore,
+        qualityScore: score,
       });
       
-      console.log('[ECOSTRESS] Granule evaluation:', {
+      console.log('[ECOSTRESS] Scored granule:', {
         id: granule.id,
-        bounds,
-        intersectsRegion,
-        distanceKm: distanceToCentroid.toFixed(1),
+        date: granule.time_start.split('T')[0],
+        coverageRatio: (coverageRatio * 100).toFixed(1) + '%',
+        cloudCover: ((cloudRatio) * 100).toFixed(0) + '%',
+        recency: (recencyScore * 100).toFixed(0) + '%',
+        qualityScore: score.toFixed(3),
       });
     }
 
-    // Separate intersecting and non-intersecting granules
-    const intersecting = granulesWithBounds
+    // Sort by quality score (highest first)
+    const intersecting = scoredGranules
       .filter(g => g.intersectsRegion)
-      .sort((a, b) => {
-        // Prefer lower cloud cover
-        const cloudA = a.cloud_cover ?? 100;
-        const cloudB = b.cloud_cover ?? 100;
-        if (cloudA !== cloudB) return cloudA - cloudB;
-        // Then prefer more recent
-        return new Date(b.time_start).getTime() - new Date(a.time_start).getTime();
-      });
+      .sort((a, b) => b.qualityScore - a.qualityScore);
 
-    const nearest = granulesWithBounds
+    const nearestNonIntersecting = scoredGranules
       .filter(g => !g.intersectsRegion)
       .sort((a, b) => a.distanceToCentroid - b.distanceToCentroid)[0];
 
-    console.log('[ECOSTRESS] Selection result:', {
+    console.log('[ECOSTRESS] Selection summary:', {
       totalGranules: granules.length,
-      withParsedBounds: granulesWithBounds.length,
+      withParsedBounds: scoredGranules.length,
       intersecting: intersecting.length,
-      nearestNonIntersecting: nearest?.id,
-      nearestDistance: nearest?.distanceToCentroid.toFixed(1),
+      topQualityScore: intersecting[0]?.qualityScore.toFixed(3),
+      nearestNonIntersecting: nearestNonIntersecting?.id,
+      nearestDistance: nearestNonIntersecting?.distanceToCentroid.toFixed(1),
     });
 
-    // NO INTERSECTING GRANULE FOUND
-    if (intersecting.length === 0) {
+    // NO INTERSECTING GRANULE or quality below threshold
+    if (intersecting.length === 0 || intersecting[0].qualityScore < minQuality) {
       const response: Record<string, unknown> = {
         status: 'no_coverage',
-        message: `Keine ECOSTRESS-Aufnahme deckt die ausgewählte Region (${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E) ab.`,
         region_centroid: { lat, lon },
         region_bbox: regionBbox,
         attribution: 'NASA LP DAAC / ECOSTRESS',
+        candidates_checked: granules.length,
+        intersecting_count: intersecting.length,
+        min_quality_threshold: minQuality,
       };
 
-      // Include nearest candidate for optional display
-      if (nearest) {
-        response.nearest_candidate = {
-          granule_id: nearest.id,
-          datetime: nearest.time_start,
-          bounds: nearest.wgs84Bounds,
-          distance_km: Math.round(nearest.distanceToCentroid),
-          cloud_cover: nearest.cloud_cover,
+      if (intersecting.length > 0 && intersecting[0].qualityScore < minQuality) {
+        // Has granules but below quality threshold
+        const best = intersecting[0];
+        response.message = `Keine ECOSTRESS-Aufnahme mit ausreichender Qualität (Score: ${(best.qualityScore * 100).toFixed(0)}% < ${(minQuality * 100).toFixed(0)}% Minimum). Beste Abdeckung: ${(best.coverageRatio * 100).toFixed(0)}% bei ${((best.cloudRatio) * 100).toFixed(0)}% Bewölkung.`;
+        response.best_rejected = {
+          granule_id: best.id,
+          datetime: best.time_start,
+          quality_score: best.qualityScore,
+          coverage_percent: Math.round(best.coverageRatio * 100),
+          cloud_percent: Math.round(best.cloudRatio * 100),
         };
-        response.message = `Keine ECOSTRESS-Aufnahme deckt die Region direkt ab. Nächste Aufnahme: ${Math.round(nearest.distanceToCentroid)} km entfernt.`;
+      } else if (nearestNonIntersecting) {
+        response.message = `Keine ECOSTRESS-Aufnahme deckt die Region ab. Nächste Aufnahme: ${Math.round(nearestNonIntersecting.distanceToCentroid)} km entfernt.`;
+        response.nearest_candidate = {
+          granule_id: nearestNonIntersecting.id,
+          datetime: nearestNonIntersecting.time_start,
+          bounds: nearestNonIntersecting.wgs84Bounds,
+          distance_km: Math.round(nearestNonIntersecting.distanceToCentroid),
+          cloud_cover: nearestNonIntersecting.cloud_cover,
+        };
+      } else {
+        response.message = `Keine ECOSTRESS-Aufnahme im Umkreis von ${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E gefunden.`;
       }
 
       return new Response(
@@ -369,51 +476,35 @@ Deno.serve(async (req) => {
       );
     }
 
-    // FOUND INTERSECTING GRANULE
+    // FOUND GOOD QUALITY GRANULE
     const bestGranule = intersecting[0];
-    console.log('[ECOSTRESS] Selected intersecting granule:', bestGranule.id);
-
-    // Find LST COG URL
-    const dataLinks = bestGranule.links.filter(
-      (link) => link.rel === 'http://esipfed.org/ns/fedsearch/1.1/data#' || link.href.includes('.tif')
-    );
-
-    const lstLink = dataLinks.find((l) => {
-      const href = l.href.toLowerCase();
-      const isLstFile = href.endsWith('_lst.tif') || href.includes('_lst_');
-      const isAuxFile = href.includes('_water') || href.includes('_cloud') || 
-                        href.includes('_qc') || href.includes('_emis');
-      return isLstFile && !isAuxFile;
+    console.log('[ECOSTRESS] Selected best granule:', {
+      id: bestGranule.id,
+      qualityScore: bestGranule.qualityScore.toFixed(3),
+      coverageRatio: (bestGranule.coverageRatio * 100).toFixed(1) + '%',
+      cloudCover: (bestGranule.cloudRatio * 100).toFixed(0) + '%',
     });
 
-    const fallbackLstLink = !lstLink ? dataLinks.find((l) => {
-      const href = l.href.toLowerCase();
-      return href.includes('lste') && href.endsWith('.tif') && !href.includes('_emis');
-    }) : null;
+    const { lstUrl, cloudMaskUrl } = findCogUrl(bestGranule);
 
-    const finalLstLink = lstLink || fallbackLstLink;
-    const cloudMaskLink = dataLinks.find((l) => l.href.includes('QC') || l.href.includes('cloud'));
+    console.log('[ECOSTRESS] Selected COG URL:', lstUrl);
 
-    const cogUrl = finalLstLink?.href || 
-      `https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/ECO_L2T_LSTE.002/${bestGranule.id}/${bestGranule.id}_LST.tif`;
-
-    console.log('[ECOSTRESS] Selected COG URL:', cogUrl);
-
-    // Cache the result with bounds
+    // Cache the result with quality metrics
+    const tileId = `${Math.floor(lat)}_${Math.floor(lon)}`;
     try {
       await supabase.from('raster_sources_cache').upsert({
         tile_id: tileId,
         source_type: 'ecostress_lst',
         lat,
         lon,
-        cog_url: cogUrl,
-        cloud_mask_url: cloudMaskLink?.href || null,
+        cog_url: lstUrl,
+        cloud_mask_url: cloudMaskUrl,
         acquisition_datetime: bestGranule.time_start,
         date_window_start: startDate,
         date_window_end: endDate,
         granule_id: bestGranule.id,
         granule_bounds: bestGranule.wgs84Bounds,
-        qc_notes: `Cloud cover: ${bestGranule.cloud_cover ?? 'unknown'}%`,
+        qc_notes: `Quality: ${(bestGranule.qualityScore * 100).toFixed(0)}%, Coverage: ${(bestGranule.coverageRatio * 100).toFixed(0)}%, Cloud: ${(bestGranule.cloudRatio * 100).toFixed(0)}%`,
         expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       }, { onConflict: 'tile_id,source_type,date_window_start,date_window_end' });
     } catch (cacheErr) {
@@ -423,13 +514,21 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         status: 'match',
-        cog_url: cogUrl,
-        cloud_mask_url: cloudMaskLink?.href || null,
+        cog_url: lstUrl,
+        cloud_mask_url: cloudMaskUrl,
         datetime: bestGranule.time_start,
         granule_id: bestGranule.id,
         granule_bounds: bestGranule.wgs84Bounds,
         region_centroid: { lat, lon },
-        qc_notes: `Granule: ${bestGranule.id}. Cloud cover: ${bestGranule.cloud_cover ?? 'unknown'}%`,
+        // Quality metrics for UI
+        quality_score: bestGranule.qualityScore,
+        coverage_percent: Math.round(bestGranule.coverageRatio * 100),
+        cloud_percent: Math.round(bestGranule.cloudRatio * 100),
+        recency_score: bestGranule.recencyScore,
+        // Selection metadata
+        candidates_checked: granules.length,
+        intersecting_count: intersecting.length,
+        qc_notes: `Quality: ${(bestGranule.qualityScore * 100).toFixed(0)}% | Coverage: ${(bestGranule.coverageRatio * 100).toFixed(0)}% | Cloud: ${(bestGranule.cloudRatio * 100).toFixed(0)}%`,
         attribution: 'NASA LP DAAC / ECOSTRESS',
         value_unit: 'Kelvin',
         colormap_suggestion: 'thermal',

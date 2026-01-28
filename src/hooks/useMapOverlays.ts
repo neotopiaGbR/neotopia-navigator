@@ -85,7 +85,13 @@ export function useMapOverlays() {
 
     // Check if we already fetched for this region
     const fetchKey = `${coords.lat.toFixed(3)},${coords.lon.toFixed(3)}`;
+    console.log('[useMapOverlays] ECOSTRESS query coordinates:', { 
+      lat: coords.lat.toFixed(4), 
+      lon: coords.lon.toFixed(4), 
+      regionId: selectedRegion.id,
+    });
     if (lastFetchRef.current.ecostress === fetchKey) {
+      console.log('[useMapOverlays] Skipping ECOSTRESS fetch - already fetched for this region');
       return;
     }
 

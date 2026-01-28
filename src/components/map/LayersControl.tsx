@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, MapPin, Eye, EyeOff } from 'lucide-react';
+import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, MapPin, Eye, EyeOff, ThermometerSun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useMapLayers, BasemapType } from './MapLayersContext';
+import HeatLayerProvenancePanel from './HeatLayerProvenancePanel';
 
 interface BasemapOption {
   id: BasemapType;
@@ -22,9 +23,9 @@ const BASEMAP_OPTIONS: BasemapOption[] = [
 
 const OVERLAY_INFO = {
   ecostress: {
-    name: 'Hitze-Hotspots (ECOSTRESS LST)',
-    description: 'Oberflächentemperatur aus NASA ECOSTRESS (~70m Auflösung)',
-    attribution: 'NASA LP DAAC / ECOSTRESS',
+    name: 'Hitze-Hotspots',
+    description: 'Kombinierte Wärmekarte: Globale Basis (MODIS 1km) + lokale Details (ECOSTRESS 70m)',
+    attribution: 'NASA GIBS + LP DAAC / ECOSTRESS',
     doi: 'https://doi.org/10.5067/ECOSTRESS/ECO_L2T_LSTE.002',
     legendLabel: 'Oberflächentemperatur (°C)',
     legendColors: [
@@ -56,30 +57,19 @@ const OVERLAY_INFO = {
   },
 };
 
-interface NearestCandidate {
-  granule_id: string;
-  datetime: string;
-  bounds: [number, number, number, number];
-  distance_km: number;
-  cloud_cover?: number;
-}
+// NearestCandidate and BestRejectedGranule interfaces moved to HeatLayerProvenancePanel
 
-interface BestRejectedGranule {
-  granule_id: string;
-  datetime: string;
-  quality_score: number;
-  coverage_percent: number;
-  cloud_percent: number;
-}
 
 const LayersControl: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const {
     basemap,
     overlays,
+    heatLayers,
     setBasemap,
     toggleOverlay,
     setOverlayOpacity,
+    setHeatLayerOpacity,
   } = useMapLayers();
 
   return (
@@ -154,17 +144,17 @@ const LayersControl: React.FC = () => {
             {/* Overlays Section */}
             <div className="space-y-4">
               <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Overlays
+                Thematische Overlays
               </h4>
 
-              {/* ECOSTRESS Overlay */}
-              <OverlayControl
-                id="ecostress"
-                icon={<Flame className="h-4 w-4 text-orange-500" />}
+              {/* Heat Overlay (combined MODIS + ECOSTRESS) */}
+              <HeatOverlayControl
                 info={OVERLAY_INFO.ecostress}
                 config={overlays.ecostress}
+                heatLayers={heatLayers}
                 onToggle={() => toggleOverlay('ecostress')}
-                onOpacityChange={(val) => setOverlayOpacity('ecostress', val)}
+                onGlobalOpacityChange={(val) => setHeatLayerOpacity('globalLST', val)}
+                onEcostressOpacityChange={(val) => setHeatLayerOpacity('ecostress', val)}
               />
 
               {/* Flood Risk Overlay */}
@@ -203,6 +193,223 @@ const LayersControl: React.FC = () => {
   );
 };
 
+// === HEAT OVERLAY CONTROL (Combined MODIS + ECOSTRESS) ===
+interface HeatOverlayControlProps {
+  info: typeof OVERLAY_INFO.ecostress;
+  config: {
+    enabled: boolean;
+    opacity: number;
+    loading: boolean;
+    error: string | null;
+    lastUpdated: string | null;
+    metadata: Record<string, unknown>;
+  };
+  heatLayers: {
+    globalLSTEnabled: boolean;
+    globalLSTOpacity: number;
+    ecostressEnabled: boolean;
+    ecostressOpacity: number;
+    ecostressMinCoverage: number;
+  };
+  onToggle: () => void;
+  onGlobalOpacityChange: (value: number) => void;
+  onEcostressOpacityChange: (value: number) => void;
+}
+
+const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
+  info,
+  config,
+  heatLayers,
+  onToggle,
+  onGlobalOpacityChange,
+  onEcostressOpacityChange,
+}) => {
+  const [showLegend, setShowLegend] = useState(false);
+  const [showProvenance, setShowProvenance] = useState(false);
+
+  const ecostressStatus = config.metadata?.status as string | null;
+  const hasEcostressMatch = ecostressStatus === 'match';
+  const hasNoCoverage = ecostressStatus === 'no_coverage';
+
+  return (
+    <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+      {/* Header Row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <ThermometerSun className="h-4 w-4 text-orange-500" />
+          <span className="text-sm font-medium">{info.name}</span>
+        </div>
+        <Switch checked={config.enabled} onCheckedChange={onToggle} />
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-muted-foreground">{info.description}</p>
+
+      {/* Error State */}
+      {config.error && (
+        <div className="flex items-center gap-2 p-2 rounded bg-destructive/10 text-destructive text-xs">
+          <AlertCircle className="h-3 w-3 shrink-0" />
+          <span>{config.error}</span>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {config.loading && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="h-3 w-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          <span>Suche beste Aufnahmen...</span>
+        </div>
+      )}
+
+      {/* Controls when enabled */}
+      {config.enabled && !config.loading && (
+        <div className="space-y-3 pt-2">
+          {/* STATUS INDICATOR */}
+          <div className={cn(
+            'flex items-center gap-2 p-2 rounded text-xs',
+            hasEcostressMatch 
+              ? 'bg-green-500/10 border border-green-500/30 text-green-600 dark:text-green-400' 
+              : 'bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400'
+          )}>
+            {hasEcostressMatch ? (
+              <>
+                <Flame className="h-3 w-3" />
+                <span>Globale Basis + Hochauflösendes Detail aktiv</span>
+              </>
+            ) : (
+              <>
+                <Map className="h-3 w-3" />
+                <span>Globale Wärmekarte aktiv (MODIS 1km)</span>
+              </>
+            )}
+          </div>
+
+          {/* ECOSTRESS not available message */}
+          {hasNoCoverage && (
+            <div className="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-xs">
+              <p className="text-amber-700 dark:text-amber-300">
+                {String(config.metadata?.message || 'Kein hochauflösendes ECOSTRESS-Bild für diese Region verfügbar.')}
+              </p>
+              <p className="text-muted-foreground mt-1 text-[10px]">
+                Die globale MODIS-Basiskarte zeigt dennoch Oberflächentemperaturen.
+              </p>
+            </div>
+          )}
+
+          {/* Opacity Controls */}
+          <div className="space-y-3">
+            {/* Global LST Opacity */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Globale Basis (MODIS)</span>
+                <span className="text-xs font-mono text-muted-foreground">{heatLayers.globalLSTOpacity}%</span>
+              </div>
+              <Slider
+                value={[heatLayers.globalLSTOpacity]}
+                min={0}
+                max={100}
+                step={5}
+                onValueChange={([val]) => onGlobalOpacityChange(val)}
+                className="w-full"
+              />
+            </div>
+
+            {/* ECOSTRESS Opacity (only when match) */}
+            {hasEcostressMatch && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Hochauflösend (ECOSTRESS)</span>
+                  <span className="text-xs font-mono text-muted-foreground">{heatLayers.ecostressOpacity}%</span>
+                </div>
+                <Slider
+                  value={[heatLayers.ecostressOpacity]}
+                  min={0}
+                  max={100}
+                  step={5}
+                  onValueChange={([val]) => onEcostressOpacityChange(val)}
+                  className="w-full"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Legend Toggle */}
+          <button
+            onClick={() => setShowLegend(!showLegend)}
+            className="flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <Info className="h-3 w-3" />
+            {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+          </button>
+
+          {/* Legend */}
+          {showLegend && (
+            <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+              <span className="text-xs font-medium">{info.legendLabel}</span>
+              <div className="flex flex-wrap gap-1">
+                {info.legendColors.map((item, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <div
+                      className="w-4 h-3 rounded-sm border border-border/50"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Data Provenance Toggle */}
+          <button
+            onClick={() => setShowProvenance(!showProvenance)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <Layers className="h-3 w-3" />
+            {showProvenance ? 'Datenquellen ausblenden' : 'Datenquellen anzeigen'}
+          </button>
+
+          {/* Data Provenance Panel */}
+          {showProvenance && (
+            <HeatLayerProvenancePanel
+              visible={true}
+              ecostressEnabled={heatLayers.ecostressEnabled}
+              ecostressMetadata={{
+                status: ecostressStatus as 'match' | 'no_coverage' | 'loading' | null,
+                cogUrl: config.metadata?.cogUrl as string | undefined,
+                acquisitionDatetime: config.metadata?.acquisitionDatetime as string | undefined,
+                granuleId: config.metadata?.granuleId as string | undefined,
+                qualityScore: config.metadata?.qualityScore as number | undefined,
+                coveragePercent: config.metadata?.coveragePercent as number | undefined,
+                cloudPercent: config.metadata?.cloudPercent as number | undefined,
+                candidatesChecked: config.metadata?.candidatesChecked as number | undefined,
+                message: config.metadata?.message as string | undefined,
+                bestRejected: config.metadata?.bestRejected as any,
+              }}
+              ecostressLoading={config.loading}
+              globalLSTOpacity={heatLayers.globalLSTOpacity}
+              ecostressOpacity={heatLayers.ecostressOpacity}
+            />
+          )}
+
+          {/* Acquisition info when ECOSTRESS match */}
+          {hasEcostressMatch && config.metadata?.acquisitionDatetime && (
+            <div className="text-[10px] text-muted-foreground/70">
+              ECOSTRESS Aufnahme: {new Date(String(config.metadata.acquisitionDatetime)).toLocaleDateString('de-DE', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+              })}
+              {config.metadata.coveragePercent && ` • ${config.metadata.coveragePercent}% Abdeckung`}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// === FLOOD RISK OVERLAY CONTROL ===
 interface OverlayControlProps {
   id: 'ecostress' | 'floodRisk';
   icon: React.ReactNode;
@@ -228,20 +435,6 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
   onOpacityChange,
 }) => {
   const [showLegend, setShowLegend] = useState(false);
-  const [showBoundary, setShowBoundary] = useState(false);
-
-  // Check ECOSTRESS status from metadata
-  const ecostressStatus = id === 'ecostress' ? (config.metadata?.status as string) : null;
-  const isNoCoverage = ecostressStatus === 'no_coverage';
-  const isMatch = ecostressStatus === 'match';
-  const nearestCandidate = config.metadata?.nearestCandidate as NearestCandidate | null;
-  const bestRejected = config.metadata?.bestRejected as BestRejectedGranule | null;
-  
-  // Quality metrics for match state
-  const qualityScore = config.metadata?.qualityScore as number | undefined;
-  const coveragePercent = config.metadata?.coveragePercent as number | undefined;
-  const cloudPercent = config.metadata?.cloudPercent as number | undefined;
-  const candidatesChecked = config.metadata?.candidatesChecked as number | undefined;
 
   return (
     <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
@@ -276,239 +469,64 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
       {/* Controls (when enabled) */}
       {config.enabled && !config.loading && (
         <div className="space-y-3 pt-2">
-          {/* ECOSTRESS: No Coverage State */}
-          {id === 'ecostress' && isNoCoverage && (
-            <div className="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-xs space-y-2">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                <p className="text-amber-700 dark:text-amber-300 font-medium">
-                  Keine ausreichende Abdeckung
-                </p>
-              </div>
-              <p className="text-muted-foreground">
-                {String(config.metadata?.message || 'Keine ECOSTRESS-Aufnahme für diese Region im letzten Jahr verfügbar.')}
-              </p>
-              
-              {/* Best rejected granule (quality too low) */}
-              {bestRejected && (
-                <div className="mt-2 p-2 rounded bg-background/80 border border-border space-y-1">
-                  <p className="text-muted-foreground font-medium">Beste verfügbare Aufnahme:</p>
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px]">
-                    <span className="text-muted-foreground">Qualität:</span>
-                    <span className="font-mono">{Math.round(bestRejected.quality_score * 100)}%</span>
-                    <span className="text-muted-foreground">Abdeckung:</span>
-                    <span className="font-mono">{bestRejected.coverage_percent}%</span>
-                    <span className="text-muted-foreground">Bewölkung:</span>
-                    <span className="font-mono">{bestRejected.cloud_percent}%</span>
-                    <span className="text-muted-foreground">Datum:</span>
-                    <span>{new Date(bestRejected.datetime).toLocaleDateString('de-DE')}</span>
+          {/* Opacity Slider */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Deckkraft</span>
+              <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
+            </div>
+            <Slider
+              value={[config.opacity]}
+              min={0}
+              max={100}
+              step={5}
+              onValueChange={([val]) => onOpacityChange(val)}
+              className="w-full"
+            />
+          </div>
+
+          {/* Legend Toggle */}
+          <button
+            onClick={() => setShowLegend(!showLegend)}
+            className="flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <Info className="h-3 w-3" />
+            {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+          </button>
+
+          {/* Legend */}
+          {showLegend && (
+            <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+              <span className="text-xs font-medium">{info.legendLabel}</span>
+              <div className="flex flex-wrap gap-1">
+                {info.legendColors.map((item, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <div
+                      className="w-4 h-3 rounded-sm border border-border/50"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{item.label}</span>
                   </div>
-                </div>
-              )}
-              
-              {/* Nearest capture hint (no intersection) */}
-              {nearestCandidate && !bestRejected && (
-                <div className="mt-2 p-2 rounded bg-background/80 border border-border space-y-1">
-                  <p className="text-muted-foreground flex items-center gap-1">
-                    <MapPin className="h-3 w-3" />
-                    Nächste Aufnahme: <strong>{nearestCandidate.distance_km} km</strong> entfernt
-                  </p>
-                  <p className="text-[10px] text-muted-foreground/70">
-                    {new Date(nearestCandidate.datetime).toLocaleDateString('de-DE', {
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: 'numeric',
-                    })}
-                    {nearestCandidate.cloud_cover != null && ` • Bewölkung: ${nearestCandidate.cloud_cover}%`}
-                  </p>
-                  <button
-                    onClick={() => setShowBoundary(!showBoundary)}
-                    className="flex items-center gap-1 text-xs text-primary hover:underline mt-1"
-                  >
-                    {showBoundary ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    {showBoundary ? 'Footprint ausblenden' : 'Footprint anzeigen'}
-                  </button>
-                </div>
-              )}
-              
-              {/* Candidates checked info */}
-              {candidatesChecked != null && (
-                <p className="text-[10px] text-muted-foreground/60 mt-1">
-                  {candidatesChecked} Aufnahmen geprüft
+                ))}
+              </div>
+              {'disclaimer' in info && (
+                <p className="text-[10px] text-muted-foreground/80 italic mt-1">
+                  {(info as typeof OVERLAY_INFO.floodRisk).disclaimer}
                 </p>
               )}
             </div>
           )}
 
-          {/* ECOSTRESS: Match State - Show overlay controls */}
-          {id === 'ecostress' && isMatch && (
-            <>
-              {/* Opacity Slider */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Deckkraft</span>
-                  <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
-                </div>
-                <Slider
-                  value={[config.opacity]}
-                  min={0}
-                  max={100}
-                  step={5}
-                  onValueChange={([val]) => onOpacityChange(val)}
-                  className="w-full"
-                />
-              </div>
-
-              {/* Show boundary toggle */}
-              <button
-                onClick={() => setShowBoundary(!showBoundary)}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                {showBoundary ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                {showBoundary ? 'Kachel-Grenze ausblenden' : 'Kachel-Grenze anzeigen'}
-              </button>
-
-              {/* Legend Toggle */}
-              <button
-                onClick={() => setShowLegend(!showLegend)}
-                className="flex items-center gap-1 text-xs text-primary hover:underline"
-              >
-                <Info className="h-3 w-3" />
-                {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
-              </button>
-
-              {/* Legend */}
-              {showLegend && (
-                <div className="p-2 rounded bg-background/80 border border-border space-y-2">
-                  <span className="text-xs font-medium">{info.legendLabel}</span>
-                  <div className="flex flex-wrap gap-1">
-                    {info.legendColors.map((item, i) => (
-                      <div key={i} className="flex items-center gap-1">
-                        <div
-                          className="w-4 h-3 rounded-sm border border-border/50"
-                          style={{ backgroundColor: item.color }}
-                        />
-                        <span className="text-[10px] text-muted-foreground">{item.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+          {/* Layer count (flood risk) */}
+          {id === 'floodRisk' && config.metadata?.layers && (
+            <div className="p-2 rounded bg-blue-500/10 border border-blue-500/30 text-xs">
+              <p className="text-blue-600 dark:text-blue-400 font-medium">
+                ✓ {(config.metadata.layers as any[]).length} Layer geladen
+              </p>
+              {config.metadata.message && (
+                <p className="text-muted-foreground mt-1">{String(config.metadata.message)}</p>
               )}
-
-              {/* Match info with quality metrics */}
-              <div className="p-2 rounded bg-green-500/10 border border-green-500/30 text-xs space-y-2">
-                <p className="text-green-600 dark:text-green-400 font-medium">✓ Beste Aufnahme ausgewählt</p>
-                
-                {/* Quality metrics grid */}
-                {(qualityScore != null || coveragePercent != null) && (
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
-                    {qualityScore != null && (
-                      <>
-                        <span className="text-muted-foreground">Qualität:</span>
-                        <span className="font-mono font-medium">{Math.round(qualityScore * 100)}%</span>
-                      </>
-                    )}
-                    {coveragePercent != null && (
-                      <>
-                        <span className="text-muted-foreground">Abdeckung:</span>
-                        <span className="font-mono">{coveragePercent}%</span>
-                      </>
-                    )}
-                    {cloudPercent != null && (
-                      <>
-                        <span className="text-muted-foreground">Bewölkung:</span>
-                        <span className="font-mono">{cloudPercent}%</span>
-                      </>
-                    )}
-                  </div>
-                )}
-                
-                {/* Acquisition date */}
-                {config.metadata?.acquisitionDatetime && (
-                  <p className="text-muted-foreground">
-                    Aufnahme: {new Date(String(config.metadata.acquisitionDatetime)).toLocaleDateString('de-DE', {
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </p>
-                )}
-                
-                {/* Candidates checked */}
-                {candidatesChecked != null && (
-                  <p className="text-[10px] text-muted-foreground/60">
-                    Ausgewählt aus {candidatesChecked} Aufnahmen
-                  </p>
-                )}
-              </div>
-            </>
-          )}
-
-          {/* Flood Risk controls */}
-          {id === 'floodRisk' && (
-            <>
-              {/* Opacity Slider */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Deckkraft</span>
-                  <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
-                </div>
-                <Slider
-                  value={[config.opacity]}
-                  min={0}
-                  max={100}
-                  step={5}
-                  onValueChange={([val]) => onOpacityChange(val)}
-                  className="w-full"
-                />
-              </div>
-
-              {/* Legend Toggle */}
-              <button
-                onClick={() => setShowLegend(!showLegend)}
-                className="flex items-center gap-1 text-xs text-primary hover:underline"
-              >
-                <Info className="h-3 w-3" />
-                {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
-              </button>
-
-              {/* Legend */}
-              {showLegend && (
-                <div className="p-2 rounded bg-background/80 border border-border space-y-2">
-                  <span className="text-xs font-medium">{info.legendLabel}</span>
-                  <div className="flex flex-wrap gap-1">
-                    {info.legendColors.map((item, i) => (
-                      <div key={i} className="flex items-center gap-1">
-                        <div
-                          className="w-4 h-3 rounded-sm border border-border/50"
-                          style={{ backgroundColor: item.color }}
-                        />
-                        <span className="text-[10px] text-muted-foreground">{item.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {'disclaimer' in info && (
-                    <p className="text-[10px] text-muted-foreground/80 italic mt-1">
-                      {info.disclaimer}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Layer count */}
-              {config.metadata?.layers && (
-                <div className="p-2 rounded bg-blue-500/10 border border-blue-500/30 text-xs">
-                  <p className="text-blue-600 dark:text-blue-400 font-medium">
-                    ✓ {(config.metadata.layers as any[]).length} Layer geladen
-                  </p>
-                  {config.metadata.message && (
-                    <p className="text-muted-foreground mt-1">{String(config.metadata.message)}</p>
-                  )}
-                </div>
-              )}
-            </>
+            </div>
           )}
 
           {/* Timestamp */}

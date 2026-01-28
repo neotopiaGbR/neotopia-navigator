@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle } from 'lucide-react';
+import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, MapPin, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
@@ -55,6 +55,14 @@ const OVERLAY_INFO = {
     disclaimer: 'Indikative Risikodarstellung. Für amtliche Hochwasserkarten lokale Behörden konsultieren.',
   },
 };
+
+interface NearestCandidate {
+  granule_id: string;
+  datetime: string;
+  bounds: [number, number, number, number];
+  distance_km: number;
+  cloud_cover?: number;
+}
 
 const LayersControl: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -212,6 +220,13 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
   onOpacityChange,
 }) => {
   const [showLegend, setShowLegend] = useState(false);
+  const [showBoundary, setShowBoundary] = useState(false);
+
+  // Check ECOSTRESS status from metadata
+  const ecostressStatus = id === 'ecostress' ? (config.metadata?.status as string) : null;
+  const isNoCoverage = ecostressStatus === 'no_coverage';
+  const isMatch = ecostressStatus === 'match';
+  const nearestCandidate = config.metadata?.nearestCandidate as NearestCandidate | null;
 
   return (
     <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
@@ -246,52 +261,182 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
       {/* Controls (when enabled) */}
       {config.enabled && !config.loading && (
         <div className="space-y-3 pt-2">
-          {/* Opacity Slider */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Deckkraft</span>
-              <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
-            </div>
-            <Slider
-              value={[config.opacity]}
-              min={0}
-              max={100}
-              step={5}
-              onValueChange={([val]) => onOpacityChange(val)}
-              className="w-full"
-            />
-          </div>
-
-          {/* Legend Toggle */}
-          <button
-            onClick={() => setShowLegend(!showLegend)}
-            className="flex items-center gap-1 text-xs text-primary hover:underline"
-          >
-            <Info className="h-3 w-3" />
-            {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
-          </button>
-
-          {/* Legend */}
-          {showLegend && (
-            <div className="p-2 rounded bg-background/80 border border-border space-y-2">
-              <span className="text-xs font-medium">{info.legendLabel}</span>
-              <div className="flex flex-wrap gap-1">
-                {info.legendColors.map((item, i) => (
-                  <div key={i} className="flex items-center gap-1">
-                    <div
-                      className="w-4 h-3 rounded-sm border border-border/50"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <span className="text-[10px] text-muted-foreground">{item.label}</span>
-                  </div>
-                ))}
-              </div>
-              {'disclaimer' in info && (
-                <p className="text-[10px] text-muted-foreground/80 italic mt-1">
-                  {info.disclaimer}
+          {/* ECOSTRESS: No Coverage State */}
+          {id === 'ecostress' && isNoCoverage && (
+            <div className="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-xs space-y-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <p className="text-amber-700 dark:text-amber-300 font-medium">
+                  Keine Abdeckung
                 </p>
+              </div>
+              <p className="text-muted-foreground">
+                {String(config.metadata?.message || 'Keine ECOSTRESS-Aufnahme für diese Region im letzten Jahr verfügbar.')}
+              </p>
+              
+              {/* Nearest capture hint */}
+              {nearestCandidate && (
+                <div className="mt-2 p-2 rounded bg-background/80 border border-border space-y-1">
+                  <p className="text-muted-foreground flex items-center gap-1">
+                    <MapPin className="h-3 w-3" />
+                    Nächste Aufnahme: <strong>{nearestCandidate.distance_km} km</strong> entfernt
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/70">
+                    {new Date(nearestCandidate.datetime).toLocaleDateString('de-DE', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                    })}
+                    {nearestCandidate.cloud_cover != null && ` • Bewölkung: ${nearestCandidate.cloud_cover}%`}
+                  </p>
+                  <button
+                    onClick={() => setShowBoundary(!showBoundary)}
+                    className="flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+                  >
+                    {showBoundary ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {showBoundary ? 'Footprint ausblenden' : 'Footprint anzeigen'}
+                  </button>
+                </div>
               )}
             </div>
+          )}
+
+          {/* ECOSTRESS: Match State - Show overlay controls */}
+          {id === 'ecostress' && isMatch && (
+            <>
+              {/* Opacity Slider */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Deckkraft</span>
+                  <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
+                </div>
+                <Slider
+                  value={[config.opacity]}
+                  min={0}
+                  max={100}
+                  step={5}
+                  onValueChange={([val]) => onOpacityChange(val)}
+                  className="w-full"
+                />
+              </div>
+
+              {/* Show boundary toggle */}
+              <button
+                onClick={() => setShowBoundary(!showBoundary)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {showBoundary ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                {showBoundary ? 'Kachel-Grenze ausblenden' : 'Kachel-Grenze anzeigen'}
+              </button>
+
+              {/* Legend Toggle */}
+              <button
+                onClick={() => setShowLegend(!showLegend)}
+                className="flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <Info className="h-3 w-3" />
+                {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+              </button>
+
+              {/* Legend */}
+              {showLegend && (
+                <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+                  <span className="text-xs font-medium">{info.legendLabel}</span>
+                  <div className="flex flex-wrap gap-1">
+                    {info.legendColors.map((item, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <div
+                          className="w-4 h-3 rounded-sm border border-border/50"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        <span className="text-[10px] text-muted-foreground">{item.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Match info */}
+              <div className="p-2 rounded bg-green-500/10 border border-green-500/30 text-xs">
+                <p className="text-green-600 dark:text-green-400 font-medium">✓ Daten verfügbar</p>
+                {config.metadata?.acquisitionDatetime && (
+                  <p className="text-muted-foreground mt-1">
+                    Aufnahme: {new Date(String(config.metadata.acquisitionDatetime)).toLocaleDateString('de-DE', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Flood Risk controls */}
+          {id === 'floodRisk' && (
+            <>
+              {/* Opacity Slider */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Deckkraft</span>
+                  <span className="text-xs font-mono text-muted-foreground">{config.opacity}%</span>
+                </div>
+                <Slider
+                  value={[config.opacity]}
+                  min={0}
+                  max={100}
+                  step={5}
+                  onValueChange={([val]) => onOpacityChange(val)}
+                  className="w-full"
+                />
+              </div>
+
+              {/* Legend Toggle */}
+              <button
+                onClick={() => setShowLegend(!showLegend)}
+                className="flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <Info className="h-3 w-3" />
+                {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+              </button>
+
+              {/* Legend */}
+              {showLegend && (
+                <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+                  <span className="text-xs font-medium">{info.legendLabel}</span>
+                  <div className="flex flex-wrap gap-1">
+                    {info.legendColors.map((item, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <div
+                          className="w-4 h-3 rounded-sm border border-border/50"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        <span className="text-[10px] text-muted-foreground">{item.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {'disclaimer' in info && (
+                    <p className="text-[10px] text-muted-foreground/80 italic mt-1">
+                      {info.disclaimer}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Layer count */}
+              {config.metadata?.layers && (
+                <div className="p-2 rounded bg-blue-500/10 border border-blue-500/30 text-xs">
+                  <p className="text-blue-600 dark:text-blue-400 font-medium">
+                    ✓ {(config.metadata.layers as any[]).length} Layer geladen
+                  </p>
+                  {config.metadata.message && (
+                    <p className="text-muted-foreground mt-1">{String(config.metadata.message)}</p>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
           {/* Timestamp */}
@@ -306,37 +451,6 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
                 minute: '2-digit',
               })}
             </p>
-          )}
-
-          {/* Acquisition datetime for ECOSTRESS */}
-          {id === 'ecostress' && config.metadata?.acquisitionDatetime && (
-            <div className="p-2 rounded bg-green-500/10 border border-green-500/30 text-xs">
-              <p className="text-green-600 dark:text-green-400 font-medium">✓ Daten verfügbar</p>
-              <p className="text-muted-foreground mt-1">
-                Aufnahme: {new Date(String(config.metadata.acquisitionDatetime)).toLocaleDateString('de-DE', {
-                  day: '2-digit',
-                  month: '2-digit',
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </p>
-              <p className="text-[10px] text-muted-foreground/70 mt-1">
-                Hinweis: Vollständige Rasterkacheln erfordern deck.gl Integration
-              </p>
-            </div>
-          )}
-
-          {/* Layer count for Flood Risk */}
-          {id === 'floodRisk' && config.metadata?.layers && (
-            <div className="p-2 rounded bg-blue-500/10 border border-blue-500/30 text-xs">
-              <p className="text-blue-600 dark:text-blue-400 font-medium">
-                ✓ {(config.metadata.layers as any[]).length} Layer geladen
-              </p>
-              {config.metadata.message && (
-                <p className="text-muted-foreground mt-1">{String(config.metadata.message)}</p>
-              )}
-            </div>
           )}
         </div>
       )}

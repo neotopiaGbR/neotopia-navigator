@@ -241,8 +241,10 @@ export function EcostressCompositeOverlay({
           },
         });
 
+        // NOTE: For MapLibre, non-interleaved mode is the most reliable.
+        // Interleaved mode is primarily for Mapbox GL JS v2+.
         const overlay = new MapboxOverlay({
-          interleaved: true, // Use interleaved mode for better MapLibre compatibility
+          interleaved: false,
           layers: [layer],
         });
 
@@ -256,15 +258,15 @@ export function EcostressCompositeOverlay({
       }
     };
 
-    // Ensure style is fully loaded before adding overlay
+    // Ensure overlay is (re-)added after style reloads (basemap switches)
+    const handleStyleLoad = () => setTimeout(addOverlay, 100);
     if (map.isStyleLoaded()) {
-      // Small delay to ensure map is fully ready
-      setTimeout(addOverlay, 100);
-    } else {
-      map.once('style.load', () => setTimeout(addOverlay, 100));
+      handleStyleLoad();
     }
+    map.on('style.load', handleStyleLoad);
 
     return () => {
+      map?.off('style.load', handleStyleLoad);
       if (overlayRef.current && map) {
         try {
           map.removeControl(overlayRef.current as unknown as maplibregl.IControl);

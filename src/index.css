@@ -98,11 +98,15 @@
 }
 
 /* MapLibre + deck.gl overlay hardening
-   Ensures deck canvas stays on top of the MapLibre canvas (but below UI overlays). */
+   Ensures deck canvas stays on top of the MapLibre canvas (but below UI overlays).
+   CRITICAL: width/height must be 100% to prevent the 300x150 default canvas bug. */
 @layer components {
-  .maplibregl-map .deckgl-overlay {
+  .maplibregl-map .deckgl-overlay,
+  .maplibregl-map #deckgl-overlay {
     position: absolute !important;
     inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
     z-index: 1 !important;
     pointer-events: none !important;
   }
@@ -111,9 +115,12 @@
   .maplibregl-map canvas.deck-canvas,
   .maplibregl-map canvas#deckgl-canvas,
   .maplibregl-map canvas#deck-canvas,
+  .maplibregl-map canvas#deckgl-overlay,
   .maplibregl-map canvas[id*="deck"] {
     position: absolute !important;
     inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
     z-index: 1 !important;
     pointer-events: none !important;
   }

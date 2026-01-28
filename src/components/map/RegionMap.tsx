@@ -9,6 +9,7 @@ import { getBasemapStyle } from './basemapStyles';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
 import LayersControl from './LayersControl';
+import EcostressDebugOverlay from './EcostressDebugOverlay';
 
 const REGIONS_FETCH_TIMEOUT_MS = 10000;
 
@@ -528,6 +529,9 @@ const RegionMap: React.FC = () => {
       
       {/* Layers Control */}
       <LayersControl />
+      
+      {/* Debug Overlay (admin only) */}
+      <EcostressDebugOverlay />
       
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80">

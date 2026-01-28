@@ -136,15 +136,24 @@ export function AirTemperatureOverlay({
       .then((r) => r.json())
       .then((gj) => {
         if (cancelled) return;
-        const geom = gj?.geometry;
-        if (!geom) return;
+        // Handle both FeatureCollection and bare geometry
+        let geom = gj?.geometry;
+        if (!geom && gj?.features?.[0]?.geometry) {
+          geom = gj.features[0].geometry;
+        }
+        if (!geom) {
+          console.warn('[AirTemperatureOverlay] No geometry found in boundary file');
+          return;
+        }
         if (geom.type === 'Polygon') {
           boundaryRef.current = [geom.coordinates as Ring[]];
         } else if (geom.type === 'MultiPolygon') {
           boundaryRef.current = geom.coordinates as MultiPolygon;
         }
+        console.log('[AirTemperatureOverlay] Germany boundary loaded:', geom.type);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn('[AirTemperatureOverlay] Failed to load boundary:', err);
         // If boundary fails, we still render the raster in bbox (no blocking)
       });
     return () => {
@@ -263,6 +272,7 @@ export function AirTemperatureOverlay({
 
       if (cancelled) return;
       const url = createCanvasDataUrl(img);
+      console.log('[AirTemperatureOverlay] Raster created:', url.length, 'bytes, has mask:', hasMask);
       if (!cancelled) setImageUrl(url);
     };
 
@@ -302,8 +312,9 @@ export function AirTemperatureOverlay({
     try {
       map.addControl(overlay as unknown as any);
       overlayRef.current = overlay;
-    } catch {
-      // ignore
+      console.log('[AirTemperatureOverlay] BitmapLayer added to map, bounds:', bounds);
+    } catch (err) {
+      console.error('[AirTemperatureOverlay] Failed to add overlay:', err);
     }
 
     return () => {

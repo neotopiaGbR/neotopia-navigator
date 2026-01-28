@@ -90,13 +90,22 @@ const EcostressDebugOverlay: React.FC<EcostressDebugOverlayProps> = ({ debugInfo
 
   // Check for deck canvas
   const checkDeckCanvas = useCallback(() => {
-    const canvas = document.querySelector('canvas.deck-canvas') as HTMLCanvasElement;
-    return canvas ? {
+    const canvases = Array.from(document.querySelectorAll('canvas')) as HTMLCanvasElement[];
+    const canvas =
+      canvases.find((c) => {
+        const id = (c.id || '').toLowerCase();
+        const cls = (typeof c.className === 'string' ? c.className : String(c.className || '')).toLowerCase();
+        return id.includes('deck') || cls.includes('deck');
+      }) || null;
+
+    if (!canvas) return { exists: false, width: 0, height: 0, visible: false };
+    const style = window.getComputedStyle(canvas);
+    return {
       exists: true,
       width: canvas.width,
       height: canvas.height,
-      visible: canvas.style.display !== 'none' && canvas.style.visibility !== 'hidden',
-    } : { exists: false, width: 0, height: 0, visible: false };
+      visible: style.display !== 'none' && style.visibility !== 'hidden',
+    };
   }, []);
 
   const [deckCanvasInfo, setDeckCanvasInfo] = useState(checkDeckCanvas());

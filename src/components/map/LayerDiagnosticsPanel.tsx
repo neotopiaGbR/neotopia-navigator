@@ -46,18 +46,24 @@ const LayerDiagnosticsPanel: React.FC<LayerDiagnosticsPanelProps> = ({ map }) =>
 
   // Check deck.gl canvas
   const checkDeckCanvas = useCallback(() => {
-    const canvas = document.querySelector('canvas#deck-canvas, canvas.deck-canvas') as HTMLCanvasElement;
-    if (canvas) {
-      const style = window.getComputedStyle(canvas);
-      return {
-        exists: true,
-        width: canvas.width,
-        height: canvas.height,
-        visible: style.display !== 'none' && style.visibility !== 'hidden',
-        zIndex: style.zIndex,
-      };
-    }
-    return { exists: false, width: 0, height: 0, visible: false, zIndex: '' };
+    const canvases = Array.from(document.querySelectorAll('canvas')) as HTMLCanvasElement[];
+    const canvas =
+      canvases.find((c) => {
+        const id = (c.id || '').toLowerCase();
+        const cls = (typeof c.className === 'string' ? c.className : String(c.className || '')).toLowerCase();
+        return id.includes('deck') || cls.includes('deck');
+      }) || null;
+
+    if (!canvas) return { exists: false, width: 0, height: 0, visible: false, zIndex: '' };
+
+    const style = window.getComputedStyle(canvas);
+    return {
+      exists: true,
+      width: canvas.width,
+      height: canvas.height,
+      visible: style.display !== 'none' && style.visibility !== 'hidden',
+      zIndex: style.zIndex,
+    };
   }, []);
 
   // Collect layer info
@@ -213,7 +219,7 @@ const LayerDiagnosticsPanel: React.FC<LayerDiagnosticsPanelProps> = ({ map }) =>
                   <div className="text-xs text-muted-foreground">No overlay layers active</div>
                 ) : (
                   layers.map((layer, i) => (
-                    <div key={layer.id} className="p-2 rounded border border-border/50 bg-muted/20 text-xs">
+                    <div key={`${layer.id}-${i}`} className="p-2 rounded border border-border/50 bg-muted/20 text-xs">
                       <div className="flex items-center justify-between mb-1">
                         <span className="font-medium">{layer.id}</span>
                         <span className={`px-1.5 py-0.5 rounded text-[10px] ${

@@ -96,3 +96,29 @@
     font-family: 'Manrope', sans-serif;
   }
 }
+
+/* MapLibre + deck.gl overlay hardening
+   Ensures deck canvas stays on top of the MapLibre canvas (but below UI overlays). */
+@layer components {
+  .maplibregl-map .deckgl-overlay {
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 1 !important;
+    pointer-events: none !important;
+  }
+
+  .maplibregl-map canvas.deckgl-canvas,
+  .maplibregl-map canvas.deck-canvas,
+  .maplibregl-map canvas#deckgl-canvas,
+  .maplibregl-map canvas#deck-canvas,
+  .maplibregl-map canvas[id*="deck"] {
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 1 !important;
+    pointer-events: none !important;
+  }
+
+  .maplibregl-map canvas.maplibregl-canvas {
+    z-index: 0 !important;
+  }
+}

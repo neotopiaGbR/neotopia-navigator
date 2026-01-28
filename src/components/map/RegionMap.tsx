@@ -506,14 +506,16 @@ const RegionMap: React.FC = () => {
         />
       )}
       
-      {/* AIR TEMPERATURE LEGEND - Always visible when layer enabled */}
+      {/* AIR TEMPERATURE LEGEND - Top-right, always visible when layer enabled */}
       <AirTemperatureLegend
-        visible={airTemperature.enabled && !airTemperature.loading && !!airTemperature.data}
+        visible={airTemperature.enabled}
         normalization={airTemperature.metadata?.normalization || null}
         aggregation={airTemperature.aggregation}
         year={airTemperature.metadata?.year}
         period={airTemperature.metadata?.period}
         pointCount={airTemperature.metadata?.pointCount}
+        loading={airTemperature.loading}
+        error={airTemperature.error}
       />
       
       {/* TIER 1: Global LST Base Layer (MODIS) - ALWAYS ON when heat enabled */}

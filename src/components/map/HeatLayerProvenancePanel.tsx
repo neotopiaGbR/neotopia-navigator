@@ -3,14 +3,15 @@
  * 
  * Shows detailed information about active heat layers:
  * - Base layer (MODIS/VIIRS) - always active
- * - High-res overlay (ECOSTRESS) - when available
- * - Coverage, quality metrics, and acquisition dates
+ * - High-res ECOSTRESS Summer Composite - when available
+ * - Aggregation method, coverage, and temporal info
  */
 
 import React from 'react';
-import { AlertCircle, CheckCircle, Info, Layers, ThermometerSun, Satellite, Globe } from 'lucide-react';
+import { AlertCircle, CheckCircle, Info, Layers, Satellite, Globe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { GLOBAL_LST_INFO } from './GlobalLSTOverlay';
+import type { AggregationMethod } from './MapLayersContext';
 
 interface EcostressMetadata {
   status: 'match' | 'no_coverage' | 'loading' | null;
@@ -22,6 +23,10 @@ interface EcostressMetadata {
   cloudPercent?: number;
   candidatesChecked?: number;
   message?: string;
+  // Summer composite fields
+  granuleCount?: number;
+  aggregationMethod?: AggregationMethod;
+  timeWindow?: { from: string; to: string };
   bestRejected?: {
     quality_score: number;
     coverage_percent: number;
@@ -37,6 +42,7 @@ interface HeatLayerProvenancePanelProps {
   ecostressLoading: boolean;
   globalLSTOpacity: number;
   ecostressOpacity: number;
+  aggregationMethod?: AggregationMethod;
 }
 
 const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
@@ -46,6 +52,7 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
   ecostressLoading,
   globalLSTOpacity,
   ecostressOpacity,
+  aggregationMethod = 'median',
 }) => {
   if (!visible) return null;
 
@@ -77,7 +84,7 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
         attribution={GLOBAL_LST_INFO.attribution}
       />
 
-      {/* TIER 2: ECOSTRESS High-Res Overlay */}
+      {/* TIER 2: ECOSTRESS Summer Composite */}
       {ecostressEnabled && (
         <>
           <div className="border-t border-border/50" />
@@ -86,28 +93,29 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
             <LayerInfo
               tier={2}
               icon={<Satellite className="h-4 w-4 text-orange-500" />}
-              title="Hochauflösende Details (ECOSTRESS)"
+              title="Sommer-Komposit (ECOSTRESS)"
               source="NASA ECOSTRESS"
               resolution="~70m"
               status="loading"
-              statusText="Suche beste Aufnahme..."
+              statusText="Erstelle Komposit..."
             />
           ) : hasEcostressMatch ? (
             <LayerInfo
               tier={2}
               icon={<Satellite className="h-4 w-4 text-orange-500" />}
-              title="Hochauflösende Details (ECOSTRESS)"
+              title="Sommer-Komposit (ECOSTRESS)"
               source="NASA ECOSTRESS LST"
               resolution="~70m"
-              coverage={`${ecostressMetadata.coveragePercent ?? 0}%`}
+              coverage={ecostressMetadata.granuleCount ? `${ecostressMetadata.granuleCount} Aufnahmen` : undefined}
               temporalInfo={
-                ecostressMetadata.acquisitionDatetime
-                  ? formatAcquisitionDate(ecostressMetadata.acquisitionDatetime)
-                  : 'Unbekannt'
+                ecostressMetadata.timeWindow 
+                  ? formatTimeWindow(ecostressMetadata.timeWindow)
+                  : ecostressMetadata.acquisitionDatetime
+                    ? formatAcquisitionDate(ecostressMetadata.acquisitionDatetime)
+                    : 'Sommer (Jun–Aug)'
               }
               opacity={ecostressOpacity}
-              qualityScore={ecostressMetadata.qualityScore}
-              cloudPercent={ecostressMetadata.cloudPercent}
+              aggregation={aggregationMethod === 'p90' ? '90. Perzentil' : 'Median'}
               status="active"
               statusText="Aktiv"
               attribution="NASA LP DAAC / ECOSTRESS"
@@ -116,7 +124,7 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
             <LayerInfo
               tier={2}
               icon={<Satellite className="h-4 w-4 text-muted-foreground" />}
-              title="Hochauflösende Details (ECOSTRESS)"
+              title="Sommer-Komposit (ECOSTRESS)"
               source="NASA ECOSTRESS"
               resolution="~70m"
               status="unavailable"
@@ -129,12 +137,12 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
             <LayerInfo
               tier={2}
               icon={<Satellite className="h-4 w-4 text-muted-foreground" />}
-              title="Hochauflösende Details (ECOSTRESS)"
+              title="Sommer-Komposit (ECOSTRESS)"
               source="NASA ECOSTRESS"
               resolution="~70m"
               status="unavailable"
               statusText="Region auswählen"
-              message="Wählen Sie eine Region auf der Karte aus, um hochauflösende ECOSTRESS-Daten zu laden."
+              message="Wählen Sie eine Region auf der Karte aus, um das ECOSTRESS-Sommer-Komposit zu laden."
             />
           )}
         </>
@@ -145,8 +153,8 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
         <div className="flex items-start gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/20">
           <Info className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
           <p className="text-[11px] text-amber-700 dark:text-amber-300">
-            Die globale MODIS-Basiskarte bleibt sichtbar. Hochauflösende ECOSTRESS-Daten 
-            werden nur angezeigt, wenn eine qualitativ ausreichende Aufnahme für diese Region existiert.
+            Die globale MODIS-Basiskarte bleibt sichtbar. Das hochauflösende ECOSTRESS-Sommer-Komposit
+            wird nur angezeigt, wenn genügend Aufnahmen für diese Region existieren.
           </p>
         </div>
       )}
@@ -165,6 +173,7 @@ interface LayerInfoProps {
   opacity?: number;
   qualityScore?: number;
   cloudPercent?: number;
+  aggregation?: string; // For composite: 'Median' or '90. Perzentil'
   status: 'active' | 'loading' | 'unavailable';
   statusText: string;
   message?: string;
@@ -189,6 +198,7 @@ const LayerInfo: React.FC<LayerInfoProps> = ({
   opacity,
   qualityScore,
   cloudPercent,
+  aggregation,
   status,
   statusText,
   message,
@@ -254,6 +264,13 @@ const LayerInfo: React.FC<LayerInfoProps> = ({
           </>
         )}
 
+        {aggregation && (
+          <>
+            <span className="text-muted-foreground">Aggregation:</span>
+            <span className="text-foreground font-medium">{aggregation}</span>
+          </>
+        )}
+
         {opacity != null && (
           <>
             <span className="text-muted-foreground">Deckkraft:</span>
@@ -316,6 +333,21 @@ function formatAcquisitionDate(dateStr: string): string {
     return `${formatted} (vor ${Math.floor(diffDays / 30)} Monaten)`;
   } catch {
     return dateStr;
+  }
+}
+
+function formatTimeWindow(timeWindow: { from: string; to: string }): string {
+  try {
+    const from = new Date(timeWindow.from);
+    const to = new Date(timeWindow.to);
+    
+    const fromStr = from.toLocaleDateString('de-DE', { month: 'short', year: 'numeric' });
+    const toStr = to.toLocaleDateString('de-DE', { month: 'short', year: 'numeric' });
+    
+    if (fromStr === toStr) return fromStr;
+    return `${fromStr} – ${toStr}`;
+  } catch {
+    return 'Sommer (Jun–Aug)';
   }
 }
 

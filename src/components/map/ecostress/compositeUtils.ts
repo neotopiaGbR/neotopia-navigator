@@ -282,51 +282,35 @@ async function fetchCOGRaster(granule: GranuleInput): Promise<RasterData | null>
 }
 
 /**
- * Compute QUALITY-WEIGHTED aggregated value from array of {value, weight} pairs
+ * Compute aggregated value from array of {value, weight} pairs
+ * Uses SIMPLE (unweighted) aggregation for median to show true temperature distribution.
  * Supports: median (typical), p90 (extreme 90th percentile), max (absolute maximum)
  */
 function weightedAggregate(samples: { value: number; weight: number }[], method: AggregationMethod): number {
   if (samples.length === 0) return NaN;
   if (samples.length === 1) return samples[0].value;
   
-  // For MAX method - just return the highest value (shows hottest readings)
+  // Extract just the values for simple percentile calculations
+  const values = samples.map(s => s.value).sort((a, b) => a - b);
+  
+  // For MAX method - return the absolute highest temperature
   if (method === 'max') {
-    return Math.max(...samples.map(s => s.value));
+    return values[values.length - 1];
   }
   
-  // Sort by value
-  const sorted = samples.slice().sort((a, b) => a.value - b.value);
-  const totalWeight = sorted.reduce((sum, s) => sum + s.weight, 0);
-  
-  if (totalWeight === 0) {
-    // Fallback to simple aggregation if all weights are zero
-    const values = sorted.map(s => s.value);
-    if (method === 'p90') {
-      const idx = Math.floor(values.length * 0.9);
-      return values[Math.min(idx, values.length - 1)];
-    }
-    const mid = Math.floor(values.length / 2);
-    return values.length % 2 === 0 ? (values[mid - 1] + values[mid]) / 2 : values[mid];
+  // For P90 method - return the 90th percentile (extreme heat)
+  if (method === 'p90') {
+    const idx = Math.floor(values.length * 0.9);
+    return values[Math.min(idx, values.length - 1)];
   }
   
-  const targetPercentile = method === 'p90' ? 0.9 : 0.5;
-  const targetWeight = totalWeight * targetPercentile;
-  
-  let cumulativeWeight = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    cumulativeWeight += sorted[i].weight;
-    if (cumulativeWeight >= targetWeight) {
-      // Interpolate between this and previous value for smoother results
-      if (i > 0 && cumulativeWeight > targetWeight) {
-        const prevWeight = cumulativeWeight - sorted[i].weight;
-        const fraction = (targetWeight - prevWeight) / sorted[i].weight;
-        return sorted[i - 1].value + fraction * (sorted[i].value - sorted[i - 1].value);
-      }
-      return sorted[i].value;
-    }
+  // For MEDIAN - return the true middle value (unweighted)
+  // This ensures we see the actual typical summer heat, not biased by weights
+  const mid = Math.floor(values.length / 2);
+  if (values.length % 2 === 0) {
+    return (values[mid - 1] + values[mid]) / 2;
   }
-  
-  return sorted[sorted.length - 1].value;
+  return values[mid];
 }
 
 /**

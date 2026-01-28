@@ -199,23 +199,34 @@ export function EcostressCompositeOverlay({
   useEffect(() => {
     if (!map) return;
 
-    // Remove existing overlay
+    // Remove existing overlay first
     if (overlayRef.current) {
       try {
         map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-      } catch {
-        // Ignore
+      } catch (e) {
+        console.warn('[EcostressCompositeOverlay] Error removing overlay:', e);
       }
       overlayRef.current = null;
     }
 
     // Don't add if not visible or no image
     if (!visible || !imageUrl || !compositeResult) {
+      console.log('[EcostressCompositeOverlay] Skipping overlay:', { visible, hasImage: !!imageUrl, hasResult: !!compositeResult });
       return;
     }
 
     const addOverlay = () => {
-      console.log('[EcostressCompositeOverlay] Adding SINGLE composite BitmapLayer');
+      // Double-check map is still valid
+      if (!map || !map.getCanvas()) {
+        console.warn('[EcostressCompositeOverlay] Map not ready for overlay');
+        return;
+      }
+
+      console.log('[EcostressCompositeOverlay] Adding SINGLE composite BitmapLayer', {
+        bounds: compositeResult.bounds,
+        opacity,
+        imageLength: imageUrl.length,
+      });
 
       try {
         // Create SINGLE BitmapLayer - no overlapping swaths
@@ -231,31 +242,34 @@ export function EcostressCompositeOverlay({
         });
 
         const overlay = new MapboxOverlay({
-          interleaved: false,
+          interleaved: true, // Use interleaved mode for better MapLibre compatibility
           layers: [layer],
         });
 
+        // Add as control - MapboxOverlay implements IControl interface
         map.addControl(overlay as unknown as maplibregl.IControl);
         overlayRef.current = overlay;
 
-        console.log('[EcostressCompositeOverlay] ✅ Single composite overlay mounted');
+        console.log('[EcostressCompositeOverlay] ✅ Single composite overlay mounted successfully');
       } catch (err) {
         console.error('[EcostressCompositeOverlay] Failed to add overlay:', err);
       }
     };
 
+    // Ensure style is fully loaded before adding overlay
     if (map.isStyleLoaded()) {
-      addOverlay();
+      // Small delay to ensure map is fully ready
+      setTimeout(addOverlay, 100);
     } else {
-      map.once('style.load', addOverlay);
+      map.once('style.load', () => setTimeout(addOverlay, 100));
     }
 
     return () => {
       if (overlayRef.current && map) {
         try {
           map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-        } catch {
-          // Ignore cleanup errors
+        } catch (e) {
+          // Ignore cleanup errors during unmount
         }
         overlayRef.current = null;
       }

@@ -48,11 +48,24 @@ export function GlobalLSTOverlay({ map, visible, opacity = 0.6 }: GlobalLSTOverl
     if (!map) return;
 
     const addLayer = () => {
-      if (isAddedRef.current) return;
-      if (map.getSource(SOURCE_ID)) return;
+      // Remove existing if present (handles style changes)
+      try {
+        if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
+        if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
+        isAddedRef.current = false;
+      } catch {
+        // Ignore cleanup errors
+      }
+
+      // Don't add if not visible
+      if (!visible) {
+        console.log('[GlobalLSTOverlay] Layer not visible, skipping');
+        return;
+      }
 
       try {
         const tileUrl = buildGIBSTileUrl('day');
+        console.log('[GlobalLSTOverlay] Adding MODIS LST layer:', { tileUrl: tileUrl.substring(0, 80) + '...', opacity });
         
         map.addSource(SOURCE_ID, {
           type: 'raster',
@@ -70,12 +83,12 @@ export function GlobalLSTOverlay({ map, visible, opacity = 0.6 }: GlobalLSTOverl
           type: 'raster',
           source: SOURCE_ID,
           paint: {
-            'raster-opacity': visible ? opacity : 0,
+            'raster-opacity': opacity,
           },
         }, beforeLayer);
 
         isAddedRef.current = true;
-        console.log('[GlobalLSTOverlay] MODIS LST base layer added');
+        console.log('[GlobalLSTOverlay] ✅ MODIS LST base layer added successfully');
       } catch (err) {
         console.error('[GlobalLSTOverlay] Failed to add layer:', err);
       }
@@ -93,20 +106,21 @@ export function GlobalLSTOverlay({ map, visible, opacity = 0.6 }: GlobalLSTOverl
           if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
           if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
           isAddedRef.current = false;
-        } catch (err) {
+        } catch {
           // Ignore cleanup errors
         }
       }
     };
-  }, [map]);
+  }, [map, visible, opacity]); // Re-run when visibility or opacity changes
 
-  // Update visibility/opacity
+  // Update opacity when it changes (without re-adding layer)
   useEffect(() => {
     if (!map || !isAddedRef.current) return;
     
     try {
       if (map.getLayer(LAYER_ID)) {
         map.setPaintProperty(LAYER_ID, 'raster-opacity', visible ? opacity : 0);
+        console.log('[GlobalLSTOverlay] Updated opacity:', { visible, opacity });
       }
     } catch (err) {
       console.error('[GlobalLSTOverlay] Failed to update opacity:', err);

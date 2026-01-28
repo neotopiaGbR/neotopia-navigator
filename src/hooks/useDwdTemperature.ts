@@ -49,15 +49,35 @@ export function useDwdTemperature() {
     setAirTemperatureData,
   } = useMapLayers();
 
-  const lastFetchRef = useRef<{ aggregation?: AirTempAggregation }>({});
+  // Bump this when the backend response format/behavior changes to invalidate client cache.
+  const CLIENT_CACHE_VERSION = 2;
 
-  const fetchDwdTemperature = useCallback(async () => {
+  const lastFetchRef = useRef<{ aggregation?: AirTempAggregation; cacheVersion?: number }>({});
+
+  const looksLikeGermanyBounds = useCallback((bounds: [number, number, number, number]) => {
+    const [minLon, minLat, maxLon, maxLat] = bounds;
+    // Very forgiving sanity box around Germany/central Europe.
+    // Reject clearly wrong projections (e.g. lat ~76 / lon ~-23).
+    return (
+      Number.isFinite(minLon) &&
+      Number.isFinite(minLat) &&
+      Number.isFinite(maxLon) &&
+      Number.isFinite(maxLat) &&
+      minLat > 40 &&
+      maxLat < 62 &&
+      minLon > -15 &&
+      maxLon < 35
+    );
+  }, []);
+
+  const fetchDwdTemperature = useCallback(async (opts?: { force?: boolean }) => {
     const { enabled, aggregation, data } = airTemperature;
+    const force = opts?.force === true;
     
     if (!enabled) return;
     
     // Skip if already fetched for this aggregation
-    if (lastFetchRef.current.aggregation === aggregation && data) {
+    if (!force && lastFetchRef.current.aggregation === aggregation && lastFetchRef.current.cacheVersion === CLIENT_CACHE_VERSION && data) {
       console.log('[useDwdTemperature] Using cached data for', aggregation);
       return;
     }
@@ -100,6 +120,13 @@ export function useDwdTemperature() {
         return;
       }
 
+      // Sanity check: if projection is broken, the overlay renders far away ("no data shown").
+      if (!looksLikeGermanyBounds(response.data.bounds)) {
+        throw new Error(
+          'DWD data returned implausible coordinates (projection mismatch). Please redeploy the latest get-dwd-temperature function and click refresh.'
+        );
+      }
+
       // Convert DWD response to our AirTemperatureData format
       const airTempData: AirTemperatureData = {
         grid: response.data.grid,
@@ -112,6 +139,7 @@ export function useDwdTemperature() {
       };
 
       lastFetchRef.current.aggregation = aggregation;
+      lastFetchRef.current.cacheVersion = CLIENT_CACHE_VERSION;
       setAirTemperatureData(airTempData);
       
       console.log('[useDwdTemperature] Data loaded:', {
@@ -129,7 +157,7 @@ export function useDwdTemperature() {
     } finally {
       setAirTemperatureLoading(false);
     }
-  }, [airTemperature.enabled, airTemperature.aggregation, airTemperature.data, setAirTemperatureLoading, setAirTemperatureError, setAirTemperatureData]);
+  }, [airTemperature.enabled, airTemperature.aggregation, airTemperature.data, setAirTemperatureLoading, setAirTemperatureError, setAirTemperatureData, looksLikeGermanyBounds]);
 
   // Fetch when enabled or aggregation changes
   useEffect(() => {
@@ -155,6 +183,6 @@ export function useDwdTemperature() {
     loading: airTemperature.loading,
     error: airTemperature.error,
     metadata: airTemperature.metadata,
-    refetch: fetchDwdTemperature,
+    refetch: () => fetchDwdTemperature({ force: true }),
   };
 }

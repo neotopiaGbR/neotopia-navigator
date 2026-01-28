@@ -488,14 +488,16 @@ const RegionMap: React.FC = () => {
       {/* Layers Control */}
       <LayersControl />
       
-      {/* ECOSTRESS Heat Overlay (deck.gl client-side) */}
-      <EcostressOverlay
-        map={map.current}
-        visible={overlays.ecostress.enabled}
-        opacity={overlays.ecostress.opacity / 100}
-        cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
-        onDebugInfo={setEcostressDebugInfo}
-      />
+      {/* ECOSTRESS Heat Overlay (deck.gl client-side) - only render when map is ready */}
+      {mapReady && map.current && (
+        <EcostressOverlay
+          map={map.current}
+          visible={overlays.ecostress.enabled}
+          opacity={overlays.ecostress.opacity / 100}
+          cogUrl={overlays.ecostress.metadata?.cogUrl as string | null}
+          onDebugInfo={setEcostressDebugInfo}
+        />
+      )}
       
       {/* Debug Overlay (admin only) */}
       <EcostressDebugOverlay debugInfo={ecostressDebugInfo} />

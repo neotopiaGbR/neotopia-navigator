@@ -454,7 +454,10 @@ export function EcostressOverlay({
 
   // Manage deck.gl overlay with proper z-index handling
   useEffect(() => {
-    if (!map) return;
+    if (!map) {
+      console.log('[EcostressOverlay] No map instance yet');
+      return;
+    }
 
     // Remove existing overlay
     if (overlayRef.current) {
@@ -468,56 +471,84 @@ export function EcostressOverlay({
 
     // Don't add overlay if not visible or no image
     if (!visible || !imageUrl || !bounds) {
+      console.log('[EcostressOverlay] Not adding overlay:', { visible, hasImage: !!imageUrl, hasBounds: !!bounds });
       return;
     }
 
-    console.log('[EcostressOverlay] Adding BitmapLayer with WGS84 bounds:', bounds);
+    // Ensure map style is loaded before adding control
+    const addOverlay = () => {
+      console.log('[EcostressOverlay] Adding BitmapLayer with WGS84 bounds:', bounds);
 
-    try {
-      const overlay = new MapboxOverlay({
-        interleaved: false, // Render on top of all map layers
-        layers: [
-          new BitmapLayer({
-            id: 'ecostress-heat-layer',
-            bounds: bounds,
-            image: imageUrl,
-            opacity,
-            pickable: false,
-            // Debug: Use visible pixel borders
-            parameters: {
-              depthTest: false, // Ensure it renders on top
-            },
-          }),
-        ],
-      });
+      try {
+        const overlay = new MapboxOverlay({
+          interleaved: false, // Render on top of all map layers
+          layers: [
+            new BitmapLayer({
+              id: 'ecostress-heat-layer',
+              bounds: bounds,
+              image: imageUrl,
+              opacity,
+              pickable: false,
+              parameters: {
+                depthTest: false, // Ensure it renders on top
+              },
+            }),
+          ],
+        });
 
-      map.addControl(overlay as unknown as maplibregl.IControl);
-      overlayRef.current = overlay;
-      
-      // Verify deck canvas exists and is visible
-      setTimeout(() => {
-        const deckCanvas = document.querySelector('canvas.deck-canvas') as HTMLCanvasElement;
-        if (deckCanvas) {
-          console.log('[EcostressOverlay] Deck canvas found:', {
-            width: deckCanvas.width,
-            height: deckCanvas.height,
-            visible: deckCanvas.style.display !== 'none',
-            opacity: deckCanvas.style.opacity,
-          });
-          
-          // Ensure proper z-index and visibility
-          deckCanvas.style.pointerEvents = 'none';
-        } else {
-          console.warn('[EcostressOverlay] No deck canvas found in DOM!');
-        }
-      }, 100);
-      
-    } catch (err) {
-      console.error('[EcostressOverlay] Failed to add overlay:', err);
-      setRenderState({ 
-        status: 'error', 
-        message: err instanceof Error ? err.message : 'Failed to add overlay',
-      });
+        map.addControl(overlay as unknown as maplibregl.IControl);
+        overlayRef.current = overlay;
+        
+        // Verify deck canvas exists and is visible
+        setTimeout(() => {
+          const deckCanvas = document.querySelector('canvas.deck-canvas') as HTMLCanvasElement;
+          if (deckCanvas) {
+            console.log('[EcostressOverlay] Deck canvas found:', {
+              width: deckCanvas.width,
+              height: deckCanvas.height,
+              display: deckCanvas.style.display,
+              zIndex: deckCanvas.style.zIndex,
+              parentElement: deckCanvas.parentElement?.className,
+            });
+            
+            // Ensure proper z-index and visibility
+            deckCanvas.style.pointerEvents = 'none';
+            deckCanvas.style.position = 'absolute';
+            deckCanvas.style.top = '0';
+            deckCanvas.style.left = '0';
+            
+            // Update debug info
+            if (debugInfo) {
+              setDebugInfo({ ...debugInfo, deckCanvasExists: true });
+            }
+          } else {
+            console.warn('[EcostressOverlay] No deck canvas found in DOM after adding overlay!');
+            // Log all canvases for debugging
+            const allCanvases = document.querySelectorAll('canvas');
+            console.log('[EcostressOverlay] All canvases in DOM:', Array.from(allCanvases).map(c => ({
+              className: c.className,
+              id: c.id,
+              width: c.width,
+              height: c.height,
+            })));
+          }
+        }, 500); // Increased delay to ensure deck.gl has time to create canvas
+        
+      } catch (err) {
+        console.error('[EcostressOverlay] Failed to add overlay:', err);
+        setRenderState({ 
+          status: 'error', 
+          message: err instanceof Error ? err.message : 'Failed to add overlay',
+        });
+      }
+    };
+
+    // Check if map style is loaded
+    if (map.isStyleLoaded()) {
+      addOverlay();
+    } else {
+      console.log('[EcostressOverlay] Waiting for map style to load...');
+      map.once('style.load', addOverlay);
     }
 
     return () => {

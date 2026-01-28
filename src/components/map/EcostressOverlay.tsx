@@ -14,12 +14,24 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 import * as GeoTIFF from 'geotiff';
 
+interface GranuleData {
+  cog_url: string;
+  cloud_mask_url?: string;
+  datetime: string;
+  granule_id: string;
+  granule_bounds: [number, number, number, number];
+  quality_score: number;
+  coverage_percent: number;
+  cloud_percent: number;
+}
+
 interface EcostressOverlayProps {
   map: MapLibreMap | null;
   visible: boolean;
   opacity?: number;
-  cogUrl: string | null;
-  regionBbox?: [number, number, number, number]; // [minLon, minLat, maxLon, maxLat] for intersection check
+  cogUrl?: string | null; // Legacy single URL
+  allGranules?: GranuleData[]; // New: array of all granules for composite
+  regionBbox?: [number, number, number, number];
   onRenderStatus?: (status: 'loading' | 'rendered' | 'error' | 'no_intersection', message?: string) => void;
   onDebugInfo?: (info: DebugInfo) => void;
 }
@@ -395,11 +407,20 @@ function imageDataToDataUrl(imageData: ImageData): string {
   return canvas.toDataURL('image/png');
 }
 
+interface RenderedLayer {
+  imageUrl: string;
+  bounds: [number, number, number, number];
+  granuleId: string;
+  datetime: string;
+  stats: RenderResult['stats'];
+}
+
 export function EcostressOverlay({ 
   map, 
   visible, 
   opacity = 0.7, 
   cogUrl,
+  allGranules,
   regionBbox,
   onRenderStatus,
   onDebugInfo,
@@ -409,9 +430,9 @@ export function EcostressOverlay({
     status: 'idle' | 'loading' | 'rendered' | 'error' | 'no_intersection';
     message?: string;
     stats?: RenderResult['stats'];
+    layerCount?: number;
   }>({ status: 'idle' });
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [bounds, setBounds] = useState<[number, number, number, number] | null>(null);
+  const [renderedLayers, setRenderedLayers] = useState<RenderedLayer[]>([]);
   const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
 
   // Helper: check if two bboxes intersect
@@ -427,122 +448,126 @@ export function EcostressOverlay({
     );
   };
 
-  // Fetch and render COG when cogUrl changes
+  // Fetch and render all COGs when granules change
   useEffect(() => {
-    if (!visible || !cogUrl) {
+    // Build list of COG URLs to fetch
+    const cogUrls: { url: string; granuleId: string; datetime: string }[] = [];
+    
+    if (allGranules && allGranules.length > 0) {
+      allGranules.forEach(g => {
+        if (g.cog_url) {
+          cogUrls.push({ url: g.cog_url, granuleId: g.granule_id, datetime: g.datetime });
+        }
+      });
+    } else if (cogUrl) {
+      // Fallback to single URL for backwards compatibility
+      cogUrls.push({ url: cogUrl, granuleId: 'single', datetime: '' });
+    }
+    
+    if (!visible || cogUrls.length === 0) {
       setRenderState({ status: 'idle' });
-      setImageUrl(null);
-      setBounds(null);
+      setRenderedLayers([]);
       setDebugInfo(null);
       return;
     }
 
     let cancelled = false;
-    const proxyUrl = `${SUPABASE_URL}/functions/v1/ecostress-proxy?url=${encodeURIComponent(cogUrl)}`;
 
-    async function loadCOG() {
-      setRenderState({ status: 'loading', message: 'Lade ECOSTRESS-Daten...' });
-      onRenderStatus?.('loading', 'Lade ECOSTRESS-Daten...');
+    async function loadAllCOGs() {
+      setRenderState({ status: 'loading', message: `Lade ${cogUrls.length} ECOSTRESS-Aufnahmen...` });
+      onRenderStatus?.('loading', `Loading ${cogUrls.length} granules...`);
       
-      const partialDebug: Partial<DebugInfo> = {
-        proxyUrl: proxyUrl.substring(0, 80) + '...',
-        proxyStatus: null,
-        deckCanvasExists: false,
-        rasterBounds: null,
-        dataExtent: null,
-        rawBounds: null,
-        crs: null,
-        minPixel: null,
-        maxPixel: null,
-        validPixels: 0,
-        noDataPixels: 0,
-        imageWidth: 0,
-        imageHeight: 0,
-        intersectsRegion: false,
-      };
-
-      try {
-        const result = await fetchAndRenderCOG(cogUrl);
-        
+      const layers: RenderedLayer[] = [];
+      let totalValidPixels = 0;
+      let minTemp = Infinity;
+      let maxTemp = -Infinity;
+      let errorCount = 0;
+      
+      // Process all COGs (oldest first so newest renders on top)
+      const sortedUrls = [...cogUrls].reverse();
+      
+      for (const { url, granuleId, datetime } of sortedUrls) {
         if (cancelled) return;
-
-        // Check if actual data extent intersects with region
-        let intersectsRegion = true;
-        if (regionBbox && result.dataExtent) {
-          intersectsRegion = bboxIntersects(result.dataExtent, regionBbox);
-          console.log('[EcostressOverlay] Intersection check:', {
-            dataExtent: result.dataExtent,
-            regionBbox,
-            intersectsRegion,
-          });
+        
+        try {
+          console.log(`[EcostressOverlay] Loading granule ${granuleId}...`);
+          const result = await fetchAndRenderCOG(url);
+          
+          // Check intersection with region
+          let intersectsRegion = true;
+          if (regionBbox && result.dataExtent) {
+            intersectsRegion = bboxIntersects(result.dataExtent, regionBbox);
+          }
+          
+          if (intersectsRegion && result.stats.validPixels > 0) {
+            const dataUrl = imageDataToDataUrl(result.imageData);
+            layers.push({
+              imageUrl: dataUrl,
+              bounds: result.bounds,
+              granuleId,
+              datetime,
+              stats: result.stats,
+            });
+            
+            totalValidPixels += result.stats.validPixels;
+            if (result.stats.min < minTemp) minTemp = result.stats.min;
+            if (result.stats.max > maxTemp) maxTemp = result.stats.max;
+          }
+        } catch (err) {
+          console.warn(`[EcostressOverlay] Failed to load granule ${granuleId}:`, err);
+          errorCount++;
         }
-
-        // Update debug info
-        const fullDebug: DebugInfo = {
-          proxyUrl: proxyUrl.substring(0, 80) + '...',
+      }
+      
+      if (cancelled) return;
+      
+      if (layers.length === 0) {
+        setRenderState({ 
+          status: 'no_intersection', 
+          message: errorCount > 0 
+            ? `Alle ${cogUrls.length} Aufnahmen konnten nicht geladen werden`
+            : 'Keine Daten schneiden die ausgewählte Region',
+        });
+        onRenderStatus?.('no_intersection', 'No valid layers');
+        return;
+      }
+      
+      setRenderedLayers(layers);
+      setRenderState({ 
+        status: 'rendered', 
+        message: `${layers.length} Aufnahmen, ${totalValidPixels.toLocaleString()} Pixel`,
+        stats: { min: minTemp, max: maxTemp, validPixels: totalValidPixels, noDataPixels: 0 },
+        layerCount: layers.length,
+      });
+      onRenderStatus?.('rendered', `Rendered ${layers.length} layers with ${totalValidPixels} pixels`);
+      
+      // Update debug info for first layer
+      if (layers.length > 0) {
+        setDebugInfo({
+          proxyUrl: `${cogUrls.length} COGs`,
           proxyStatus: 200,
           deckCanvasExists: true,
-          rasterBounds: result.bounds,
-          dataExtent: result.dataExtent,
-          rawBounds: result.rawBounds,
-          crs: result.crs,
-          minPixel: result.stats.min,
-          maxPixel: result.stats.max,
-          validPixels: result.stats.validPixels,
-          noDataPixels: result.stats.noDataPixels,
-          imageWidth: result.imageData.width,
-          imageHeight: result.imageData.height,
-          intersectsRegion,
-        };
-        setDebugInfo(fullDebug);
-        onDebugInfo?.(fullDebug);
-
-        if (!intersectsRegion) {
-          // Data exists but doesn't cover the selected region
-          setRenderState({ 
-            status: 'no_intersection', 
-            message: 'Satellitenstreifen trifft die ausgewählte Region nicht',
-            stats: result.stats,
-          });
-          onRenderStatus?.('no_intersection', 'Data swath does not intersect selected region');
-          // Still set bounds/image for optional "show anyway" feature
-          setImageUrl(imageDataToDataUrl(result.imageData));
-          setBounds(result.bounds);
-          return;
-        }
-
-        const dataUrl = imageDataToDataUrl(result.imageData);
-        setImageUrl(dataUrl);
-        setBounds(result.bounds);
-        
-        setRenderState({ 
-          status: 'rendered', 
-          message: `${result.stats.validPixels.toLocaleString()} Pixel gerendert`,
-          stats: result.stats,
-        });
-        onRenderStatus?.('rendered', `Rendered ${result.stats.validPixels} pixels`);
-        
-      } catch (err) {
-        if (cancelled) return;
-        
-        console.error('[EcostressOverlay] Failed to render COG:', err);
-        const message = err instanceof Error ? err.message : 'Unbekannter Fehler';
-        setRenderState({ status: 'error', message });
-        onRenderStatus?.('error', message);
-        
-        setDebugInfo({
-          ...partialDebug as DebugInfo,
-          proxyStatus: 500,
+          rasterBounds: layers[0].bounds,
+          dataExtent: null,
+          rawBounds: null,
+          crs: null,
+          minPixel: minTemp,
+          maxPixel: maxTemp,
+          validPixels: totalValidPixels,
+          noDataPixels: 0,
+          imageWidth: 0,
+          imageHeight: 0,
+          intersectsRegion: true,
         });
       }
     }
 
-    loadCOG();
+    loadAllCOGs();
 
     return () => {
       cancelled = true;
     };
-  }, [cogUrl, visible, onRenderStatus, onDebugInfo]);
+  }, [cogUrl, allGranules, visible, regionBbox, onRenderStatus, onDebugInfo]);
 
   // Manage deck.gl overlay with proper z-index handling
   useEffect(() => {
@@ -561,77 +586,40 @@ export function EcostressOverlay({
       overlayRef.current = null;
     }
 
-    // Don't add overlay if not visible or no image
-    if (!visible || !imageUrl || !bounds) {
-      console.log('[EcostressOverlay] Not adding overlay:', { visible, hasImage: !!imageUrl, hasBounds: !!bounds });
+    // Don't add overlay if not visible or no layers
+    if (!visible || renderedLayers.length === 0) {
+      console.log('[EcostressOverlay] Not adding overlay:', { visible, layerCount: renderedLayers.length });
       return;
     }
 
     // Ensure map style is loaded before adding control
     const addOverlay = () => {
-      console.log('[EcostressOverlay] Adding BitmapLayer with WGS84 bounds:', bounds);
+      console.log('[EcostressOverlay] Adding', renderedLayers.length, 'BitmapLayers as composite');
 
       try {
+        // Create stacked BitmapLayers - each layer renders on top of the previous
+        const bitmapLayers = renderedLayers.map((layer, index) => 
+          new BitmapLayer({
+            id: `ecostress-heat-layer-${index}`,
+            bounds: layer.bounds,
+            image: layer.imageUrl,
+            opacity,
+            pickable: false,
+            parameters: {
+              depthTest: false,
+            },
+          })
+        );
+
         const overlay = new MapboxOverlay({
-          interleaved: false, // Render on top of all map layers
-          layers: [
-            new BitmapLayer({
-              id: 'ecostress-heat-layer',
-              bounds: bounds,
-              image: imageUrl,
-              opacity,
-              pickable: false,
-              parameters: {
-                depthTest: false, // Ensure it renders on top
-              },
-            }),
-          ],
+          interleaved: false,
+          layers: bitmapLayers,
         });
 
         map.addControl(overlay as unknown as maplibregl.IControl);
         overlayRef.current = overlay;
         
-        // Verify deck canvas exists and is visible
-        setTimeout(() => {
-          // MapboxOverlay creates canvas with id="deckgl-overlay", not class="deck-canvas"
-          const deckCanvas = document.querySelector('#deckgl-overlay') as HTMLCanvasElement 
-            || document.querySelector('canvas.deck-canvas') as HTMLCanvasElement;
-          
-          if (deckCanvas) {
-            console.log('[EcostressOverlay] ✅ Deck canvas found:', {
-              id: deckCanvas.id,
-              className: deckCanvas.className,
-              width: deckCanvas.width,
-              height: deckCanvas.height,
-              display: deckCanvas.style.display || 'default',
-              visibility: deckCanvas.style.visibility || 'default',
-              opacity: deckCanvas.style.opacity || 'default',
-              zIndex: deckCanvas.style.zIndex || 'default',
-              position: deckCanvas.style.position || 'default',
-            });
-            
-            // Check computed styles
-            const computed = window.getComputedStyle(deckCanvas);
-            console.log('[EcostressOverlay] Computed canvas styles:', {
-              display: computed.display,
-              visibility: computed.visibility,
-              opacity: computed.opacity,
-              zIndex: computed.zIndex,
-              position: computed.position,
-            });
-            
-            // Update debug info
-            if (debugInfo) {
-              setDebugInfo({ ...debugInfo, deckCanvasExists: true });
-            }
-          } else {
-            console.warn('[EcostressOverlay] ❌ No deck canvas found in DOM!');
-            const allCanvases = document.querySelectorAll('canvas');
-            console.log('[EcostressOverlay] All canvases:', Array.from(allCanvases).map(c => ({
-              id: c.id, className: c.className, width: c.width, height: c.height,
-            })));
-          }
-        }, 500);
+        console.log('[EcostressOverlay] ✅ Composite overlay added with', bitmapLayers.length, 'layers');
         
       } catch (err) {
         console.error('[EcostressOverlay] Failed to add overlay:', err);
@@ -660,27 +648,27 @@ export function EcostressOverlay({
         overlayRef.current = null;
       }
     };
-  }, [map, visible, imageUrl, bounds, opacity]);
+  }, [map, visible, renderedLayers, opacity]);
 
   // Update opacity without re-creating overlay
   useEffect(() => {
-    if (!overlayRef.current || !imageUrl || !bounds) return;
+    if (!overlayRef.current || renderedLayers.length === 0) return;
     
-    overlayRef.current.setProps({
-      layers: [
-        new BitmapLayer({
-          id: 'ecostress-heat-layer',
-          bounds: bounds,
-          image: imageUrl,
-          opacity,
-          pickable: false,
-          parameters: {
-            depthTest: false,
-          },
-        }),
-      ],
-    });
-  }, [opacity, imageUrl, bounds]);
+    const bitmapLayers = renderedLayers.map((layer, index) => 
+      new BitmapLayer({
+        id: `ecostress-heat-layer-${index}`,
+        bounds: layer.bounds,
+        image: layer.imageUrl,
+        opacity,
+        pickable: false,
+        parameters: {
+          depthTest: false,
+        },
+      })
+    );
+    
+    overlayRef.current.setProps({ layers: bitmapLayers });
+  }, [opacity, renderedLayers]);
 
   // Render status indicator
   if (!visible) return null;
@@ -707,7 +695,7 @@ export function EcostressOverlay({
     const maxC = (renderState.stats.max - 273.15).toFixed(1);
     return (
       <div className="absolute top-16 right-4 bg-background/90 backdrop-blur px-3 py-2 rounded-lg text-xs z-10">
-        <div className="font-medium text-sm mb-1">ECOSTRESS LST</div>
+        <div className="font-medium text-sm mb-1">ECOSTRESS LST Komposit</div>
         <div className="text-muted-foreground">
           Datenwerte: {minC}°C – {maxC}°C
         </div>
@@ -716,11 +704,9 @@ export function EcostressOverlay({
           <span>-13°C</span>
           <span>47°C</span>
         </div>
-        {renderState.stats.validPixels > 0 && (
-          <div className="text-[10px] text-muted-foreground mt-1">
-            {renderState.stats.validPixels.toLocaleString()} Pixel
-          </div>
-        )}
+        <div className="text-[10px] text-muted-foreground mt-1">
+          {renderState.layerCount || 1} Aufnahme{(renderState.layerCount || 1) > 1 ? 'n' : ''} • {renderState.stats.validPixels.toLocaleString()} Pixel
+        </div>
       </div>
     );
   }

@@ -26,8 +26,23 @@ interface BestRejectedGranule {
   cloud_percent: number;
 }
 
+interface GranuleData {
+  cog_url: string;
+  cloud_mask_url?: string;
+  datetime: string;
+  granule_id: string;
+  granule_bounds: [number, number, number, number];
+  quality_score: number;
+  coverage_percent: number;
+  cloud_percent: number;
+}
+
 interface EcostressResponse {
   status: 'match' | 'no_coverage' | 'no_data' | 'auth_required' | 'error';
+  // All granules for composite layering
+  all_granules?: GranuleData[];
+  granule_count?: number;
+  // Legacy single granule (backwards compatibility)
   cog_url?: string;
   cloud_mask_url?: string;
   datetime?: string;
@@ -176,23 +191,40 @@ export function useMapOverlays() {
         return;
       }
 
-      // MATCH - granule intersects region
+      // MATCH - granule(s) intersect region
       if (response.status === 'match') {
         lastFetchRef.current.ecostress = fetchKey;
+        
+        // Use all_granules if available (composite), fallback to single granule
+        const allGranules = response.all_granules || (response.cog_url ? [{
+          cog_url: response.cog_url,
+          cloud_mask_url: response.cloud_mask_url,
+          datetime: response.datetime || '',
+          granule_id: response.granule_id || '',
+          granule_bounds: response.granule_bounds || [0, 0, 0, 0] as [number, number, number, number],
+          quality_score: response.quality_score || 0,
+          coverage_percent: response.coverage_percent || 0,
+          cloud_percent: response.cloud_percent || 0,
+        }] : []);
+        
         setOverlayMetadata('ecostress', {
           status: 'match',
+          // Array of all granules for composite rendering
+          allGranules,
+          granuleCount: response.granule_count || allGranules.length,
+          // Legacy single-granule fields (for backwards compatibility)
           cogUrl: response.cog_url,
           cloudMaskUrl: response.cloud_mask_url,
           acquisitionDatetime: response.datetime,
           granuleId: response.granule_id,
           granuleBounds: response.granule_bounds,
           regionCentroid: response.region_centroid,
-          regionBbox: bbox, // Pass region bbox for client-side intersection check
+          regionBbox: bbox,
           qcNotes: response.qc_notes,
           attribution: response.attribution,
           unit: response.value_unit,
           colormap: response.colormap_suggestion,
-          // Quality metrics from new scoring system
+          // Quality metrics from best granule
           qualityScore: response.quality_score,
           coveragePercent: response.coverage_percent,
           cloudPercent: response.cloud_percent,

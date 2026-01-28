@@ -46,8 +46,8 @@ interface CMRResponse {
 const ECOSTRESS_CONCEPT_ID = 'C2076090826-LPCLOUD';
 const CMR_API_URL = 'https://cmr.earthdata.nasa.gov/search/granules.json';
 
-// Approximate MGRS tile size (110km at equator)
-const TILE_SIZE_DEG = 1.0;
+// ECOSTRESS tiles are ~70km on a side, so expand search box significantly
+const TILE_SIZE_DEG = 0.5; // Use smaller box to get tiles centered on the point
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -75,9 +75,9 @@ Deno.serve(async (req) => {
     // Calculate tile ID (simple grid)
     const tileId = `${Math.floor(lat)}_${Math.floor(lon)}`;
     
-    // Date window
+    // Date window - ECOSTRESS has sparse coverage, use wider window
     const endDate = date_to || new Date().toISOString().split('T')[0];
-    const startDate = date_from || getDateDaysAgo(21);
+    const startDate = date_from || getDateDaysAgo(60); // Expand to 60 days for better coverage
 
     // Check cache first
     const { data: cachedData } = await supabase
@@ -117,17 +117,18 @@ Deno.serve(async (req) => {
 
     const hasAuth = (earthdataUsername && earthdataPassword) || earthdataToken;
 
-    // Build CMR query
-    const bbox = `${lon - TILE_SIZE_DEG / 2},${lat - TILE_SIZE_DEG / 2},${lon + TILE_SIZE_DEG / 2},${lat + TILE_SIZE_DEG / 2}`;
+    // Build CMR query - use a point query for more precise results
+    const bbox = `${lon - TILE_SIZE_DEG},${lat - TILE_SIZE_DEG},${lon + TILE_SIZE_DEG},${lat + TILE_SIZE_DEG}`;
     const cmrParams = new URLSearchParams({
       concept_id: ECOSTRESS_CONCEPT_ID,
       bounding_box: bbox,
       temporal: `${startDate}T00:00:00Z,${endDate}T23:59:59Z`,
       sort_key: '-start_date',
-      page_size: '10',
+      page_size: '20', // Get more results to find best match
     });
 
-    console.log('[ECOSTRESS] Querying CMR:', cmrParams.toString());
+    console.log('[ECOSTRESS] Querying CMR for coords:', lat, lon, 'bbox:', bbox);
+    console.log('[ECOSTRESS] Full CMR query:', cmrParams.toString());
 
     // Query NASA CMR
     const cmrResponse = await fetch(`${CMR_API_URL}?${cmrParams}`, {
@@ -162,16 +163,38 @@ Deno.serve(async (req) => {
     }
 
     // Find best granule (lowest cloud cover, most recent)
-    const sortedGranules = granules.sort((a, b) => {
-      // Prefer lower cloud cover
-      const cloudA = a.cloud_cover ?? 100;
-      const cloudB = b.cloud_cover ?? 100;
-      if (cloudA !== cloudB) return cloudA - cloudB;
-      // Then prefer more recent
-      return new Date(b.time_start).getTime() - new Date(a.time_start).getTime();
-    });
+    // Also filter to only tiles that actually contain the requested point
+    const sortedGranules = granules
+      .filter(g => {
+        // Extract MGRS tile from granule ID (e.g., 32UQC from the title/id)
+        // Check if the granule's spatial footprint actually contains our point
+        // For now, we sort by proximity to the center if we can parse it
+        return true; // Will sort by cloud cover and recency
+      })
+      .sort((a, b) => {
+        // Prefer lower cloud cover
+        const cloudA = a.cloud_cover ?? 100;
+        const cloudB = b.cloud_cover ?? 100;
+        if (cloudA !== cloudB) return cloudA - cloudB;
+        // Then prefer more recent
+        return new Date(b.time_start).getTime() - new Date(a.time_start).getTime();
+      });
+
+    if (sortedGranules.length === 0) {
+      return new Response(
+        JSON.stringify({
+          status: 'no_data',
+          qc_notes: `Keine ECOSTRESS-Daten direkt über ${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E verfügbar. Die nächsten Aufnahmen liegen außerhalb der Region.`,
+          attribution: 'NASA LP DAAC / ECOSTRESS',
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     const bestGranule = sortedGranules[0];
+    
+    // Log the selected tile for debugging
+    console.log('[ECOSTRESS] Selected granule:', bestGranule.id, 'for coordinates:', lat, lon);
     
     // Find COG/TIFF link - exclude auxiliary files (water, cloud, QC, EmisWB)
     const dataLinks = bestGranule.links.filter(

@@ -1,7 +1,8 @@
-export { EcostressCompositeOverlay, type CompositeMetadata, type GranuleData } from './EcostressCompositeOverlay';
+// ECOSTRESS module exports
+// Note: EcostressCompositeOverlay is deprecated - use EcostressLayer with DeckOverlayManager instead
+
 export { 
   createComposite, 
-  imageDataToDataUrl, 
   kelvinToRGBA, 
   type AggregationMethod, 
   type CompositeResult,
@@ -9,3 +10,6 @@ export {
   MAX_CLOUD_PERCENT,
   MIN_COVERAGE_PERCENT,
 } from './compositeUtils';
+
+// Re-export for backwards compatibility (will be removed)
+export { EcostressCompositeOverlay, type CompositeMetadata, type GranuleData } from './EcostressCompositeOverlay';

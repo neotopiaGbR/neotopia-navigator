@@ -35,3 +35,6 @@ verify_jwt = false
 
 [functions.get-dwd-temperature]
 verify_jwt = false
+
+[functions.dwd-health]
+verify_jwt = false

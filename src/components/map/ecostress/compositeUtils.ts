@@ -13,15 +13,17 @@
 import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 
-// Quality thresholds - relaxed for cloudy regions like Central Europe
-export const MAX_CLOUD_PERCENT = 60;  // Discard granules with >60% cloud (was 40%, too strict for Berlin)
-export const MIN_COVERAGE_PERCENT = 40; // Discard granules with <40% coverage (was 60%)
+// Quality thresholds - very relaxed to include ALL available summer data
+// The goal is to show HOTSPOTS, not filter out data
+export const MAX_CLOUD_PERCENT = 90;  // Accept up to 90% cloud (keep everything)
+export const MIN_COVERAGE_PERCENT = 10; // Accept even partial coverage
 
 // LST temperature range (Kelvin) for colorization
 export const LST_MIN_K = 260; // -13°C (winter)
 export const LST_MAX_K = 320; // 47°C (hot summer)
 
-export type AggregationMethod = 'median' | 'p90';
+// Aggregation methods: median (typical), p90 (extreme), max (absolute hottest)
+export type AggregationMethod = 'median' | 'p90' | 'max';
 
 export interface GranuleInput {
   cog_url: string;
@@ -281,11 +283,16 @@ async function fetchCOGRaster(granule: GranuleInput): Promise<RasterData | null>
 
 /**
  * Compute QUALITY-WEIGHTED aggregated value from array of {value, weight} pairs
- * Uses weighted median or weighted P90 to prevent tile-to-tile jumps
+ * Supports: median (typical), p90 (extreme 90th percentile), max (absolute maximum)
  */
 function weightedAggregate(samples: { value: number; weight: number }[], method: AggregationMethod): number {
   if (samples.length === 0) return NaN;
   if (samples.length === 1) return samples[0].value;
+  
+  // For MAX method - just return the highest value (shows hottest readings)
+  if (method === 'max') {
+    return Math.max(...samples.map(s => s.value));
+  }
   
   // Sort by value
   const sorted = samples.slice().sort((a, b) => a.value - b.value);

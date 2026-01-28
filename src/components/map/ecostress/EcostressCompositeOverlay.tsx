@@ -310,7 +310,7 @@ export function EcostressCompositeOverlay({
     const maxC = (compositeResult.stats.max - 273.15).toFixed(1);
     const p5C = (compositeResult.stats.p5 - 273.15).toFixed(1);
     const p95C = (compositeResult.stats.p95 - 273.15).toFixed(1);
-    const methodLabel = compositeResult.stats.aggregationMethod === 'p90' ? 'P90 (Extreme)' : 'Median';
+    const methodLabel = compositeResult.stats.aggregationMethod === 'max' ? 'Maximum (Heißeste)' : compositeResult.stats.aggregationMethod === 'p90' ? 'P90 (Extreme)' : 'Median';
     const confidence = compositeResult.metadata.coverageConfidence;
     
     // Format time window

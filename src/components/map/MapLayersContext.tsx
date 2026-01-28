@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback } from 'react';
 
 export type BasemapType = 'map' | 'satellite' | 'terrain';
-export type AggregationMethod = 'median' | 'p90';
+export type AggregationMethod = 'median' | 'p90' | 'max';
 
 export interface OverlayConfig {
   enabled: boolean;

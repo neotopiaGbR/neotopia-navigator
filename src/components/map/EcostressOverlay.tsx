@@ -108,7 +108,7 @@ function utmToWgs84(easting: number, northing: number, zone: number, isNorthernH
   const r0 = a * (1 - e * e) / Math.pow(1 - Math.pow(e * Math.sin(phi1), 2), 1.5);
   const fact1 = n0 * Math.tan(phi1) / r0;
   
-  const a1 = 500000 - easting;
+  const a1 = easting - 500000; // Distance from central meridian (false easting removed)
   const dd0 = a1 / (n0 * k0);
   const fact2 = dd0 * dd0 / 2;
   const t0 = Math.pow(Math.tan(phi1), 2);

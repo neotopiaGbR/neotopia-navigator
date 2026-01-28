@@ -2,7 +2,7 @@
  * Air Temperature Overlay (2m) - Germany Summer Composite
  * 
  * Renders ERA5-Land 2m air temperature data as a CONTINUOUS heatmap layer
- * using deck.gl HeatmapLayer for smooth bilinear interpolation.
+ * using MapLibre's native heatmap layer type for smooth, GPU-accelerated rendering.
  * 
  * This layer provides regional thermal context (~9 km resolution) and sits
  * BELOW the high-resolution ECOSTRESS LST hotspot layer.
@@ -13,8 +13,6 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { MapboxOverlay } from '@deck.gl/mapbox';
-import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 import { AirTemperatureData } from './MapLayersContext';
 
 interface AirTemperatureOverlayProps {
@@ -24,17 +22,8 @@ interface AirTemperatureOverlayProps {
   data: AirTemperatureData | null;
 }
 
-// Color ramp for air temperature (soft blue-green-yellow-orange)
-// Deliberately distinct from ECOSTRESS LST ramp
-const AIR_TEMP_COLOR_RANGE: [number, number, number, number][] = [
-  [70, 130, 180, 255],   // Steel blue (coolest)
-  [100, 180, 160, 255],  // Teal
-  [140, 200, 120, 255],  // Light green
-  [200, 210, 100, 255],  // Yellow-green
-  [220, 200, 80, 255],   // Yellow-gold
-  [230, 150, 60, 255],   // Orange
-  [200, 80, 60, 255],    // Soft red (warmest)
-];
+const SOURCE_ID = 'air-temp-source';
+const HEATMAP_LAYER_ID = 'air-temp-heatmap';
 
 export function AirTemperatureOverlay({
   map,
@@ -42,119 +31,157 @@ export function AirTemperatureOverlay({
   opacity = 0.6,
   data,
 }: AirTemperatureOverlayProps) {
-  const overlayRef = useRef<MapboxOverlay | null>(null);
-  const isAttachedRef = useRef(false);
+  const isAddedRef = useRef(false);
 
-  // Create/update the deck.gl overlay
-  const updateOverlay = useCallback(() => {
-    if (!map || !visible || !data) {
-      // Remove overlay when not visible
-      if (overlayRef.current && isAttachedRef.current) {
-        try {
-          map?.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-          isAttachedRef.current = false;
-        } catch (e) {
-          // Ignore
-        }
-      }
-      return;
-    }
-
-    const { grid, normalization } = data;
+  // Generate GeoJSON point features for heatmap
+  const generateGeoJSON = useCallback((gridData: AirTemperatureData): GeoJSON.FeatureCollection => {
+    const { grid, normalization } = gridData;
     const { p5, p95 } = normalization;
+    const range = p95 - p5;
 
-    // Transform grid points into weighted data for HeatmapLayer
-    // Weight is based on temperature (higher temp = higher weight for heat visualization)
-    const heatmapData = grid.map(point => {
+    const features: GeoJSON.Feature[] = grid.map(point => {
       // Normalize to 0-1 range using P5-P95
-      const range = p95 - p5;
       const normalized = range > 0 
         ? Math.max(0, Math.min(1, (point.value - p5) / range))
         : 0.5;
       
       return {
-        position: [point.lon, point.lat] as [number, number],
-        weight: normalized,
-        value: point.value,
+        type: 'Feature',
+        properties: {
+          value: point.value,
+          weight: normalized,
+        },
+        geometry: {
+          type: 'Point',
+          coordinates: [point.lon, point.lat],
+        },
       };
     });
 
-    // Create HeatmapLayer with smooth interpolation
-    const heatmapLayer = new HeatmapLayer({
-      id: 'era5-air-temperature-heatmap',
-      data: heatmapData,
-      getPosition: (d: { position: [number, number] }) => d.position,
-      getWeight: (d: { weight: number }) => d.weight,
-      // Radius in pixels - large for smooth interpolation
-      radiusPixels: 60,
-      // Intensity scaling
-      intensity: 1,
-      // Threshold to start showing color
-      threshold: 0.03,
-      // Color range
-      colorRange: AIR_TEMP_COLOR_RANGE,
-      // Aggregation settings for smooth rendering
-      aggregation: 'SUM',
-      // Opacity
-      opacity: opacity,
-      // Visible
-      visible: true,
-      // Ensure proper bounds
-      pickable: false,
-    });
+    return {
+      type: 'FeatureCollection',
+      features,
+    };
+  }, []);
 
-    // Create or update overlay
-    if (!overlayRef.current) {
-      overlayRef.current = new MapboxOverlay({
-        interleaved: false,
-        layers: [heatmapLayer],
-      });
-    } else {
-      overlayRef.current.setProps({ layers: [heatmapLayer] });
-    }
-
-    // Attach to map if not already attached
-    if (!isAttachedRef.current) {
-      try {
-        map.addControl(overlayRef.current as unknown as maplibregl.IControl);
-        isAttachedRef.current = true;
-        console.log('[AirTemperatureOverlay] HeatmapLayer attached with', grid.length, 'points');
-      } catch (e) {
-        console.error('[AirTemperatureOverlay] Failed to attach overlay:', e);
-      }
-    }
-  }, [map, visible, data, opacity]);
-
-  // Initialize and update overlay
+  // Add/update heatmap layer
   useEffect(() => {
     if (!map) return;
 
-    const handleStyleLoad = () => {
-      updateOverlay();
+    const addLayers = () => {
+      if (!visible || !data) {
+        // Remove layers when not visible
+        if (isAddedRef.current) {
+          try {
+            if (map.getLayer(HEATMAP_LAYER_ID)) map.removeLayer(HEATMAP_LAYER_ID);
+            if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
+            isAddedRef.current = false;
+          } catch (e) {
+            // Ignore
+          }
+        }
+        return;
+      }
+
+      try {
+        // Remove existing layers first
+        if (map.getLayer(HEATMAP_LAYER_ID)) map.removeLayer(HEATMAP_LAYER_ID);
+        if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
+
+        const geojson = generateGeoJSON(data);
+
+        // Add source
+        map.addSource(SOURCE_ID, {
+          type: 'geojson',
+          data: geojson,
+        });
+
+        // Add heatmap layer using MapLibre's native heatmap type
+        // This provides smooth, continuous rendering without tile seams
+        map.addLayer({
+          id: HEATMAP_LAYER_ID,
+          type: 'heatmap',
+          source: SOURCE_ID,
+          paint: {
+            // Weight based on normalized temperature value
+            'heatmap-weight': ['get', 'weight'],
+            
+            // Intensity increases with zoom for better visibility
+            'heatmap-intensity': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 0.8,
+              6, 1.0,
+              8, 1.2,
+              10, 1.5,
+            ],
+            
+            // Radius in pixels - large for smooth interpolation across ~9km grid
+            'heatmap-radius': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 30,  // At zoom 4, 30px radius
+              6, 50,  // At zoom 6, 50px radius
+              8, 80,  // At zoom 8, 80px radius
+              10, 120, // At zoom 10, 120px radius
+            ],
+            
+            // Color ramp: blue → teal → green → yellow → orange → soft red
+            // Distinct from ECOSTRESS to differentiate air vs surface temp
+            'heatmap-color': [
+              'interpolate', ['linear'], ['heatmap-density'],
+              0.0, 'rgba(70, 130, 180, 0)',     // Transparent at 0
+              0.1, 'rgba(70, 130, 180, 0.4)',   // Steel blue
+              0.25, 'rgba(100, 180, 160, 0.5)', // Teal
+              0.4, 'rgba(140, 200, 120, 0.6)',  // Light green
+              0.55, 'rgba(200, 210, 100, 0.7)', // Yellow-green
+              0.7, 'rgba(220, 200, 80, 0.8)',   // Yellow-gold
+              0.85, 'rgba(230, 150, 60, 0.9)',  // Orange
+              1.0, 'rgba(200, 80, 60, 1)',      // Soft red
+            ],
+            
+            // Opacity
+            'heatmap-opacity': opacity,
+          },
+        }, 'regions-fill'); // Insert BELOW regions layer
+
+        isAddedRef.current = true;
+        console.log('[AirTemperatureOverlay] Native heatmap layer added with', data.grid.length, 'points');
+
+      } catch (err) {
+        console.error('[AirTemperatureOverlay] Failed to add layer:', err);
+      }
     };
 
     if (map.isStyleLoaded()) {
-      updateOverlay();
+      addLayers();
     } else {
-      map.once('style.load', handleStyleLoad);
+      map.once('style.load', addLayers);
     }
 
     return () => {
-      if (overlayRef.current && isAttachedRef.current && map) {
+      if (map && isAddedRef.current) {
         try {
-          map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
-          isAttachedRef.current = false;
+          if (map.getLayer(HEATMAP_LAYER_ID)) map.removeLayer(HEATMAP_LAYER_ID);
+          if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
+          isAddedRef.current = false;
         } catch (e) {
           // Ignore cleanup errors
         }
       }
     };
-  }, [map, updateOverlay]);
+  }, [map, visible, data, generateGeoJSON, opacity]);
 
-  // Update when visibility, opacity, or data changes
+  // Update opacity
   useEffect(() => {
-    updateOverlay();
-  }, [updateOverlay]);
+    if (!map || !isAddedRef.current) return;
+
+    try {
+      if (map.getLayer(HEATMAP_LAYER_ID)) {
+        map.setPaintProperty(HEATMAP_LAYER_ID, 'heatmap-opacity', opacity);
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }, [map, opacity]);
 
   return null;
 }

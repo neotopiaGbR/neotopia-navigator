@@ -13,6 +13,70 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Deterministic PRNG (so sampling order is stable for a given year/aggregation)
+function mulberry32(seed: number) {
+  return function () {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hashToSeed(input: string): number {
+  // Simple 32-bit hash
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+async function fetchJsonWithRetry(url: string, maxRetries = 3) {
+  const timeoutMs = 12_000;
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+
+      if (!res.ok) {
+        // Retry on rate limit / transient upstream errors
+        const retryable = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+        if (retryable && attempt < maxRetries) {
+          const backoff = 250 * Math.pow(2, attempt);
+          await sleep(backoff);
+          continue;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const json = await res.json();
+      return json;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        const backoff = 250 * Math.pow(2, attempt);
+        await sleep(backoff);
+        continue;
+      }
+      throw lastErr;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastErr;
+}
+
 // Germany bounding box (approximate)
 const GERMANY_BBOX = {
   minLon: 5.87,
@@ -83,14 +147,24 @@ Deno.serve(async (req) => {
     console.log(`[ERA5] Grid points to fetch: ${gridPoints.length}`);
 
     // Batch fetch from Open-Meteo Archive API
-    // We'll sample a subset of points for performance (every 3rd point = ~3x faster)
+    // We sample a subset for performance, but shuffle deterministically so partial
+    // failures never bias coverage to one geography (e.g., missing the north).
     const sampleStep = 3;
     const sampledPoints = gridPoints.filter((_, i) => i % sampleStep === 0);
-    
-    console.log(`[ERA5] Sampling ${sampledPoints.length} points`);
 
-    // Fetch data in parallel batches
-    const batchSize = 20;
+    // Deterministic shuffle by (year, aggregation)
+    const rng = mulberry32(hashToSeed(`${year}-${aggregation}`));
+    for (let i = sampledPoints.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = sampledPoints[i];
+      sampledPoints[i] = sampledPoints[j];
+      sampledPoints[j] = tmp;
+    }
+
+    console.log(`[ERA5] Sampling ${sampledPoints.length} points (step=${sampleStep})`);
+
+    // Fetch data in parallel batches (throttled to avoid rate limiting)
+    const batchSize = 8;
     const results: GridPoint[] = [];
     
     for (let i = 0; i < sampledPoints.length; i += batchSize) {
@@ -103,14 +177,8 @@ Deno.serve(async (req) => {
             `&start_date=${year}-06-01&end_date=${year}-08-31` +
             `&daily=temperature_2m_max,temperature_2m_mean` +
             `&timezone=Europe/Berlin`;
-          
-          const response = await fetch(url);
-          if (!response.ok) {
-            console.warn(`[ERA5] Failed for ${point.lat},${point.lon}: ${response.status}`);
-            return null;
-          }
-          
-          const data = await response.json();
+
+          const data = await fetchJsonWithRetry(url, 3);
           
           if (!data.daily) {
             return null;
@@ -139,13 +207,16 @@ Deno.serve(async (req) => {
             value: Math.round(meanValue * 10) / 10, // Round to 1 decimal
           };
         } catch (err) {
-          console.warn(`[ERA5] Error for ${point.lat},${point.lon}:`, err);
+          console.warn(`[ERA5] Error for ${point.lat},${point.lon}:`, err instanceof Error ? err.message : err);
           return null;
         }
       });
       
       const batchResults = await Promise.all(batchPromises);
       results.push(...batchResults.filter((r): r is GridPoint => r !== null));
+
+      // Small delay between batches to reduce upstream rate limiting
+      await sleep(120);
       
       // Progress log
       if (i % (batchSize * 5) === 0) {

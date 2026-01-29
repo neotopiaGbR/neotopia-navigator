@@ -1,12 +1,16 @@
 /**
  * Decode a single ECOSTRESS granule to ImageBitmap
  * 
- * Renders the raw LST data without any aggregation.
+ * Renders RAW LST data as grayscale - no colorization.
+ * Darker = cooler, Brighter = hotter
  */
 
 import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
-import { kelvinToRGBA, LST_MIN_K, LST_MAX_K } from './compositeUtils';
+
+// Raw temperature range for grayscale mapping
+const LST_MIN_K = 273; // 0°C  → black
+const LST_MAX_K = 330; // 57°C → white
 
 export interface DecodedGranule {
   image: ImageBitmap;
@@ -206,11 +210,15 @@ export async function decodeGranule(
         minTemp = Math.min(minTemp, value);
         maxTemp = Math.max(maxTemp, value);
         
-        const [r, g, b, a] = kelvinToRGBA(value);
-        pixels[offset] = r;
-        pixels[offset + 1] = g;
-        pixels[offset + 2] = b;
-        pixels[offset + 3] = a;
+        // RAW GRAYSCALE: Map Kelvin to 0-255 brightness
+        // Darker = cooler, Brighter = hotter
+        const t = Math.max(0, Math.min(1, (value - LST_MIN_K) / (LST_MAX_K - LST_MIN_K)));
+        const gray = Math.round(t * 255);
+        
+        pixels[offset] = gray;     // R
+        pixels[offset + 1] = gray; // G
+        pixels[offset + 2] = gray; // B
+        pixels[offset + 3] = 255;  // Full opacity
       } else {
         pixels[offset + 3] = 0; // Transparent
       }

@@ -324,15 +324,28 @@ export async function createComposite(
   
   console.log(`[CompositeUtils] Successfully loaded ${rasters.length}/${granules.length} rasters`);
   
-  // Compute union bounding box, clipped to region
-  let unionBounds: [number, number, number, number] = [
-    Math.max(regionBbox[0], Math.min(...rasters.map(r => r.bounds[0]))),
-    Math.max(regionBbox[1], Math.min(...rasters.map(r => r.bounds[1]))),
-    Math.min(regionBbox[2], Math.max(...rasters.map(r => r.bounds[2]))),
-    Math.min(regionBbox[3], Math.max(...rasters.map(r => r.bounds[3]))),
+  // Use region bbox directly as output bounds (clipped to raster coverage)
+  // This ensures the composite aligns exactly with the selected region
+  const rasterUnionBounds: [number, number, number, number] = [
+    Math.min(...rasters.map(r => r.bounds[0])),
+    Math.min(...rasters.map(r => r.bounds[1])),
+    Math.max(...rasters.map(r => r.bounds[2])),
+    Math.max(...rasters.map(r => r.bounds[3])),
   ];
   
-  // Validate bounds
+  // Compute intersection of region and raster coverage
+  let unionBounds: [number, number, number, number] = [
+    Math.max(regionBbox[0], rasterUnionBounds[0]),
+    Math.max(regionBbox[1], rasterUnionBounds[1]),
+    Math.min(regionBbox[2], rasterUnionBounds[2]),
+    Math.min(regionBbox[3], rasterUnionBounds[3]),
+  ];
+  
+  console.log('[CompositeUtils] Region bbox:', regionBbox);
+  console.log('[CompositeUtils] Raster union bounds:', rasterUnionBounds);
+  console.log('[CompositeUtils] Intersection bounds:', unionBounds);
+  
+  // Validate bounds have positive area
   if (unionBounds[0] >= unionBounds[2] || unionBounds[1] >= unionBounds[3]) {
     console.warn('[CompositeUtils] No overlap between rasters and region');
     return null;

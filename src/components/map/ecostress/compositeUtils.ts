@@ -23,6 +23,8 @@ export interface GranuleInput {
   cog_url: string;
   datetime: string;
   granule_id: string;
+  // WGS84 bounds from API (preferred over COG extraction)
+  granule_bounds?: [number, number, number, number];
 }
 
 export interface CompositeResult {
@@ -180,20 +182,30 @@ async function fetchCOGRaster(granule: GranuleInput): Promise<RasterData | null>
     const image = await tiff.getImage();
     const width = image.getWidth();
     const height = image.getHeight();
-    const rawBounds = image.getBoundingBox();
-    const geoKeys = image.getGeoKeys();
     
-    // Detect UTM and convert to WGS84
-    const utmInfo = parseUtmZone(granule.cog_url, geoKeys);
+    // PRIORITY: Use API-provided WGS84 bounds if available (most reliable)
     let wgs84Bounds: [number, number, number, number];
     
-    if (utmInfo) {
-      wgs84Bounds = convertBoundsToWgs84(rawBounds, utmInfo);
-    } else if (Math.abs(rawBounds[0]) > 180 || Math.abs(rawBounds[2]) > 180) {
-      // Fallback: assume UTM zone 32N (Central Europe)
-      wgs84Bounds = convertBoundsToWgs84(rawBounds, { zone: 32, isNorth: true });
+    if (granule.granule_bounds && granule.granule_bounds.length === 4) {
+      // API bounds are already in WGS84 - use directly
+      wgs84Bounds = granule.granule_bounds;
+      console.log(`[CompositeUtils] Using API bounds for ${granule.granule_id}:`, wgs84Bounds);
     } else {
-      wgs84Bounds = rawBounds as [number, number, number, number];
+      // Fallback: Extract from COG and convert UTM to WGS84
+      const rawBounds = image.getBoundingBox();
+      const geoKeys = image.getGeoKeys();
+      
+      const utmInfo = parseUtmZone(granule.cog_url, geoKeys);
+      
+      if (utmInfo) {
+        wgs84Bounds = convertBoundsToWgs84(rawBounds, utmInfo);
+      } else if (Math.abs(rawBounds[0]) > 180 || Math.abs(rawBounds[2]) > 180) {
+        // Fallback: assume UTM zone 32N (Central Europe)
+        wgs84Bounds = convertBoundsToWgs84(rawBounds, { zone: 32, isNorth: true });
+      } else {
+        wgs84Bounds = rawBounds as [number, number, number, number];
+      }
+      console.log(`[CompositeUtils] Computed bounds for ${granule.granule_id}:`, wgs84Bounds);
     }
     
     // Validate bounds are reasonable WGS84

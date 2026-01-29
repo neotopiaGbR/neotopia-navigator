@@ -39,6 +39,8 @@ export interface AirTemperatureData {
   aggregation: AirTempAggregation;
   period: string;
   resolution_km: number;
+  /** Effective cell size in meters (includes sample step) */
+  cellsize_m: number;
   normalization: {
     p5: number;
     p95: number;

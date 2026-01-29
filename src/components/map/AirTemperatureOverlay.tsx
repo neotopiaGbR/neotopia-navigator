@@ -7,8 +7,8 @@ interface AirTemperatureOverlayProps {
   data: GridPoint[] | null | undefined;
   visible: boolean;
   opacity?: number;
-  /** P5-P95 normalization range for color scale */
-  normalization?: { p5: number; p95: number };
+  /** Cell size in meters for proper polygon sizing */
+  cellSizeMeters?: number;
 }
 
 /**
@@ -38,19 +38,19 @@ export function AirTemperatureOverlay({
   data, 
   visible, 
   opacity = 0.75,
-  normalization,
+  cellSizeMeters = 3000,
 }: AirTemperatureOverlayProps) {
   
-  // Convert grid points to polygon GeoJSON
+  // Convert grid points to polygon GeoJSON with proper cell sizing
   const geoJsonData = useMemo<FeatureCollection | null>(() => {
     if (!data || !Array.isArray(data) || data.length === 0) return null;
     try {
-      return gridToGeoJson(data);
+      return gridToGeoJson(data, cellSizeMeters);
     } catch (e) {
       console.warn('[AirTemperatureOverlay] Failed to convert grid:', e);
       return null;
     }
-  }, [data]);
+  }, [data, cellSizeMeters]);
 
   const fillStyle = useMemo<any>(() => {
     return {

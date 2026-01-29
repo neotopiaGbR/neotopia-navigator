@@ -143,6 +143,7 @@ export function useDwdTemperature() {
         aggregation: aggregation,
         period: response.data.period,
         resolution_km: response.data.resolution_km,
+        cellsize_m: response.data.cellsize_m ?? 3000, // Default 3km if not provided
         normalization: response.data.normalization,
       };
 

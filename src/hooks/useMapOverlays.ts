@@ -32,6 +32,13 @@ interface EcostressResponse {
   // All granules for composite layering
   all_granules?: GranuleData[];
   granule_count?: number;
+  total_available?: number;
+  // Multi-summer metadata
+  year_distribution?: Record<number, number>;
+  summers_queried?: number[];
+  peak_heat_filter?: string;
+  candidates_from_cmr?: number;
+  filtered_non_peak?: number;
   // Legacy single granule (backwards compatibility)
   cog_url?: string;
   cloud_mask_url?: string;
@@ -198,6 +205,10 @@ export function useMapOverlays() {
           // Array of all granules for composite rendering
           allGranules,
           granuleCount: response.granule_count || allGranules.length,
+          // Multi-summer metadata
+          yearDistribution: response.year_distribution || undefined,
+          summersQueried: response.summers_queried || undefined,
+          peakHeatFilter: response.peak_heat_filter || undefined,
           // Legacy single-granule fields (for backwards compatibility)
           cogUrl: response.cog_url,
           cloudMaskUrl: response.cloud_mask_url,

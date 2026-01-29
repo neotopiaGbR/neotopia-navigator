@@ -69,7 +69,7 @@ export default function EcostressCompositeOverlay({
             lon: centerLon,
             region_bbox: regionBbox,
             mode: 'historic_heat',
-            max_granules: 80,
+            max_granules: 100,
           },
         });
 

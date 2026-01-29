@@ -177,8 +177,13 @@ export default function EcostressCompositeOverlay({
         
         ctx.putImageData(result.imageData, 0, 0);
         
-        // CRITICAL: Use createImageBitmap instead of raw canvas
-        const bitmap = await createImageBitmap(canvas);
+        // CRITICAL: Use createImageBitmap with explicit options to prevent WebGL shader crashes
+        // premultiplyAlpha: 'none' prevents alpha blending issues
+        // colorSpaceConversion: 'none' preserves raw color values
+        const bitmap = await createImageBitmap(canvas, {
+          premultiplyAlpha: 'none',
+          colorSpaceConversion: 'none',
+        });
 
         // Check again after async operation
         if (genId !== generationIdRef.current) {

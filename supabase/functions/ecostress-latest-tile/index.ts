@@ -38,10 +38,10 @@ const UTC_HOUR_END = 15;
 // OPTIMIZED STRATEGY:
 // 1. Fetch 100 metadata entries per summer (3 years × 100 = 300 total) - fast!
 // 2. Filter strictly: UTC 10-15 + cloud < 30%
-// 3. Return only top 40 best granules for frontend processing
+// 3. Return only top 120 best granules for robust P90 statistics
 const CMR_PAGE_SIZE_PER_SUMMER = 100;
 const MAX_CLOUD_COVER_PERCENT = 30;
-const MAX_GRANULES_TO_RETURN = 40;
+const MAX_GRANULES_TO_RETURN = 120;
 
 const ECOSTRESS_CONCEPT_ID = 'C2076090826-LPCLOUD';
 const CMR_API_URL = 'https://cmr.earthdata.nasa.gov/search/granules.json';

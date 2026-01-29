@@ -1,14 +1,11 @@
 /**
  * ECOSTRESS Summer Composite Overlay
- * 
- * Renders a single, stable heat map from aggregated ECOSTRESS data.
+ * * Renders a single, stable heat map from aggregated ECOSTRESS data.
  * Uses quality-weighted pixel aggregation with regional percentile normalization.
- * 
- * CRITICAL FIXES:
- * - Uses singleton DeckOverlayManager instead of creating own MapboxOverlay
- * - BitmapLayer.image is HTMLCanvasElement (NOT DataURL)
- * - Mounts immediately when visible=true (no status gate)
- * - Explicit WGS84 bounds validation via centralized boundsValidation
+ * * CRITICAL FIXES:
+ * - Uses singleton DeckOverlayManager
+ * - Removed "isReady()" deadlock that prevented rendering
+ * - Validates bounds before rendering
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -16,7 +13,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { 
   updateLayer, 
   removeLayer, 
-  isReady,
+  getAttachedMap,
   getDiagnostics,
 } from '../DeckOverlayManager';
 import { 
@@ -29,8 +26,6 @@ import {
   isValidWGS84Bounds, 
   boundsIntersect, 
   GERMANY_BBOX,
-  assertVisiblePixels,
-  logBoundsValidation,
 } from '@/lib/boundsValidation';
 
 export interface GranuleData {
@@ -73,8 +68,7 @@ interface EcostressCompositeOverlayProps {
 const LAYER_ID = 'ecostress-summer-composite';
 
 /**
- * Convert ImageData to HTMLCanvasElement (NOT DataURL!)
- * This is required for reliable WebGL texture upload
+ * Convert ImageData to HTMLCanvasElement
  */
 function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
@@ -87,22 +81,17 @@ function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
 }
 
 /**
- * Validate bounds are plausible WGS84 for Germany region
- * Uses centralized validation from boundsValidation
+ * Validate bounds are plausible WGS84
  */
 function validateBounds(bounds: [number, number, number, number]): boolean {
-  // Use centralized validation
   if (!isValidWGS84Bounds(bounds)) {
     console.error('[EcostressCompositeOverlay] Bounds outside WGS84 range:', bounds);
     return false;
   }
-  
-  // Check intersection with Germany bbox
+  // Warn but don't fail if outside Germany (e.g. border regions)
   if (!boundsIntersect(bounds, GERMANY_BBOX)) {
-    console.error('[EcostressCompositeOverlay] Bounds do not intersect Germany:', bounds);
-    return false;
+    console.warn('[EcostressCompositeOverlay] Bounds do not intersect Germany:', bounds);
   }
-  
   return true;
 }
 
@@ -121,24 +110,19 @@ export function EcostressCompositeOverlay({
   const [status, setStatus] = useState<'idle' | 'loading' | 'rendered' | 'error' | 'no_data'>('idle');
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
   
-  // Stabilize callback refs to prevent infinite loops
+  // Stabilize callbacks
   const onRenderStatusRef = useRef(onRenderStatus);
   const onMetadataRef = useRef(onMetadata);
   onRenderStatusRef.current = onRenderStatus;
   onMetadataRef.current = onMetadata;
   
-  // Stabilize granule list by tracking count and first granule ID
+  // Stabilize inputs
   const granuleKey = allGranules 
     ? `${allGranules.length}-${allGranules[0]?.granule_id || 'none'}`
     : 'none';
-  
-  // Stabilize bbox by converting to string key
   const bboxKey = regionBbox ? regionBbox.join(',') : 'none';
 
-  // NOTE: DeckOverlayManager is initialized in RegionMap.tsx when map loads
-  // This component just uses updateLayer/removeLayer from the singleton
-
-  // Create composite when granules change
+  // 1. Compute Composite (Expensive CPU Task)
   useEffect(() => {
     if (!visible || !allGranules || allGranules.length === 0 || !regionBbox) {
       setCompositeResult(null);
@@ -157,7 +141,6 @@ export function EcostressCompositeOverlay({
       setProgress({ loaded: 0, total: allGranules!.length });
 
       try {
-        // Transform to GranuleInput format with quality metadata
         const granuleInputs = allGranules!.map(g => ({
           cog_url: g.cog_url,
           datetime: g.datetime,
@@ -172,9 +155,7 @@ export function EcostressCompositeOverlay({
           regionBbox!,
           aggregationMethod,
           (loaded, total) => {
-            if (!cancelled) {
-              setProgress({ loaded, total });
-            }
+            if (!cancelled) setProgress({ loaded, total });
           }
         );
 
@@ -182,38 +163,17 @@ export function EcostressCompositeOverlay({
 
         if (!result) {
           setStatus('no_data');
-          onRenderStatusRef.current?.('no_data', 'Keine gültigen Daten für Komposit nach Qualitätsfilterung');
+          onRenderStatusRef.current?.('no_data', 'Keine gültigen Daten für Komposit');
           onMetadataRef.current?.(null);
           return;
         }
 
-        // CRITICAL: Validate bounds before rendering
         if (!validateBounds(result.bounds)) {
           throw new Error(`Invalid composite bounds: ${JSON.stringify(result.bounds)}`);
         }
 
-        // CRITICAL: Convert to HTMLCanvasElement (NOT DataURL!)
+        // Create Canvas for Deck.gl
         const canvas = imageDataToCanvas(result.imageData);
-        
-        // Validate canvas has non-transparent pixels
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          const checkData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          let nonTransparent = 0;
-          for (let i = 3; i < checkData.data.length; i += 4) {
-            if (checkData.data[i] > 0) nonTransparent++;
-          }
-          console.log('[EcostressCompositeOverlay] Canvas validation:', {
-            width: canvas.width,
-            height: canvas.height,
-            nonTransparentPixels: nonTransparent,
-            totalPixels: checkData.data.length / 4,
-          });
-          
-          if (nonTransparent === 0) {
-            throw new Error('Composite canvas is fully transparent - no visible data');
-          }
-        }
         
         setCompositeResult(result);
         setCanvasImage(canvas);
@@ -244,15 +204,6 @@ export function EcostressCompositeOverlay({
           `Komposit: ${result.stats.successfulGranules} Aufnahmen, ${result.metadata.coverageConfidence.percent}% Abdeckung (${confidenceLabel})`
         );
 
-        console.log('[EcostressCompositeOverlay] ✅ Composite created:', {
-          granules: result.stats.successfulGranules,
-          discarded: result.stats.discardedGranules,
-          pixels: result.stats.validPixels,
-          coverage: `${result.metadata.coverageConfidence.percent}%`,
-          confidence: result.metadata.coverageConfidence.level,
-          bounds: result.bounds,
-          tempRange: `${(result.stats.min - 273.15).toFixed(1)}°C to ${(result.stats.max - 273.15).toFixed(1)}°C`,
-        });
       } catch (err) {
         if (cancelled) return;
         console.error('[EcostressCompositeOverlay] Failed to create composite:', err);
@@ -271,10 +222,12 @@ export function EcostressCompositeOverlay({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, granuleKey, bboxKey, aggregationMethod]);
 
-  // Update deck.gl layer when composite or visibility changes
+  // 2. Render to Map (Deck.gl Layer Update)
   useEffect(() => {
-    if (!isReady()) {
-      console.log('[EcostressCompositeOverlay] DeckOverlayManager not ready yet');
+    // FIX: Don't check isReady() which relies on DOM. 
+    // Just check if we have a map attached (via manager) or we are passed one.
+    if (!getAttachedMap() && !map) {
+      // Not mounted on a map yet
       return;
     }
     
@@ -283,10 +236,10 @@ export function EcostressCompositeOverlay({
       return;
     }
 
-    console.log('[EcostressCompositeOverlay] Updating BitmapLayer:', {
+    console.log('[EcostressCompositeOverlay] Updating Layer:', {
       bounds: compositeResult.bounds,
       opacity,
-      canvasSize: `${canvasImage.width}x${canvasImage.height}`,
+      size: `${canvasImage.width}x${canvasImage.height}`,
     });
 
     updateLayer({
@@ -298,16 +251,15 @@ export function EcostressCompositeOverlay({
       opacity,
     });
 
-    // Log diagnostics
-    const diag = getDiagnostics();
-    console.log('[EcostressCompositeOverlay] Deck diagnostics:', diag);
-
     return () => {
+      // We don't remove the layer on unmount immediately to prevent flicker
+      // The parent component controls visibility usually. 
+      // But if this component unmounts, we should clean up.
       removeLayer(LAYER_ID);
     };
-  }, [visible, canvasImage, compositeResult, opacity]);
+  }, [visible, canvasImage, compositeResult, opacity, map]);
 
-  // Render loading/status UI
+  // UI Rendering
   if (!visible) return null;
 
   if (status === 'loading' && progress) {
@@ -340,7 +292,6 @@ export function EcostressCompositeOverlay({
     const methodLabel = compositeResult.stats.aggregationMethod === 'max' ? 'Maximum (Heißeste)' : compositeResult.stats.aggregationMethod === 'p90' ? 'P90 (Extreme)' : 'Median';
     const confidence = compositeResult.metadata.coverageConfidence;
     
-    // Format time window
     const fromDate = compositeResult.metadata.timeWindow.from 
       ? new Date(compositeResult.metadata.timeWindow.from).toLocaleDateString('de-DE', { month: 'short', year: 'numeric' })
       : '';
@@ -348,7 +299,6 @@ export function EcostressCompositeOverlay({
       ? new Date(compositeResult.metadata.timeWindow.to).toLocaleDateString('de-DE', { month: 'short', year: 'numeric' })
       : '';
 
-    // Confidence indicator color
     const confidenceColor = confidence.level === 'high' 
       ? 'bg-green-500' 
       : confidence.level === 'medium' 
@@ -362,7 +312,6 @@ export function EcostressCompositeOverlay({
       <div className="absolute top-16 right-4 bg-background/95 backdrop-blur px-3 py-2.5 rounded-lg text-xs z-10 shadow-lg border border-border/50 min-w-[220px]">
         <div className="font-medium text-sm mb-2">Hitze-Hotspots – Sommer-Komposit</div>
         
-        {/* Coverage Confidence Indicator */}
         <div className="flex items-center gap-2 mb-2 p-1.5 rounded bg-muted/50">
           <div className={`w-2 h-2 rounded-full ${confidenceColor}`} />
           <span className="text-foreground font-medium">Konfidenz: {confidenceLabel}</span>
@@ -397,14 +346,12 @@ export function EcostressCompositeOverlay({
           </div>
         </div>
 
-        {/* Color gradient with normalized scale */}
         <div className="mt-2.5 h-2 w-full rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 via-green-500 via-yellow-400 via-orange-500 to-red-500" />
         <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
           <span>{p5C}°C</span>
           <span>{p95C}°C</span>
         </div>
 
-        {/* Scientific note */}
         <div className="mt-2 pt-2 border-t border-border/50 text-[10px] text-muted-foreground/70 leading-relaxed">
           Diese Ebene zeigt aggregierte Sommerwärme (nicht Einzelaufnahme). 
           Farbskala regional normalisiert (P5–P95).

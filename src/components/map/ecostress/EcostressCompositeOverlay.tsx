@@ -71,6 +71,7 @@ export default function EcostressCompositeOverlay({
             region_bbox: regionBbox,
             date_from: dateFrom,
             date_to: dateTo,
+            daytime_only: true,
           },
         });
 

@@ -283,7 +283,10 @@ function aggregate(values: number[], method: AggregationMethod): number {
   }
   
   if (method === 'p90') {
-    const idx = Math.floor(sorted.length * 0.9);
+    // Nearest-rank p90:
+    // - n=10 -> idx=8 (9th value), avoids collapsing to max too often
+    // - n=2  -> idx=1 (max)
+    const idx = Math.max(0, Math.ceil(sorted.length * 0.9) - 1);
     return sorted[Math.min(idx, sorted.length - 1)];
   }
   
@@ -407,6 +410,11 @@ export async function createComposite(
   let noDataPixels = 0;
   let minTemp = Infinity;
   let maxTemp = -Infinity;
+
+  // Debug stats to ensure aggregation has enough samples to differ
+  let pixelsWith2PlusSamples = 0;
+  let maxSamplesAtPixel = 0;
+  let totalSamplesAcrossValidPixels = 0;
   
   for (let y = 0; y < outputHeight; y++) {
     for (let x = 0; x < outputWidth; x++) {
@@ -441,6 +449,10 @@ export async function createComposite(
       const pixelOffset = (y * outputWidth + x) * 4;
       
       if (samples.length > 0) {
+        if (samples.length >= 2) pixelsWith2PlusSamples++;
+        maxSamplesAtPixel = Math.max(maxSamplesAtPixel, samples.length);
+        totalSamplesAcrossValidPixels += samples.length;
+
         const aggValue = aggregate(samples, aggregationMethod);
         
         if (!isNaN(aggValue)) {
@@ -465,6 +477,12 @@ export async function createComposite(
   }
   
   console.log(`[CompositeUtils] Composite complete: ${validPixels} valid pixels, range ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C`);
+
+  const avgSamples = validPixels > 0 ? (totalSamplesAcrossValidPixels / validPixels) : 0;
+  console.log(
+    `[CompositeUtils] Sample stats: avg ${avgSamples.toFixed(2)} samples/pixel, ` +
+    `${pixelsWith2PlusSamples}/${validPixels} pixels have >=2 samples, max=${maxSamplesAtPixel}`
+  );
   
   // Sort dates to get time window
   const sortedDates = acquisitionDates.filter(d => d).sort();

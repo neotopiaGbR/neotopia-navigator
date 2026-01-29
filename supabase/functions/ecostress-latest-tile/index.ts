@@ -22,10 +22,15 @@ interface RequestBody {
   daytime_only?: boolean; // Filter to daytime acquisitions only (default: true)
 }
 
-// Daytime filter: Only include acquisitions between these UTC hours
-// For Central Europe, daytime is roughly 09-17 UTC (11-19 local summer time)
-const DAYTIME_START_UTC = 9;
-const DAYTIME_END_UTC = 17;
+// Daytime filter: Use approximate *solar local time* derived from longitude.
+// solarLocalTime ≈ UTC + lon/15 (hours). This is more robust than filtering by UTC.
+const DAYTIME_START_LOCAL = 9;
+const DAYTIME_END_LOCAL = 17;
+
+function getSolarLocalHour(date: Date, lon: number): number {
+  const utcHours = date.getUTCHours() + date.getUTCMinutes() / 60;
+  return (utcHours + lon / 15 + 24) % 24;
+}
 
 interface CMRGranule {
   id: string;
@@ -272,7 +277,7 @@ Deno.serve(async (req) => {
       regionCentroid: { lat, lon },
       regionBbox,
       dateRange: `${startDate} to ${endDate}`,
-      daytimeFilter: filterDaytime ? `${DAYTIME_START_UTC}:00-${DAYTIME_END_UTC}:00 UTC` : 'disabled',
+      daytimeFilter: filterDaytime ? `${DAYTIME_START_LOCAL}:00-${DAYTIME_END_LOCAL}:00 (solar local)` : 'disabled',
     });
 
     // Query NASA CMR with search radius
@@ -329,8 +334,8 @@ Deno.serve(async (req) => {
       // DAYTIME FILTER: Skip nighttime acquisitions for warmer surface temps
       if (filterDaytime) {
         const acquisitionTime = new Date(granule.time_start);
-        const utcHour = acquisitionTime.getUTCHours();
-        if (utcHour < DAYTIME_START_UTC || utcHour >= DAYTIME_END_UTC) {
+        const solarLocalHour = getSolarLocalHour(acquisitionTime, lon);
+        if (solarLocalHour < DAYTIME_START_LOCAL || solarLocalHour >= DAYTIME_END_LOCAL) {
           skippedNighttime++;
           continue; // Skip this granule (nighttime)
         }
@@ -382,7 +387,10 @@ Deno.serve(async (req) => {
       .filter(g => g.intersectsRegion)
       .sort((a, b) => b.qualityScore - a.qualityScore);
 
-    console.log(`[ECOSTRESS] Found ${intersecting.length} daytime intersecting granules out of ${granules.length} candidates (skipped ${skippedNighttime} nighttime).`);
+    console.log(
+      `[ECOSTRESS] Found ${intersecting.length} daytime intersecting granules out of ${granules.length} candidates ` +
+      `(skipped ${skippedNighttime} outside ${DAYTIME_START_LOCAL}-${DAYTIME_END_LOCAL} solar-local hours).`
+    );
 
     // NO INTERSECTING GRANULES
     if (intersecting.length === 0) {
@@ -390,7 +398,7 @@ Deno.serve(async (req) => {
         JSON.stringify({
           status: 'no_coverage',
           message: filterDaytime 
-            ? `Keine ECOSTRESS-Tagesaufnahmen (${DAYTIME_START_UTC}:00-${DAYTIME_END_UTC}:00 UTC) decken die Region ab. ${skippedNighttime} Nachtaufnahmen wurden herausgefiltert.`
+            ? `Keine ECOSTRESS-Tagesaufnahmen (${DAYTIME_START_LOCAL}:00-${DAYTIME_END_LOCAL}:00 solar-lokal) decken die Region ab. ${skippedNighttime} Aufnahmen wurden herausgefiltert.`
             : `Keine ECOSTRESS-Aufnahme deckt die Region direkt ab.`,
           candidates_checked: granules.length,
           intersecting_count: 0,
@@ -445,7 +453,7 @@ Deno.serve(async (req) => {
         candidates_checked: granules.length,
         intersecting_count: intersecting.length,
         skipped_nighttime: skippedNighttime,
-        daytime_filter: filterDaytime ? `${DAYTIME_START_UTC}:00-${DAYTIME_END_UTC}:00 UTC` : null,
+        daytime_filter: filterDaytime ? `${DAYTIME_START_LOCAL}:00-${DAYTIME_END_LOCAL}:00 solar-lokal` : null,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

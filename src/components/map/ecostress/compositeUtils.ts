@@ -1,22 +1,16 @@
 /**
  * ECOSTRESS Composite Utilities
  * 
- * Implements scientifically-sound pixel-level aggregation for multi-granule compositing.
+ * Implements pixel-level aggregation for multi-granule compositing.
  * 
  * Key features:
- * - Quality filtering: discards granules with cloud >40% or coverage <60%
- * - Quality-weighted mosaic: weights by cloud confidence, view angle proxy, and continuity
+ * - NO quality filtering: ALL granules are included for maximum coverage
  * - Regional percentile normalization: uses shared P5-P95 scale to prevent tile-to-tile jumps
  * - Single stable output: no overlapping swaths, no rotated tiles
  */
 
 import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
-
-// Quality thresholds - very relaxed to include ALL available summer data
-// The goal is to show HOTSPOTS, not filter out data
-export const MAX_CLOUD_PERCENT = 90;  // Accept up to 90% cloud (keep everything)
-export const MIN_COVERAGE_PERCENT = 10; // Accept even partial coverage
 
 // LST temperature range (Kelvin) for colorization
 export const LST_MIN_K = 260; // -13°C (winter)
@@ -383,28 +377,14 @@ export async function createComposite(
   
   console.log(`[CompositeUtils] Creating ${aggregationMethod} composite from ${granules.length} granules`);
   
-  // 1. QUALITY FILTERING - discard low-quality granules BEFORE fetching
+  // NO QUALITY FILTERING - include ALL granules for maximum coverage
+  const qualifiedGranules = granules;
   const discardReasons = { cloud: 0, coverage: 0, invalid: 0 };
-  const qualifiedGranules = granules.filter(g => {
-    // Filter by cloud threshold
-    if ((g.cloud_percent ?? 0) > MAX_CLOUD_PERCENT) {
-      discardReasons.cloud++;
-      console.log(`[CompositeUtils] Discarding ${g.granule_id}: cloud ${g.cloud_percent}% > ${MAX_CLOUD_PERCENT}%`);
-      return false;
-    }
-    // Filter by coverage threshold
-    if ((g.coverage_percent ?? 100) < MIN_COVERAGE_PERCENT) {
-      discardReasons.coverage++;
-      console.log(`[CompositeUtils] Discarding ${g.granule_id}: coverage ${g.coverage_percent}% < ${MIN_COVERAGE_PERCENT}%`);
-      return false;
-    }
-    return true;
-  });
   
-  console.log(`[CompositeUtils] After quality filtering: ${qualifiedGranules.length}/${granules.length} granules qualified`);
+  console.log(`[CompositeUtils] Using all ${qualifiedGranules.length} granules (no quality filtering)`);
   
   if (qualifiedGranules.length === 0) {
-    console.warn('[CompositeUtils] All granules filtered out by quality thresholds');
+    console.warn('[CompositeUtils] No granules provided');
     return null;
   }
   

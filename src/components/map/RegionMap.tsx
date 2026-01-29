@@ -12,6 +12,7 @@ import { MAP_STYLES } from './basemapStyles';
 
 import AirTemperatureOverlay from './AirTemperatureOverlay';
 import AirTemperatureLegend from './AirTemperatureLegend';
+import HeatLegend from './HeatLegend';
 import { EcostressCompositeOverlay } from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
 
@@ -35,7 +36,7 @@ export default function RegionMap() {
     selectedRegion 
   } = useRegion();
   const { activeLayers, mapStyle } = useMapOverlays();
-  const { airTemperature } = useMapLayers();
+  const { airTemperature, overlays, heatLayers } = useMapLayers();
   const { data: tempData } = useDwdTemperature();
   
   const [isMapReady, setIsMapReady] = useState(false);
@@ -122,8 +123,11 @@ export default function RegionMap() {
     }
   }, [selectedRegion?.id]);
 
-  // Show air temperature legend when layer is active and has data
+  // Show legends when layers are active
   const showAirTempLegend = airTemperature.enabled && tempData?.normalization;
+  const showHeatLegend = overlays.ecostress.enabled;
+  const ecostressGranuleCount = (overlays.ecostress.metadata?.granuleCount as number) || 
+    (overlays.ecostress.metadata?.allGranules as any[])?.length || 0;
 
   return (
     <div className="relative w-full h-full bg-background overflow-hidden">
@@ -214,15 +218,23 @@ export default function RegionMap() {
         </>
       )}
 
-      {/* Air Temperature Legend (top-right, below nav controls) */}
-      {showAirTempLegend && tempData?.normalization && (
-        <div className="absolute top-16 right-3 z-20">
+      {/* Legends (top-right, below nav controls) */}
+      <div className="absolute top-16 right-3 z-20 space-y-2">
+        {/* Heat Legend */}
+        <HeatLegend 
+          visible={showHeatLegend}
+          aggregationMethod={heatLayers.aggregationMethod}
+          granuleCount={ecostressGranuleCount}
+        />
+
+        {/* Air Temperature Legend */}
+        {showAirTempLegend && tempData?.normalization && (
           <AirTemperatureLegend 
             min={tempData.normalization.p5} 
-            max={tempData.normalization.p95} 
+            max={tempData.normalization.p95}
           />
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Ebenen-Button (unten links gemäß Design) */}
       <div className="absolute bottom-8 left-4 z-20 pointer-events-auto">

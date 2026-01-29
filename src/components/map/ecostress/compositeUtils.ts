@@ -360,7 +360,7 @@ export async function createComposite(
     return null;
   }
   
-  console.log(`[CompositeUtils] Processed ${successfulGranules}/${granules.length} granules, aggregating...`);
+  console.log(`[CompositeUtils] Processed ${successfulGranules}/${granules.length} granules, aggregating with "${aggregationMethod}"...`);
   
   // Aggregate and colorize
   const imageData = new ImageData(OUTPUT_SIZE, OUTPUT_SIZE);
@@ -408,9 +408,19 @@ export async function createComposite(
   }
   
   const totalPixels = OUTPUT_SIZE * OUTPUT_SIZE;
-  console.log(`[CompositeUtils] Composite complete: ${validPixels}/${totalPixels} valid pixels`);
-  console.log(`[CompositeUtils] Temperature range: ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C`);
-  console.log(`[CompositeUtils] Stack stats: ${pixelsWith2Plus} pixels with 2+ samples, max stack size: ${maxStackSize}`);
+  
+  // IMPORTANT: Log stack depth analysis for P90 vs Max differentiation
+  console.log(`[CompositeUtils] ═══════════════════════════════════════════════════`);
+  console.log(`[CompositeUtils] COMPOSITE STATS (${aggregationMethod.toUpperCase()})`);
+  console.log(`[CompositeUtils] ───────────────────────────────────────────────────`);
+  console.log(`[CompositeUtils] Valid pixels: ${validPixels}/${totalPixels} (${(validPixels/totalPixels*100).toFixed(1)}%)`);
+  console.log(`[CompositeUtils] Temperature: ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C`);
+  console.log(`[CompositeUtils] ───────────────────────────────────────────────────`);
+  console.log(`[CompositeUtils] STACK DEPTH ANALYSIS (kritisch für P90 vs Max):`);
+  console.log(`[CompositeUtils]   → Pixels mit 2+ Samples: ${pixelsWith2Plus} (${(pixelsWith2Plus/totalPixels*100).toFixed(1)}%)`);
+  console.log(`[CompositeUtils]   → Max Stack Size: ${maxStackSize} Granules übereinander`);
+  console.log(`[CompositeUtils]   → Granules erfolgreich: ${successfulGranules}/${granules.length}`);
+  console.log(`[CompositeUtils] ═══════════════════════════════════════════════════`);
   
   const sortedDates = acquisitionDates.filter(d => d).sort();
   

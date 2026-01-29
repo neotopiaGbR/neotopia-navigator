@@ -31,11 +31,12 @@ interface RequestBody {
 const DAYTIME_START_LOCAL = 9;
 const DAYTIME_END_LOCAL = 17;
 
-// Maximum granules to return (balance between coverage and performance)
-const DEFAULT_MAX_GRANULES = 40;
-// CMR page size (max 2000)
-const CMR_PAGE_SIZE = 500;
-// Max pages to fetch (safety limit)
+// Maximum granules to return - INCREASED for robust P90 statistics
+// More granules = better differentiation between P90 and Max
+const DEFAULT_MAX_GRANULES = 100;
+// CMR page size (max 2000) - keep high to capture full summer
+const CMR_PAGE_SIZE = 1000;
+// Max pages to fetch (safety limit) - allows up to 5000 granules
 const MAX_CMR_PAGES = 5;
 
 function getSolarLocalHour(date: Date, lon: number): number {

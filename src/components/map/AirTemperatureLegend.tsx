@@ -116,7 +116,7 @@ export function AirTemperatureLegend({
       {top3Hottest && top3Hottest.length > 0 && (
         <div className="mt-3 pt-2 border-t border-border/30">
           <div className="text-[10px] text-muted-foreground mb-1 font-medium">
-            🔥 Top 3 heißeste Zellen (DE)
+            🔥 Top 3 heißeste Zellen (JJA)
           </div>
           <div className="space-y-0.5">
             {top3Hottest.map((cell, idx) => (

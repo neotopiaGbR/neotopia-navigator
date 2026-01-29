@@ -1,16 +1,22 @@
 import { MapboxOverlay } from '@deck.gl/mapbox';
-import { BitmapLayer } from '@deck.gl/layers';
+import { BitmapLayer, GeoJsonLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { COORDINATE_SYSTEM } from '@deck.gl/core';
 
 export interface DeckLayerConfig {
   id: string;
-  type: 'bitmap' | 'scatterplot';
+  type: 'bitmap' | 'scatterplot' | 'geojson';
   visible: boolean;
   opacity?: number;
   image?: HTMLCanvasElement | ImageBitmap;
   bounds?: [number, number, number, number];
-  data?: any[];
+  data?: any;
+  styleConfig?: {
+    getFillColor?: (feature: any) => [number, number, number, number];
+    getLineColor?: (feature: any) => [number, number, number, number];
+    lineWidth?: number;
+    pickable?: boolean;
+  };
 }
 
 let overlayInstance: MapboxOverlay | null = null;
@@ -130,6 +136,7 @@ function rebuildLayers() {
   
   const layers = visibleConfigs
     .map(c => {
+      // BitmapLayer for raster data
       if (c.type === 'bitmap' && c.image && c.bounds) {
         console.log(`[DeckOverlayManager] Building BitmapLayer: ${c.id}`, {
           bounds: c.bounds,
@@ -148,9 +155,38 @@ function rebuildLayers() {
           }
         });
       }
-      console.warn(`[DeckOverlayManager] Skipping layer ${c.id}: missing image or bounds`, {
+      
+      // GeoJsonLayer for vector data (e.g., CatRaRE events)
+      if (c.type === 'geojson' && c.data) {
+        console.log(`[DeckOverlayManager] Building GeoJsonLayer: ${c.id}`, {
+          featureCount: c.data?.features?.length || 0,
+          opacity: c.opacity,
+        });
+        
+        const style = c.styleConfig || {};
+        return new GeoJsonLayer({
+          id: c.id,
+          data: c.data,
+          opacity: c.opacity ?? 0.6,
+          stroked: true,
+          filled: true,
+          pickable: style.pickable ?? false,
+          getFillColor: style.getFillColor || [100, 100, 100, 100],
+          getLineColor: style.getLineColor || [50, 50, 50, 255],
+          getLineWidth: style.lineWidth || 2,
+          lineWidthUnits: 'pixels',
+          coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+          parameters: {
+            depthTest: false,
+            blend: true
+          }
+        });
+      }
+      
+      console.warn(`[DeckOverlayManager] Skipping layer ${c.id}: missing required data`, {
         hasImage: !!c.image,
         hasBounds: !!c.bounds,
+        hasData: !!c.data,
         type: c.type,
       });
       return null;

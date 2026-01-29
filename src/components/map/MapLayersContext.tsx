@@ -1,8 +1,12 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback } from 'react';
+import { type KostraDuration, type KostraReturnPeriod, DEFAULT_RISK_LAYER_STATE, type RiskLayerState } from './risk/RiskLayersConfig';
 
 export type BasemapType = 'map' | 'satellite' | 'terrain';
 export type AggregationMethod = 'median' | 'p90' | 'max';
 export type AirTempAggregation = 'daily_max' | 'daily_mean';
+
+// Re-export risk layer types for convenience
+export type { KostraDuration, KostraReturnPeriod, RiskLayerState };
 
 export interface OverlayConfig {
   enabled: boolean;
@@ -88,6 +92,7 @@ export interface MapLayersState {
   };
   heatLayers: HeatLayerTierConfig;
   airTemperature: AirTemperatureConfig;
+  riskLayers: RiskLayerState;
 }
 
 type OverlayType = 'ecostress' | 'floodRisk';
@@ -111,6 +116,13 @@ interface MapLayersContextType extends MapLayersState {
   setAirTemperatureLoading: (loading: boolean) => void;
   setAirTemperatureError: (error: string | null) => void;
   setAirTemperatureData: (data: AirTemperatureData | null) => void;
+  // Risk layer controls
+  toggleKostra: () => void;
+  setKostraOpacity: (opacity: number) => void;
+  setKostraDuration: (duration: KostraDuration) => void;
+  setKostraReturnPeriod: (period: KostraReturnPeriod) => void;
+  toggleCatrare: () => void;
+  setCatrareOpacity: (opacity: number) => void;
 }
 
 const defaultOverlay: OverlayConfig = {
@@ -152,6 +164,7 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
   });
   const [heatLayers, setHeatLayers] = useState<HeatLayerTierConfig>(defaultHeatLayers);
   const [airTemperature, setAirTemperature] = useState<AirTemperatureConfig>(defaultAirTemperature);
+  const [riskLayers, setRiskLayers] = useState<RiskLayerState>(DEFAULT_RISK_LAYER_STATE);
 
   const toggleOverlay = useCallback((overlay: OverlayType) => {
     setOverlays((prev) => ({
@@ -301,6 +314,31 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
     }));
   }, []);
 
+  // Risk Layer controls
+  const toggleKostra = useCallback(() => {
+    setRiskLayers((prev) => ({ ...prev, kostraEnabled: !prev.kostraEnabled }));
+  }, []);
+
+  const setKostraOpacity = useCallback((opacity: number) => {
+    setRiskLayers((prev) => ({ ...prev, kostraOpacity: Math.max(0, Math.min(100, opacity)) }));
+  }, []);
+
+  const setKostraDuration = useCallback((duration: KostraDuration) => {
+    setRiskLayers((prev) => ({ ...prev, kostraDuration: duration }));
+  }, []);
+
+  const setKostraReturnPeriod = useCallback((period: KostraReturnPeriod) => {
+    setRiskLayers((prev) => ({ ...prev, kostraReturnPeriod: period }));
+  }, []);
+
+  const toggleCatrare = useCallback(() => {
+    setRiskLayers((prev) => ({ ...prev, catrareEnabled: !prev.catrareEnabled }));
+  }, []);
+
+  const setCatrareOpacity = useCallback((opacity: number) => {
+    setRiskLayers((prev) => ({ ...prev, catrareOpacity: Math.max(0, Math.min(100, opacity)) }));
+  }, []);
+
   return (
     <MapLayersContext.Provider
       value={{
@@ -308,6 +346,7 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
         overlays,
         heatLayers,
         airTemperature,
+        riskLayers,
         setBasemap,
         toggleOverlay,
         setOverlayOpacity,
@@ -324,6 +363,12 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
         setAirTemperatureLoading,
         setAirTemperatureError,
         setAirTemperatureData,
+        toggleKostra,
+        setKostraOpacity,
+        setKostraDuration,
+        setKostraReturnPeriod,
+        toggleCatrare,
+        setCatrareOpacity,
       }}
     >
       {children}

@@ -19,6 +19,10 @@ import HeatLegend from './HeatLegend';
 import EcostressCompositeOverlay from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
 
+// Risk Layer Components
+import KostraLayer from './risk/KostraLayer';
+import CatrareLayer from './risk/CatrareLayer';
+
 import LayersControl from './LayersControl';
 import OverlayDiagnosticsPanel from './OverlayDiagnosticsPanel';
 
@@ -37,7 +41,7 @@ export default function RegionMap() {
     selectedRegion 
   } = useRegion();
   const { activeLayers, mapStyle } = useMapOverlays();
-  const { airTemperature, overlays, heatLayers } = useMapLayers();
+  const { airTemperature, overlays, heatLayers, riskLayers } = useMapLayers();
   const { data: tempData } = useDwdTemperature();
   
   const [isMapReady, setIsMapReady] = useState(false);
@@ -287,6 +291,22 @@ export default function RegionMap() {
         <GlobalLSTOverlay 
           map={mapRef.current.getMap()} 
           visible={activeLayers.includes('global_lst')} 
+        />
+      )}
+
+      {/* Risk Layers - KOSTRA and CatRaRE */}
+      {isMapReady && (
+        <KostraLayer
+          visible={riskLayers.kostraEnabled}
+          opacity={riskLayers.kostraOpacity / 100}
+          duration={riskLayers.kostraDuration}
+          returnPeriod={riskLayers.kostraReturnPeriod}
+        />
+      )}
+      {isMapReady && (
+        <CatrareLayer
+          visible={riskLayers.catrareEnabled}
+          opacity={riskLayers.catrareOpacity / 100}
         />
       )}
 

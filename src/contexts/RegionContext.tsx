@@ -4,6 +4,8 @@ export interface Region {
   id: string;
   name: string;
   geom: GeoJSON.Geometry;
+  // Optional precomputed bbox (W, S, E, N) when available
+  bbox?: [number, number, number, number];
 }
 
 interface RegionContextType {

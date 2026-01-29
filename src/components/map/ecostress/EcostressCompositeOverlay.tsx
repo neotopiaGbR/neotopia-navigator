@@ -2,11 +2,27 @@ import { useEffect, useState } from 'react';
 import { updateLayer, removeLayer } from '../DeckOverlayManager';
 import { createComposite } from './compositeUtils';
 
+export interface GranuleData {
+  cog_url: string;
+  cloud_mask_url?: string;
+  datetime: string;
+  granule_id: string;
+  granule_bounds: [number, number, number, number];
+  quality_score: number;
+  coverage_percent: number;
+  cloud_percent: number;
+}
+
+// Minimal metadata type exported for downstream consumers
+export interface CompositeMetadata {
+  granuleCount?: number;
+}
+
 // Define minimal Props needed
 interface Props {
   map: any;
   visible: boolean;
-  allGranules?: any[];
+  allGranules?: GranuleData[];
   regionBbox?: [number, number, number, number];
   opacity?: number;
 }

@@ -90,11 +90,21 @@ const DEBOUNCE_MS = 500;
 export function useMapOverlays() {
   const { selectedRegion } = useRegion();
   const {
+    basemap,
     overlays,
+    heatLayers,
+    airTemperature,
     setOverlayLoading,
     setOverlayError,
     setOverlayMetadata,
   } = useMapLayers();
+
+  // Backwards-compatible UI helpers consumed by RegionMap
+  const mapStyle = basemap === 'satellite' ? 'satellite' : 'dark';
+  const activeLayers: string[] = [];
+  if (overlays.ecostress.enabled) activeLayers.push('ecostress');
+  if (airTemperature.enabled) activeLayers.push('air_temperature');
+  if (overlays.ecostress.enabled && heatLayers.globalLSTEnabled) activeLayers.push('global_lst');
 
   const lastFetchRef = useRef<{ ecostress?: string; floodRisk?: string }>({});
   const debounceRef = useRef<{ ecostress?: ReturnType<typeof setTimeout>; floodRisk?: ReturnType<typeof setTimeout> }>({});
@@ -370,6 +380,8 @@ export function useMapOverlays() {
     floodRiskMetadata: overlays.floodRisk.metadata,
     refetchEcostress: fetchEcostress,
     refetchFloodRisk: fetchFloodRisk,
+    activeLayers,
+    mapStyle,
   };
 }
 

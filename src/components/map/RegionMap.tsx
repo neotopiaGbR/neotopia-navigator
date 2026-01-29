@@ -4,7 +4,7 @@ import Map, { NavigationControl, ScaleControl, AttributionControl } from 'react-
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { useMapOverlays } from '@/hooks/useMapOverlays';
-import { useRegionContext } from '@/contexts/RegionContext';
+import { useRegion } from '@/contexts/RegionContext';
 import { useDwdTemperature } from '@/hooks/useDwdTemperature';
 import { initDeckOverlay, finalizeDeckOverlay } from './DeckOverlayManager';
 import { MAP_STYLES } from './basemapStyles';
@@ -12,11 +12,11 @@ import { MAP_STYLES } from './basemapStyles';
 // Overlays Imports
 import AirTemperatureOverlay from './AirTemperatureOverlay';
 import EcostressCompositeOverlay from './ecostress/EcostressCompositeOverlay';
-import GlobalLSTOverlay from './GlobalLSTOverlay';
+import { GlobalLSTOverlay } from './GlobalLSTOverlay';
 
 export default function RegionMap() {
   const mapRef = useRef<any>(null);
-  const { selectedRegion } = useRegionContext();
+  const { selectedRegion } = useRegion();
   const { activeLayers, mapStyle } = useMapOverlays();
   const { data: tempData } = useDwdTemperature();
   const [isMapReady, setIsMapReady] = useState(false);
@@ -75,7 +75,7 @@ export default function RegionMap() {
               regionBbox={selectedRegion?.bbox}
               allGranules={[]} 
             />
-            <GlobalLSTOverlay visible={activeLayers.includes('global_lst')} />
+            <GlobalLSTOverlay map={mapRef.current?.getMap() ?? null} visible={activeLayers.includes('global_lst')} />
           </>
         )}
       </Map>

@@ -158,20 +158,13 @@ export default function RegionMap() {
         {/* Region Tiles with proper color values (not CSS variables) */}
         {regions.length > 0 && (
           <Source id="regions-source" type="geojson" data={regionsGeoJson}>
-            {/* Fill Layer */}
+            {/* Fill Layer - transparent, only for click interaction */}
             <Layer
               id="regions-fill"
               type="fill"
               paint={{
-                'fill-color': [
-                  'case',
-                  ['==', ['get', 'id'], selectedRegionId ?? ''],
-                  ACCENT_COLOR_SELECTED,
-                  ['==', ['get', 'id'], hoveredRegionId ?? ''],
-                  ACCENT_COLOR_HOVER,
-                  ACCENT_COLOR_FILL,
-                ],
-                'fill-opacity': 0.5,
+                'fill-color': 'transparent',
+                'fill-opacity': 0,
               }}
             />
             {/* Outline Layer */}

@@ -34,6 +34,7 @@ const RegionMap: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [styleLoaded, setStyleLoaded] = useState(false);
 
   const { regions, setRegions, selectedRegionId, setSelectedRegionId, hoveredRegionId, setHoveredRegionId } =
     useRegion();
@@ -105,6 +106,7 @@ const RegionMap: React.FC = () => {
         initDeckOverlay(map.current, import.meta.env.DEV);
       }
       setMapReady(true);
+      setStyleLoaded(true);
     });
 
     return () => {
@@ -118,11 +120,19 @@ const RegionMap: React.FC = () => {
   // -------------------------
   // Basemap switch
   // -------------------------
+  // Ref to hold the function for adding regions (avoids stale closures)
+  const addRegionsRef = useRef<() => void>(() => {});
+
+  // -------------------------
+  // Basemap switch
+  // -------------------------
   useEffect(() => {
     if (!map.current || !mapReady) return;
 
     const center = map.current.getCenter();
     const zoom = map.current.getZoom();
+
+    setStyleLoaded(false);
 
     map.current.setStyle(getBasemapStyle(basemap));
 
@@ -131,15 +141,17 @@ const RegionMap: React.FC = () => {
       map.current.setCenter(center);
       map.current.setZoom(zoom);
       initDeckOverlay(map.current, import.meta.env.DEV, { force: true });
+      addRegionsRef.current();
       map.current.resize();
+      setStyleLoaded(true);
     });
   }, [basemap, mapReady]);
 
   // -------------------------
   // Regions rendering
   // -------------------------
-  useEffect(() => {
-    if (!map.current || !mapReady || regions.length === 0) return;
+  const addRegions = useCallback(() => {
+    if (!map.current || regions.length === 0) return;
 
     const m = map.current;
 
@@ -182,7 +194,18 @@ const RegionMap: React.FC = () => {
         "line-width": 1,
       },
     });
-  }, [regions, mapReady, anyOverlayEnabled]);
+  }, [regions, anyOverlayEnabled]);
+
+  // Keep ref updated
+  useEffect(() => {
+    addRegionsRef.current = addRegions;
+  }, [addRegions]);
+
+  // Initial regions render + re-render on data change (only when style is loaded)
+  useEffect(() => {
+    if (!mapReady || !styleLoaded) return;
+    addRegions();
+  }, [mapReady, styleLoaded, addRegions]);
 
   // -------------------------
   // Error state

@@ -125,7 +125,7 @@ export function OverlayDiagnosticsPanel({ visible, mapRef }: OverlayDiagnosticsP
   const canvasSizeMismatch = !!(cssSizeMismatch || bufferSizeMismatch);
   
   return (
-    <div className="absolute bottom-24 left-3 z-50 w-72 bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden text-xs font-mono">
+    <div className="absolute bottom-24 right-3 z-50 w-72 bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden text-xs font-mono">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border">
         <Bug className="h-4 w-4 text-primary" />

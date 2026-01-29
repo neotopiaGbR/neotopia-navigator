@@ -6,7 +6,11 @@
 -- 1. Update AuthContext.tsx to query user_roles instead of profiles.role
 -- 2. Test admin functionality before removing old profiles.role column
 
--- 0. CREATE ROLE ENUM TYPE (if not exists)
+-- 0. DROP OLD has_role FUNCTION (if exists with text signature)
+-- This prevents "function name is not unique" errors
+DROP FUNCTION IF EXISTS public.has_role(uuid, text);
+
+-- 1. CREATE ROLE ENUM TYPE (if not exists)
 DO $$ 
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'app_role') THEN

@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, ThermometerSun, Wind } from 'lucide-react';
+import { Layers, Map, Satellite, Mountain, Flame, Droplets, X, Info, AlertCircle, ThermometerSun, Wind, CloudRain, History } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { useMapLayers, BasemapType, AggregationMethod, AirTempAggregation } from './MapLayersContext';
+import { useMapLayers, BasemapType, AggregationMethod, AirTempAggregation, type KostraDuration, type KostraReturnPeriod } from './MapLayersContext';
+import { KOSTRA_DURATION_LABELS, KOSTRA_RETURN_PERIOD_LABELS, RISK_OVERLAY_INFO } from './risk/RiskLayersConfig';
 import HeatLayerProvenancePanel from './HeatLayerProvenancePanel';
 
 interface BasemapOption {
@@ -83,6 +85,7 @@ const LayersControl: React.FC = () => {
     overlays,
     heatLayers,
     airTemperature,
+    riskLayers,
     setBasemap,
     toggleOverlay,
     setOverlayOpacity,
@@ -91,6 +94,12 @@ const LayersControl: React.FC = () => {
     toggleAirTemperature,
     setAirTemperatureOpacity,
     setAirTemperatureAggregation,
+    toggleKostra,
+    setKostraOpacity,
+    setKostraDuration,
+    setKostraReturnPeriod,
+    toggleCatrare,
+    setCatrareOpacity,
   } = useMapLayers();
 
   return (
@@ -199,6 +208,38 @@ const LayersControl: React.FC = () => {
               />
             </div>
 
+            {/* === NIEDERSCHLAGSRISIKO SECTION === */}
+            <div className="space-y-4">
+              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Niederschlagsrisiko
+              </h4>
+
+              {/* KOSTRA Overlay */}
+              <RiskOverlayControl
+                id="kostra"
+                icon={<CloudRain className="h-4 w-4 text-purple-500" />}
+                info={RISK_OVERLAY_INFO.kostra}
+                enabled={riskLayers.kostraEnabled}
+                opacity={riskLayers.kostraOpacity}
+                duration={riskLayers.kostraDuration}
+                returnPeriod={riskLayers.kostraReturnPeriod}
+                onToggle={toggleKostra}
+                onOpacityChange={setKostraOpacity}
+                onDurationChange={setKostraDuration}
+                onReturnPeriodChange={setKostraReturnPeriod}
+              />
+
+              {/* CatRaRE Overlay */}
+              <CatrareOverlayControl
+                icon={<History className="h-4 w-4 text-amber-500" />}
+                info={RISK_OVERLAY_INFO.catrare}
+                enabled={riskLayers.catrareEnabled}
+                opacity={riskLayers.catrareOpacity}
+                onToggle={toggleCatrare}
+                onOpacityChange={setCatrareOpacity}
+              />
+            </div>
+
             {/* Attribution Footer */}
             <div className="pt-3 border-t border-border">
               <p className="text-[10px] text-muted-foreground leading-relaxed">
@@ -219,6 +260,18 @@ const LayersControl: React.FC = () => {
                   <>
                     <br />
                     Hochwasser: {OVERLAY_INFO.floodRisk.attribution}
+                  </>
+                )}
+                {riskLayers.kostraEnabled && (
+                  <>
+                    <br />
+                    Starkregen: {RISK_OVERLAY_INFO.kostra.attribution}
+                  </>
+                )}
+                {riskLayers.catrareEnabled && (
+                  <>
+                    <br />
+                    Ereignisse: {RISK_OVERLAY_INFO.catrare.attribution}
                   </>
                 )}
               </p>
@@ -856,5 +909,234 @@ const AirTemperatureControl = React.forwardRef<HTMLDivElement, AirTemperatureCon
   );
 });
 AirTemperatureControl.displayName = 'AirTemperatureControl';
+
+// === KOSTRA RISK OVERLAY CONTROL ===
+interface RiskOverlayControlProps {
+  id: 'kostra';
+  icon: React.ReactNode;
+  info: typeof RISK_OVERLAY_INFO.kostra;
+  enabled: boolean;
+  opacity: number;
+  duration: KostraDuration;
+  returnPeriod: KostraReturnPeriod;
+  onToggle: () => void;
+  onOpacityChange: (value: number) => void;
+  onDurationChange: (duration: KostraDuration) => void;
+  onReturnPeriodChange: (period: KostraReturnPeriod) => void;
+}
+
+const RiskOverlayControl = React.forwardRef<HTMLDivElement, RiskOverlayControlProps>(({
+  id,
+  icon,
+  info,
+  enabled,
+  opacity,
+  duration,
+  returnPeriod,
+  onToggle,
+  onOpacityChange,
+  onDurationChange,
+  onReturnPeriodChange,
+}, ref) => {
+  const [showLegend, setShowLegend] = useState(false);
+
+  return (
+    <div ref={ref} className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+      {/* Header Row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {icon}
+          <span className="text-sm font-medium">{info.name}</span>
+        </div>
+        <Switch checked={enabled} onCheckedChange={onToggle} />
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-muted-foreground">{info.description}</p>
+
+      {/* Controls when enabled */}
+      {enabled && (
+        <div className="space-y-3 pt-2">
+          {/* Scenario Selection */}
+          <div className="grid grid-cols-2 gap-2">
+            {/* Duration Select */}
+            <div className="space-y-1">
+              <span className="text-xs text-muted-foreground">Dauer</span>
+              <Select value={duration} onValueChange={(v) => onDurationChange(v as KostraDuration)}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(KOSTRA_DURATION_LABELS).map(([key, label]) => (
+                    <SelectItem key={key} value={key} className="text-xs">
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Return Period Select */}
+            <div className="space-y-1">
+              <span className="text-xs text-muted-foreground">Wiederkehr</span>
+              <Select value={returnPeriod} onValueChange={(v) => onReturnPeriodChange(v as KostraReturnPeriod)}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(KOSTRA_RETURN_PERIOD_LABELS).map(([key, label]) => (
+                    <SelectItem key={key} value={key} className="text-xs">
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Opacity Slider */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Deckkraft</span>
+              <span className="text-xs font-mono text-muted-foreground">{opacity}%</span>
+            </div>
+            <Slider
+              value={[opacity]}
+              min={0}
+              max={100}
+              step={5}
+              onValueChange={([val]) => onOpacityChange(val)}
+              className="w-full"
+            />
+          </div>
+
+          {/* Legend Toggle */}
+          <button
+            onClick={() => setShowLegend(!showLegend)}
+            className="flex items-center gap-1 text-xs text-purple-600 dark:text-purple-400 hover:underline"
+          >
+            <Info className="h-3 w-3" />
+            {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+          </button>
+
+          {/* Legend */}
+          {showLegend && (
+            <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+              <span className="text-xs font-medium">{info.legendLabel}</span>
+              <div className="flex flex-wrap gap-1">
+                {info.legendColors.map((item, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <div
+                      className="w-4 h-3 rounded-sm border border-border/50"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tooltip note */}
+          <p className="text-[10px] text-muted-foreground/70 italic">
+            {info.tooltipNote}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+});
+RiskOverlayControl.displayName = 'RiskOverlayControl';
+
+// === CATRARE OVERLAY CONTROL ===
+interface CatrareOverlayControlProps {
+  icon: React.ReactNode;
+  info: typeof RISK_OVERLAY_INFO.catrare;
+  enabled: boolean;
+  opacity: number;
+  onToggle: () => void;
+  onOpacityChange: (value: number) => void;
+}
+
+const CatrareOverlayControl = React.forwardRef<HTMLDivElement, CatrareOverlayControlProps>(({
+  icon,
+  info,
+  enabled,
+  opacity,
+  onToggle,
+  onOpacityChange,
+}, ref) => {
+  const [showLegend, setShowLegend] = useState(false);
+
+  return (
+    <div ref={ref} className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+      {/* Header Row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {icon}
+          <span className="text-sm font-medium">{info.name}</span>
+        </div>
+        <Switch checked={enabled} onCheckedChange={onToggle} />
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-muted-foreground">{info.description}</p>
+
+      {/* Controls when enabled */}
+      {enabled && (
+        <div className="space-y-3 pt-2">
+          {/* Opacity Slider */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Deckkraft</span>
+              <span className="text-xs font-mono text-muted-foreground">{opacity}%</span>
+            </div>
+            <Slider
+              value={[opacity]}
+              min={0}
+              max={100}
+              step={5}
+              onValueChange={([val]) => onOpacityChange(val)}
+              className="w-full"
+            />
+          </div>
+
+          {/* Legend Toggle */}
+          <button
+            onClick={() => setShowLegend(!showLegend)}
+            className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 hover:underline"
+          >
+            <Info className="h-3 w-3" />
+            {showLegend ? 'Legende ausblenden' : 'Legende anzeigen'}
+          </button>
+
+          {/* Legend */}
+          {showLegend && (
+            <div className="p-2 rounded bg-background/80 border border-border space-y-2">
+              <span className="text-xs font-medium">{info.legendLabel}</span>
+              <div className="flex flex-wrap gap-1">
+                {info.legendColors.map((item, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <div
+                      className="w-4 h-3 rounded-sm border border-border/50"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tooltip note */}
+          <p className="text-[10px] text-muted-foreground/70 italic">
+            {info.tooltipNote}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+});
+CatrareOverlayControl.displayName = 'CatrareOverlayControl';
 
 export default LayersControl;

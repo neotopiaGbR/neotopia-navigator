@@ -35,17 +35,17 @@ interface RequestBody {
 const UTC_HOUR_START = 10;
 const UTC_HOUR_END = 15;
 
-// Granules per summer season (will fetch 3 seasons in parallel)
-// With 3 summers, we target ~35 per summer to get 100+ total for robust P90
-const GRANULES_PER_SUMMER = 40;
-// Total max granules to return after merging (increased for statistical validity)
-const DEFAULT_MAX_GRANULES = 100;
-// CMR page size per request (fetch more to ensure enough after filtering)
-const CMR_PAGE_SIZE = 150;
+// OPTIMIZED STRATEGY:
+// 1. Fetch 100 metadata entries per summer (3 years × 100 = 300 total) - fast!
+// 2. Filter strictly: UTC 10-15 + cloud < 30%
+// 3. Return only top 40 best granules for frontend processing
+const CMR_PAGE_SIZE_PER_SUMMER = 100;
+const MAX_CLOUD_COVER_PERCENT = 30;
+const MAX_GRANULES_TO_RETURN = 40;
 
 const ECOSTRESS_CONCEPT_ID = 'C2076090826-LPCLOUD';
 const CMR_API_URL = 'https://cmr.earthdata.nasa.gov/search/granules.json';
-const DEFAULT_MIN_QUALITY = 0.15;
+const DEFAULT_MIN_QUALITY = 0.10; // Lowered since we're pre-filtering strictly
 
 interface CMRGranule {
   id: string;
@@ -231,9 +231,8 @@ function findCogUrl(granule: CMRGranule): { lstUrl: string | null; cloudMaskUrl:
  */
 async function fetchSummerGranules(
   window: SummerWindow,
-  regionBbox: [number, number, number, number],
-  maxPerSummer: number
-): Promise<{ granules: CMRGranule[]; stats: { total: number; filtered: number } }> {
+  regionBbox: [number, number, number, number]
+): Promise<{ granules: CMRGranule[]; stats: { total: number; timeFiltered: number; cloudFiltered: number } }> {
   const searchBbox = `${regionBbox[0]},${regionBbox[1]},${regionBbox[2]},${regionBbox[3]}`;
   
   const cmrParams = new URLSearchParams({
@@ -241,10 +240,10 @@ async function fetchSummerGranules(
     bounding_box: searchBbox,
     temporal: `${window.startDate}T00:00:00Z,${window.endDate}T23:59:59Z`,
     sort_key: '-start_date',
-    page_size: String(CMR_PAGE_SIZE),
+    page_size: String(CMR_PAGE_SIZE_PER_SUMMER),
   });
 
-  console.log(`[ECOSTRESS] Fetching summer ${window.year}: ${window.startDate} to ${window.endDate}`);
+  console.log(`[ECOSTRESS] Fetching summer ${window.year}: ${window.startDate} to ${window.endDate} (page_size: ${CMR_PAGE_SIZE_PER_SUMMER})`);
 
   try {
     const response = await fetch(`${CMR_API_URL}?${cmrParams}`, {
@@ -253,34 +252,42 @@ async function fetchSummerGranules(
 
     if (!response.ok) {
       console.error(`[ECOSTRESS] CMR error for ${window.year}:`, response.status);
-      return { granules: [], stats: { total: 0, filtered: 0 } };
+      return { granules: [], stats: { total: 0, timeFiltered: 0, cloudFiltered: 0 } };
     }
 
     const data = await response.json() as CMRResponse;
     const allGranules = data.feed?.entry || [];
     
-    // STRICT UTC TIME FILTER: Only keep granules from 10:00-15:00 UTC (= 12:00-17:00 CEST)
+    // FILTER 1: Strict UTC time (10:00-15:00 UTC = 12:00-17:00 CEST peak heat)
     const peakHeatGranules = allGranules.filter(g => {
       const acquisitionTime = new Date(g.time_start);
       const utcHour = acquisitionTime.getUTCHours();
       return utcHour >= UTC_HOUR_START && utcHour < UTC_HOUR_END;
     });
+    
+    const timeFiltered = allGranules.length - peakHeatGranules.length;
+    
+    // FILTER 2: Cloud cover < 30% (if available)
+    const lowCloudGranules = peakHeatGranules.filter(g => {
+      const cloudCover = g.cloud_cover ?? 0; // Default to 0 if not available
+      return cloudCover < MAX_CLOUD_COVER_PERCENT;
+    });
+    
+    const cloudFiltered = peakHeatGranules.length - lowCloudGranules.length;
 
-    console.log(`[ECOSTRESS] Summer ${window.year}: ${allGranules.length} total → ${peakHeatGranules.length} peak-heat (${UTC_HOUR_START}:00-${UTC_HOUR_END}:00 UTC)`);
-
-    // Limit per summer
-    const limited = peakHeatGranules.slice(0, maxPerSummer);
+    console.log(`[ECOSTRESS] Summer ${window.year}: ${allGranules.length} total → ${peakHeatGranules.length} peak-heat → ${lowCloudGranules.length} low-cloud (<${MAX_CLOUD_COVER_PERCENT}%)`);
 
     return { 
-      granules: limited, 
+      granules: lowCloudGranules, 
       stats: { 
         total: allGranules.length, 
-        filtered: allGranules.length - peakHeatGranules.length 
+        timeFiltered,
+        cloudFiltered
       } 
     };
   } catch (err) {
     console.error(`[ECOSTRESS] Fetch error for ${window.year}:`, err);
-    return { granules: [], stats: { total: 0, filtered: 0 } };
+    return { granules: [], stats: { total: 0, timeFiltered: 0, cloudFiltered: 0 } };
   }
 }
 
@@ -301,7 +308,7 @@ Deno.serve(async (req) => {
     }
 
     const minQuality = min_quality_threshold ?? DEFAULT_MIN_QUALITY;
-    const maxGranulesToReturn = max_granules ?? DEFAULT_MAX_GRANULES;
+    const maxGranulesToReturn = max_granules ?? MAX_GRANULES_TO_RETURN;
 
     // Build region bbox if not provided
     const regionBbox: [number, number, number, number] = region_bbox || [
@@ -311,41 +318,44 @@ Deno.serve(async (req) => {
     // Get summer windows (last 3 years)
     const summerWindows = getSummerWindows(3);
     
-    console.log('[ECOSTRESS] MULTI-SUMMER PARALLEL QUERY');
+    console.log('[ECOSTRESS] OPTIMIZED MULTI-SUMMER QUERY');
+    console.log('[ECOSTRESS] Strategy: Fetch 100/summer → Filter (UTC 10-15, cloud <30%) → Return top 40');
     console.log('[ECOSTRESS] Region:', regionBbox);
     console.log('[ECOSTRESS] Summer windows:', summerWindows.map(w => `${w.year}: ${w.startDate} to ${w.endDate}`));
-    console.log('[ECOSTRESS] Peak-heat filter: UTC ' + UTC_HOUR_START + ':00-' + UTC_HOUR_END + ':00 (= CEST 12:00-17:00)');
 
-    // PARALLEL REQUESTS for each summer
+    // PARALLEL REQUESTS for each summer (100 metadata entries each = 300 total)
     const results = await Promise.all(
-      summerWindows.map(window => fetchSummerGranules(window, regionBbox, GRANULES_PER_SUMMER))
+      summerWindows.map(window => fetchSummerGranules(window, regionBbox))
     );
 
     // Merge all granules with year annotation
     const allGranules: CMRGranule[] = [];
     let totalFromCMR = 0;
-    let totalFiltered = 0;
+    let totalTimeFiltered = 0;
+    let totalCloudFiltered = 0;
     
     results.forEach((result, idx) => {
       totalFromCMR += result.stats.total;
-      totalFiltered += result.stats.filtered;
+      totalTimeFiltered += result.stats.timeFiltered;
+      totalCloudFiltered += result.stats.cloudFiltered;
       result.granules.forEach(g => {
         (g as any)._summerYear = summerWindows[idx].year;
         allGranules.push(g);
       });
     });
 
-    console.log(`[ECOSTRESS] Merged: ${allGranules.length} peak-heat granules from ${summerWindows.length} summers`);
-    console.log(`[ECOSTRESS] Discarded: ${totalFiltered} non-peak-heat granules`);
+    console.log(`[ECOSTRESS] After filters: ${allGranules.length} quality granules from ${totalFromCMR} total`);
+    console.log(`[ECOSTRESS] Discarded: ${totalTimeFiltered} wrong-time, ${totalCloudFiltered} cloudy`);
 
     if (allGranules.length === 0) {
       return new Response(
         JSON.stringify({
           status: 'no_coverage',
-          message: `Keine ECOSTRESS Peak-Heat-Daten (${UTC_HOUR_START}:00-${UTC_HOUR_END}:00 UTC) für die letzten 3 Sommer gefunden.`,
+          message: `Keine ECOSTRESS-Daten gefunden (Filter: UTC ${UTC_HOUR_START}:00-${UTC_HOUR_END}:00, Cloud <${MAX_CLOUD_COVER_PERCENT}%).`,
           summers_queried: summerWindows.map(w => w.year),
           total_checked: totalFromCMR,
-          filtered_out: totalFiltered,
+          time_filtered: totalTimeFiltered,
+          cloud_filtered: totalCloudFiltered,
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -459,8 +469,10 @@ Deno.serve(async (req) => {
         summers_queried: summerWindows.map(w => w.year),
         year_distribution: yearDistribution,
         peak_heat_filter: `UTC ${UTC_HOUR_START}:00-${UTC_HOUR_END}:00`,
+        cloud_filter: `<${MAX_CLOUD_COVER_PERCENT}%`,
         candidates_from_cmr: totalFromCMR,
-        filtered_non_peak: totalFiltered,
+        filtered_wrong_time: totalTimeFiltered,
+        filtered_cloudy: totalCloudFiltered,
         skipped_no_bounds: skippedNoBounds,
         skipped_no_intersect: skippedNoIntersect,
         attribution: 'NASA LP DAAC / ECOSTRESS LST (Multi-Summer Peak-Heat Composite)',

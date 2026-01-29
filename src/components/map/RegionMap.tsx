@@ -38,6 +38,10 @@ const RegionMap: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [compositeMetadata, setCompositeMetadata] = useState<CompositeMetadata | null>(null);
+
+  // Refs used inside style.load handlers (avoid stale closures)
+  const addRegionsToMapRef = useRef<() => void>(() => {});
+  const updateOverlaysRef = useRef<() => void>(() => {});
   const {
     regions,
     setRegions,
@@ -188,8 +192,17 @@ const RegionMap: React.FC = () => {
       
       // CRITICAL: Re-initialize deck.gl overlay after style change
       // Style changes destroy WebGL context, overlay must be re-attached
-      initDeckOverlay(map.current, import.meta.env.DEV);
+      initDeckOverlay(map.current, import.meta.env.DEV, { force: true });
       devLog('DECK_OVERLAY_REINITIALIZED_AFTER_STYLE_CHANGE', {});
+
+      // CRITICAL: setStyle() removes custom sources/layers; restore deterministically.
+      try {
+        addRegionsToMapRef.current();
+        updateOverlaysRef.current();
+        map.current.resize();
+      } catch (e) {
+        devLog('STYLE_RESTORE_ERROR', { message: e instanceof Error ? e.message : 'Unknown' });
+      }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basemap, mapReady]);
@@ -277,6 +290,9 @@ const RegionMap: React.FC = () => {
     }
   }, [regions, selectedRegionId, hoveredRegionId, anyOverlayEnabled]);
 
+  // Keep style.load handler pointing at latest callback
+  addRegionsToMapRef.current = addRegionsToMap;
+
   // Update overlays (WMS/XYZ layers)
   const updateOverlays = useCallback(() => {
     if (!map.current) return;
@@ -357,6 +373,9 @@ const RegionMap: React.FC = () => {
       });
     }
   }, [overlays]);
+
+  // Keep style.load handler pointing at latest callback
+  updateOverlaysRef.current = updateOverlays;
 
   // Effect to add/update regions when ready or overlay mode changes
   useEffect(() => {

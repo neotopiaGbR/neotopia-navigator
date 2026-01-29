@@ -14,6 +14,13 @@ import { BitmapLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap, IControl } from 'maplibre-gl';
 import { COORDINATE_SYSTEM } from '@deck.gl/core';
 
+const DECK_CANVAS_SELECTOR =
+  'canvas.deckgl-canvas, canvas[id*="deck"], canvas.deck-canvas, canvas[data-deck], canvas.deck-canvas';
+
+const DECK_STYLE_ID = 'neotopia-deck-overlay-css';
+
+let deckCssObserver: MutationObserver | null = null;
+
 export interface DeckLayerConfig {
   id: string;
   type: 'bitmap' | 'scatterplot';
@@ -36,14 +43,65 @@ let attachedMap: MapLibreMap | null = null;
 let currentLayers: Map<string, DeckLayerConfig> = new Map();
 let isDevMode = false;
 
+function getDeckCanvas(): HTMLCanvasElement | null {
+  const container = attachedMap?.getContainer?.() as HTMLElement | undefined;
+  const scope: ParentNode = container ?? document;
+  return scope.querySelector(DECK_CANVAS_SELECTOR) as HTMLCanvasElement | null;
+}
+
+function ensureGlobalDeckStyle(): void {
+  if (document.getElementById(DECK_STYLE_ID)) return;
+
+  const style = document.createElement('style');
+  style.id = DECK_STYLE_ID;
+  style.textContent = `
+    .maplibregl-map .deckgl-overlay,
+    .mapboxgl-map .deckgl-overlay {
+      position: absolute !important;
+      inset: 0 !important;
+      z-index: 10 !important;
+      pointer-events: none !important;
+    }
+
+    .maplibregl-map .deckgl-overlay canvas,
+    .mapboxgl-map .deckgl-overlay canvas,
+    .maplibregl-map canvas.deckgl-canvas,
+    .mapboxgl-map canvas.deckgl-canvas,
+    .maplibregl-map canvas[id*="deck"],
+    .mapboxgl-map canvas[id*="deck"],
+    .maplibregl-map canvas.deck-canvas,
+    .mapboxgl-map canvas.deck-canvas,
+    .maplibregl-map canvas[data-deck],
+    .mapboxgl-map canvas[data-deck] {
+      width: 100% !important;
+      height: 100% !important;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      z-index: 10 !important;
+      pointer-events: none !important;
+    }
+  `;
+
+  document.head.appendChild(style);
+}
+
 /**
  * Initialize the deck.gl overlay manager
  * Call this once when the map is ready
  */
-export function initDeckOverlay(map: MapLibreMap, dev: boolean = false): void {
+export function initDeckOverlay(
+  map: MapLibreMap,
+  dev: boolean = false,
+  options?: { force?: boolean }
+): void {
   isDevMode = dev;
+
+  const force = !!options?.force;
+  const switchingMap = !!attachedMap && attachedMap !== map;
+  const preservedLayers = switchingMap ? new Map<string, DeckLayerConfig>() : new Map(currentLayers);
   
-  if (attachedMap === map && overlayInstance) {
+  if (!force && attachedMap === map && overlayInstance && getDeckCanvas()) {
     console.log('[DeckOverlayManager] Already initialized for this map');
     return;
   }
@@ -52,6 +110,8 @@ export function initDeckOverlay(map: MapLibreMap, dev: boolean = false): void {
   if (overlayInstance && attachedMap) {
     try {
       attachedMap.removeControl(overlayInstance as unknown as IControl);
+      // Ensure WebGL resources are released
+      (overlayInstance as any)?.finalize?.();
     } catch (e) {
       console.warn('[DeckOverlayManager] Failed to remove previous overlay:', e);
     }
@@ -67,10 +127,15 @@ export function initDeckOverlay(map: MapLibreMap, dev: boolean = false): void {
   // Attach to map
   map.addControl(overlayInstance as unknown as IControl);
   attachedMap = map;
-  currentLayers.clear();
+
+  // Preserve existing layers on same-map reinit (e.g. after style.load)
+  currentLayers = switchingMap ? new Map() : preservedLayers;
   
   // Ensure CSS is correct
   enforceDeckCSS();
+
+  // Re-apply layers after re-attach
+  rebuildLayers();
   
   console.log('[DeckOverlayManager] ✅ Initialized singleton overlay on map');
   
@@ -84,10 +149,25 @@ export function initDeckOverlay(map: MapLibreMap, dev: boolean = false): void {
  * Enforce correct CSS for deck.gl canvas
  */
 function enforceDeckCSS(): void {
+  ensureGlobalDeckStyle();
+
+  // Clean up previous observer to avoid leaks across re-inits
+  if (deckCssObserver) {
+    try {
+      deckCssObserver.disconnect();
+    } catch {
+      // ignore
+    }
+    deckCssObserver = null;
+  }
+
   // Use MutationObserver to catch deck canvas when it's created
-  const observer = new MutationObserver(() => {
-    const deckCanvases = document.querySelectorAll('canvas[id*="deck"], canvas.deck-canvas, canvas[data-deck]');
-    deckCanvases.forEach((canvas) => {
+  const container = attachedMap?.getContainer?.() as HTMLElement | null;
+  if (!container) return;
+
+  const applyInlineStyles = () => {
+    const canvases = container.querySelectorAll(DECK_CANVAS_SELECTOR);
+    canvases.forEach((canvas) => {
       const el = canvas as HTMLCanvasElement;
       el.style.width = '100%';
       el.style.height = '100%';
@@ -97,31 +177,12 @@ function enforceDeckCSS(): void {
       el.style.zIndex = '10';
       el.style.pointerEvents = 'none';
     });
-  });
-  
-  // Also check immediately and add CSS rule
-  const style = document.createElement('style');
-  style.textContent = `
-    .maplibregl-map canvas[id*="deck"],
-    .maplibregl-map .deck-canvas,
-    .mapboxgl-map canvas[id*="deck"],
-    .mapboxgl-map .deck-canvas {
-      width: 100% !important;
-      height: 100% !important;
-      position: absolute !important;
-      top: 0 !important;
-      left: 0 !important;
-      z-index: 10 !important;
-      pointer-events: none !important;
-    }
-  `;
-  document.head.appendChild(style);
-  
-  // Observe the map container
-  if (attachedMap) {
-    const container = attachedMap.getContainer();
-    observer.observe(container, { childList: true, subtree: true });
-  }
+  };
+
+  applyInlineStyles();
+
+  deckCssObserver = new MutationObserver(applyInlineStyles);
+  deckCssObserver.observe(container, { childList: true, subtree: true });
 }
 
 /**
@@ -248,15 +309,20 @@ export function getDiagnostics(): {
   layerIds: string[];
   canvasExists: boolean;
   canvasDimensions: { width: number; height: number } | null;
+  canvasCssDimensions: { width: number; height: number } | null;
+  devicePixelRatio: number;
 } {
-  const canvas = document.querySelector('canvas[id*="deck"], canvas.deck-canvas') as HTMLCanvasElement | null;
+  const canvas = getDeckCanvas();
+  const rect = canvas ? canvas.getBoundingClientRect() : null;
   
   return {
-    initialized: !!overlayInstance && !!attachedMap,
+    initialized: !!overlayInstance && !!attachedMap && !!canvas,
     layerCount: currentLayers.size,
     layerIds: Array.from(currentLayers.keys()),
     canvasExists: !!canvas,
     canvasDimensions: canvas ? { width: canvas.width, height: canvas.height } : null,
+    canvasCssDimensions: rect ? { width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+    devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
   };
 }
 
@@ -268,6 +334,7 @@ export function finalizeDeckOverlay(): void {
     try {
       overlayInstance.setProps({ layers: [] });
       attachedMap.removeControl(overlayInstance as unknown as IControl);
+      (overlayInstance as any)?.finalize?.();
     } catch (e) {
       console.warn('[DeckOverlayManager] Cleanup error:', e);
     }
@@ -275,6 +342,16 @@ export function finalizeDeckOverlay(): void {
   overlayInstance = null;
   attachedMap = null;
   currentLayers.clear();
+
+  if (deckCssObserver) {
+    try {
+      deckCssObserver.disconnect();
+    } catch {
+      // ignore
+    }
+    deckCssObserver = null;
+  }
+
   console.log('[DeckOverlayManager] Finalized');
 }
 
@@ -282,7 +359,7 @@ export function finalizeDeckOverlay(): void {
  * Check if overlay is ready
  */
 export function isReady(): boolean {
-  return !!overlayInstance && !!attachedMap;
+  return !!overlayInstance && !!attachedMap && !!getDeckCanvas();
 }
 
 /**

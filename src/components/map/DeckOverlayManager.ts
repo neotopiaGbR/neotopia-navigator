@@ -124,8 +124,10 @@ export function initDeckOverlay(
     layers: [],
   });
   
-  // Attach to map
-  map.addControl(overlayInstance as unknown as IControl);
+  // Attach to map manually (NOT via addControl - that breaks rendering in MapLibre)
+  const container = map.getCanvasContainer();
+  const overlayElement = overlayInstance.onAdd(map as any);
+  container.appendChild(overlayElement);
   attachedMap = map;
 
   // Preserve existing layers on same-map reinit (e.g. after style.load)
@@ -333,7 +335,9 @@ export function finalizeDeckOverlay(): void {
   if (overlayInstance && attachedMap) {
     try {
       overlayInstance.setProps({ layers: [] });
-      attachedMap.removeControl(overlayInstance as unknown as IControl);
+      try {
+        overlayInstance.onRemove();
+      } catch {}
       (overlayInstance as any)?.finalize?.();
     } catch (e) {
       console.warn('[DeckOverlayManager] Cleanup error:', e);

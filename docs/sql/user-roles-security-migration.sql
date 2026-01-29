@@ -1,27 +1,11 @@
--- User Roles Security Migration
+-- User Roles Security Migration (NON-DESTRUCTIVE VERSION)
 -- Fixes privilege escalation risk by moving roles to dedicated table
+-- Strategy: Overwrite existing functions instead of dropping them to preserve dependencies.
 -- Run in Cloud View > Run SQL
 --
--- IMPORTANT: This is a BREAKING CHANGE. After running this migration:
--- 1. Update AuthContext.tsx to query user_roles instead of profiles.role
+-- IMPORTANT: After running this migration:
+-- 1. AuthContext.tsx will query user_roles via get_user_role() function
 -- 2. Test admin functionality before removing old profiles.role column
-
--- 0. DROP ALL has_role FUNCTION OVERLOADS
--- Use DO block to handle cases where types don't exist yet
-DO $$
-DECLARE
-  func_oid oid;
-BEGIN
-  -- Find and drop all functions named 'has_role' in public schema
-  FOR func_oid IN
-    SELECT p.oid
-    FROM pg_proc p
-    JOIN pg_namespace n ON p.pronamespace = n.oid
-    WHERE n.nspname = 'public' AND p.proname = 'has_role'
-  LOOP
-    EXECUTE format('DROP FUNCTION IF EXISTS %s CASCADE', func_oid::regprocedure);
-  END LOOP;
-END $$;
 
 -- 1. CREATE ROLE ENUM TYPE (if not exists)
 DO $$ 
@@ -31,7 +15,7 @@ BEGIN
   END IF;
 END $$;
 
--- 1. CREATE user_roles TABLE
+-- 2. CREATE user_roles TABLE
 CREATE TABLE IF NOT EXISTS public.user_roles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
@@ -42,54 +26,11 @@ CREATE TABLE IF NOT EXISTS public.user_roles (
 
 COMMENT ON TABLE public.user_roles IS 'Stores user role assignments. A user can have multiple roles.';
 
--- 2. ENABLE RLS ON user_roles
+-- 3. ENABLE RLS ON user_roles
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
 
--- 3. CREATE SECURITY DEFINER FUNCTION
--- This function bypasses RLS to check roles, preventing infinite recursion
-CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role app_role)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.user_roles
-    WHERE user_id = _user_id
-      AND role = _role
-  )
-$$;
-
-COMMENT ON FUNCTION public.has_role IS 'Check if a user has a specific role. Uses SECURITY DEFINER to bypass RLS.';
-
--- Grant execute to authenticated users
-GRANT EXECUTE ON FUNCTION public.has_role(uuid, app_role) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.has_role(uuid, app_role) TO service_role;
-
--- 4. CREATE RLS POLICIES FOR user_roles
--- Users can read their own roles
-DROP POLICY IF EXISTS "Users can read own roles" ON public.user_roles;
-CREATE POLICY "Users can read own roles" ON public.user_roles
-  FOR SELECT TO authenticated
-  USING (user_id = auth.uid());
-
--- Admins can read all roles
-DROP POLICY IF EXISTS "Admins can read all roles" ON public.user_roles;
-CREATE POLICY "Admins can read all roles" ON public.user_roles
-  FOR SELECT TO authenticated
-  USING (public.has_role(auth.uid(), 'admin'));
-
--- Only service role can manage roles (through Edge Functions)
-DROP POLICY IF EXISTS "Service role manages roles" ON public.user_roles;
-CREATE POLICY "Service role manages roles" ON public.user_roles
-  FOR ALL TO service_role
-  USING (true)
-  WITH CHECK (true);
-
--- 5. MIGRATE EXISTING ROLES FROM profiles
--- Only run if profiles.role column exists
+-- 4. MIGRATE EXISTING ROLES FROM profiles (Data Migration)
+-- We do this BEFORE updating the function so admins don't get locked out
 DO $$
 BEGIN
   IF EXISTS (
@@ -109,7 +50,69 @@ BEGIN
   END IF;
 END $$;
 
--- 6. HELPER FUNCTION: Get user's primary role
+-- 5. OVERWRITE EXISTING FUNCTION (The Critical Fix)
+-- We replace the body of 'has_role(uuid, text)' to use the new table.
+-- This keeps existing RLS policies working without needing DROP CASCADE.
+CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.user_roles
+    WHERE user_id = _user_id
+      -- We explicitly cast the text input to the enum type
+      AND role = _role::app_role
+  )
+$$;
+
+-- 6. CREATE TYPED OVERLOAD (Better Safety)
+-- We also add the strict version for future use
+CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role app_role)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.user_roles
+    WHERE user_id = _user_id
+      AND role = _role
+  )
+$$;
+
+-- Grant execute permissions
+GRANT EXECUTE ON FUNCTION public.has_role(uuid, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.has_role(uuid, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.has_role(uuid, app_role) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.has_role(uuid, app_role) TO service_role;
+
+-- 7. CREATE RLS POLICIES FOR user_roles
+-- Users can read their own roles
+DROP POLICY IF EXISTS "Users can read own roles" ON public.user_roles;
+CREATE POLICY "Users can read own roles" ON public.user_roles
+  FOR SELECT TO authenticated
+  USING (user_id = auth.uid());
+
+-- Admins can read all roles (Using the updated function)
+DROP POLICY IF EXISTS "Admins can read all roles" ON public.user_roles;
+CREATE POLICY "Admins can read all roles" ON public.user_roles
+  FOR SELECT TO authenticated
+  USING (public.has_role(auth.uid(), 'admin'));
+
+-- Only service role can manage roles
+DROP POLICY IF EXISTS "Service role manages roles" ON public.user_roles;
+CREATE POLICY "Service role manages roles" ON public.user_roles
+  FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- 8. HELPER FUNCTION: Get user's primary role
 CREATE OR REPLACE FUNCTION public.get_user_role(_user_id uuid)
 RETURNS text
 LANGUAGE sql
@@ -133,8 +136,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.get_user_role(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_role(uuid) TO service_role;
 
--- 7. UPDATE handle_new_user TRIGGER
--- Assigns 'user' role to new registrations (not 'kommune' by default)
+-- 9. UPDATE handle_new_user TRIGGER
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -154,11 +156,11 @@ BEGIN
 END;
 $$;
 
--- 8. INDEX FOR PERFORMANCE
+-- 10. INDEX FOR PERFORMANCE
 CREATE INDEX IF NOT EXISTS idx_user_roles_user_id ON public.user_roles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_roles_role ON public.user_roles(role);
 
--- 9. VERIFICATION QUERY (run after migration to verify)
+-- 11. VERIFICATION QUERY (run after migration to verify)
 -- SELECT u.email, array_agg(ur.role) as roles
 -- FROM auth.users u
 -- LEFT JOIN public.user_roles ur ON u.id = ur.user_id

@@ -1,24 +1,48 @@
 import { useMemo } from 'react';
 import { Source, Layer } from 'react-map-gl/maplibre';
 import type { FeatureCollection } from 'geojson';
-import { buildTemperatureColorExpression } from './basemapStyles';
 import { gridToGeoJson, type GridPoint } from './airTemperature/gridToGeoJson';
 
 interface AirTemperatureOverlayProps {
   data: GridPoint[] | null | undefined;
   visible: boolean;
   opacity?: number;
+  /** P5-P95 normalization range for color scale */
+  normalization?: { p5: number; p95: number };
+}
+
+/**
+ * Build MapLibre color expression for temperature fill.
+ * Uses the DWD preferred color ramp:
+ * - <18°C: blue
+ * - 18-22°C: green
+ * - 22-26°C: yellow
+ * - 26-30°C: orange
+ * - >30°C: red
+ */
+function buildTemperatureFillColor(): any {
+  return [
+    'interpolate',
+    ['linear'],
+    ['get', 'value'],
+    14, '#2563eb',  // blue (cold)
+    18, '#22c55e',  // green
+    22, '#eab308',  // yellow
+    26, '#f97316',  // orange
+    30, '#dc2626',  // red (hot)
+    35, '#7f1d1d',  // dark red (extreme)
+  ];
 }
 
 export function AirTemperatureOverlay({ 
   data, 
   visible, 
-  opacity = 0.8 
+  opacity = 0.75,
+  normalization,
 }: AirTemperatureOverlayProps) {
   
-  // Robust GeoJSON conversion
+  // Convert grid points to polygon GeoJSON
   const geoJsonData = useMemo<FeatureCollection | null>(() => {
-    // Safety check: is data an array?
     if (!data || !Array.isArray(data) || data.length === 0) return null;
     try {
       return gridToGeoJson(data);
@@ -28,29 +52,39 @@ export function AirTemperatureOverlay({
     }
   }, [data]);
 
-  const layerStyle = useMemo<any>(() => {
+  const fillStyle = useMemo<any>(() => {
     return {
-      id: 'air-temp-circles',
-      type: 'circle' as const,
+      id: 'air-temp-fill',
+      type: 'fill' as const,
       paint: {
-        'circle-radius': [
-          'interpolate', ['linear'], ['zoom'],
-          5, 2,
-          10, 5,
-          15, 10
-        ],
-        'circle-color': buildTemperatureColorExpression(-10, 40),
-        'circle-opacity': opacity,
-        'circle-stroke-width': 0,
+        'fill-color': buildTemperatureFillColor(),
+        'fill-opacity': opacity,
       }
     };
   }, [opacity]);
+
+  const outlineStyle = useMemo<any>(() => {
+    return {
+      id: 'air-temp-outline',
+      type: 'line' as const,
+      paint: {
+        'line-color': 'rgba(0, 0, 0, 0.1)',
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          5, 0,
+          10, 0.5,
+          15, 1
+        ],
+      }
+    };
+  }, []);
 
   if (!visible || !geoJsonData) return null;
 
   return (
     <Source id="air-temp-source" type="geojson" data={geoJsonData}>
-      <Layer {...layerStyle} />
+      <Layer {...fillStyle} />
+      <Layer {...outlineStyle} />
     </Source>
   );
 }

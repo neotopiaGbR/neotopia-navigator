@@ -99,7 +99,9 @@ export function initDeckOverlay(map: MapLibreMap, force: boolean = false) {
   });
 
   // Attach to map
-  map.addControl(overlayInstance as any);
+  const container = map.getCanvasContainer();
+  const overlayElement = overlayInstance.onAdd(map as any);
+  container.appendChild(overlayElement);
   attachedMap = map;
 
   // Re-apply known layers immediately
@@ -143,6 +145,10 @@ function rebuildLayers() {
 
 export function finalizeDeckOverlay() {
   if (overlayInstance) {
+    try {
+      overlayInstance.onRemove();
+    } catch {}
+
     overlayInstance.finalize();
     overlayInstance = null;
   }

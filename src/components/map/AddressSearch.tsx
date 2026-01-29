@@ -23,6 +23,8 @@ type TargetRegion = 'primary' | 'comparison';
 
 const AddressSearch: React.FC = () => {
   const {
+    regions,
+    setRegions,
     setSelectedRegionId,
     comparisonMode,
     setComparisonRegionId,
@@ -172,6 +174,31 @@ const AddressSearch: React.FC = () => {
 
       setGridCode(result.grid_code);
 
+      // Fetch region geometry/details and upsert into RegionContext so the map + sidebar can render it.
+      const { data: regionRow, error: regionError } = await supabase
+        .from('regions')
+        .select('id, name, geom')
+        .eq('id', result.region_id)
+        .single();
+
+      if (regionError) {
+        throw new Error(`Region konnte nicht geladen werden: ${regionError.message}`);
+      }
+
+      const bbox = getBboxFromGeom(regionRow.geom as any) ?? undefined;
+      const nextRegion = {
+        id: regionRow.id as string,
+        name: (regionRow as any).name || result.grid_code || 'Region',
+        geom: regionRow.geom as any,
+        bbox,
+      };
+
+      const existingIdx = regions.findIndex((r) => r.id === nextRegion.id);
+      const nextRegions = existingIdx >= 0
+        ? regions.map((r) => (r.id === nextRegion.id ? { ...r, ...nextRegion } : r))
+        : [nextRegion, ...regions];
+      setRegions(nextRegions);
+
       // Set the appropriate region based on target
       if (targetRegion === 'primary') {
         setSelectedRegionId(result.region_id);
@@ -285,3 +312,36 @@ const AddressSearch: React.FC = () => {
 };
 
 export default AddressSearch;
+
+// Utility to get bounding box from GeoJSON geometry
+function getBboxFromGeom(geom: GeoJSON.Geometry): [number, number, number, number] | null {
+  try {
+    let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+
+    function processCoords(coords: number[]) {
+      if (coords[0] < minLon) minLon = coords[0];
+      if (coords[0] > maxLon) maxLon = coords[0];
+      if (coords[1] < minLat) minLat = coords[1];
+      if (coords[1] > maxLat) maxLat = coords[1];
+    }
+
+    if (geom.type === 'Point') {
+      processCoords(geom.coordinates);
+    } else if (geom.type === 'Polygon') {
+      for (const ring of geom.coordinates) {
+        for (const coord of ring) processCoords(coord);
+      }
+    } else if (geom.type === 'MultiPolygon') {
+      for (const polygon of geom.coordinates) {
+        for (const ring of polygon) {
+          for (const coord of ring) processCoords(coord);
+        }
+      }
+    }
+
+    if (minLon === Infinity) return null;
+    return [minLon, minLat, maxLon, maxLat];
+  } catch {
+    return null;
+  }
+}

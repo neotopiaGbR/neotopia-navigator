@@ -231,30 +231,68 @@ function getWgs84Bounds(
 
 /**
  * Aggregate pixel stack using specified method
+ * 
+ * STRICT P90 LOGIC:
+ * - For stacks < 5: Use median (not enough data for meaningful percentile)
+ * - For stacks >= 5: Use formula that GUARANTEES P90 < Max
+ *   Index = min(length - 2, floor(length * 0.9))
+ *   This ensures we never pick the absolute maximum value
  */
 function aggregateStack(stack: number[], method: AggregationMethod): number {
+  // Safety check: empty stack
   if (stack.length === 0) return NaN;
+  
+  // Single value: no aggregation possible
   if (stack.length === 1) return stack[0];
   
+  // Sort ascending for all percentile operations
   const sorted = stack.slice().sort((a, b) => a - b);
   
   switch (method) {
     case 'max':
       return sorted[sorted.length - 1];
+      
     case 'min':
       return sorted[0];
+      
     case 'mean':
       return sorted.reduce((a, b) => a + b, 0) / sorted.length;
-    case 'p90':
-      return sorted[Math.floor(sorted.length * 0.9)];
-    case 'p95':
-      return sorted[Math.floor(sorted.length * 0.95)];
+      
+    case 'p90': {
+      // STRICT P90: Must be lower than max when we have enough data
+      if (sorted.length < 5) {
+        // Not enough data for meaningful P90 → use median for stability
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 === 0 
+          ? (sorted[mid - 1] + sorted[mid]) / 2 
+          : sorted[mid];
+      }
+      // Strict formula: guaranteed to be at least 1 below max
+      // For [0..9] (10 items): floor(10 * 0.9) = 9, but min(9-2=8, 9) = 8
+      // For [0..19] (20 items): floor(20 * 0.9) = 18, min(18, 18) = 18 (not max=19)
+      const p90Index = Math.min(sorted.length - 2, Math.floor(sorted.length * 0.9));
+      return sorted[p90Index];
+    }
+      
+    case 'p95': {
+      // Similar strict logic for P95
+      if (sorted.length < 5) {
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 === 0 
+          ? (sorted[mid - 1] + sorted[mid]) / 2 
+          : sorted[mid];
+      }
+      const p95Index = Math.min(sorted.length - 2, Math.floor(sorted.length * 0.95));
+      return sorted[p95Index];
+    }
+      
     case 'median':
-    default:
+    default: {
       const mid = Math.floor(sorted.length / 2);
       return sorted.length % 2 === 0 
         ? (sorted[mid - 1] + sorted[mid]) / 2 
         : sorted[mid];
+    }
   }
 }
 
@@ -375,7 +413,10 @@ export async function createComposite(
   
   // Debug: sample distribution
   let pixelsWith2Plus = 0;
+  let pixelsWith5Plus = 0; // Threshold for meaningful P90
   let maxStackSize = 0;
+  let totalStackDepth = 0;
+  let nonEmptyPixels = 0;
   
   for (let i = 0; i < pixelStacks.length; i++) {
     const stack = pixelStacks[i];
@@ -387,7 +428,11 @@ export async function createComposite(
       continue;
     }
     
+    // Stack depth tracking
+    nonEmptyPixels++;
+    totalStackDepth += stack.length;
     if (stack.length >= 2) pixelsWith2Plus++;
+    if (stack.length >= 5) pixelsWith5Plus++;
     maxStackSize = Math.max(maxStackSize, stack.length);
     
     const value = aggregateStack(stack, aggregationMethod);
@@ -412,10 +457,11 @@ export async function createComposite(
   
   // Calculate mean temperature
   const meanTemp = validPixels > 0 ? tempSum / validPixels : 0;
+  const averageStackDepth = nonEmptyPixels > 0 ? totalStackDepth / nonEmptyPixels : 0;
   
   const totalPixels = OUTPUT_SIZE * OUTPUT_SIZE;
   
-  // IMPORTANT: Log stack depth analysis for P90 vs Max differentiation
+  // IMPORTANT: Enhanced stack depth analysis for P90 vs Max differentiation
   console.log(`[CompositeUtils] ═══════════════════════════════════════════════════`);
   console.log(`[CompositeUtils] COMPOSITE STATS (${aggregationMethod.toUpperCase()})`);
   console.log(`[CompositeUtils] ───────────────────────────────────────────────────`);
@@ -423,9 +469,14 @@ export async function createComposite(
   console.log(`[CompositeUtils] Temperature: ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C (Ø ${(meanTemp - 273.15).toFixed(1)}°C)`);
   console.log(`[CompositeUtils] ───────────────────────────────────────────────────`);
   console.log(`[CompositeUtils] STACK DEPTH ANALYSIS (kritisch für P90 vs Max):`);
+  console.log(`[CompositeUtils]   → Ø Stack Depth: ${averageStackDepth.toFixed(1)} Werte pro Pixel`);
   console.log(`[CompositeUtils]   → Pixels mit 2+ Samples: ${pixelsWith2Plus} (${(pixelsWith2Plus/totalPixels*100).toFixed(1)}%)`);
+  console.log(`[CompositeUtils]   → Pixels mit 5+ Samples: ${pixelsWith5Plus} (${(pixelsWith5Plus/totalPixels*100).toFixed(1)}%) [für echtes P90]`);
   console.log(`[CompositeUtils]   → Max Stack Size: ${maxStackSize} Granules übereinander`);
   console.log(`[CompositeUtils]   → Granules erfolgreich: ${successfulGranules}/${granules.length}`);
+  if (aggregationMethod === 'p90' && averageStackDepth < 5) {
+    console.warn(`[CompositeUtils] ⚠️ Geringe Stack-Tiefe! P90 fällt auf Median zurück für stabilere Werte.`);
+  }
   console.log(`[CompositeUtils] ═══════════════════════════════════════════════════`);
   
   const sortedDates = acquisitionDates.filter(d => d).sort();

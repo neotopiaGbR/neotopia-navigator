@@ -311,19 +311,50 @@ Deno.serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseKey)
 
-    const body = await req.json()
-    const { 
-      region_id,
-      lat,
-      lon,
-      grid_code,
-      indicator_codes,
-      year = new Date().getFullYear(),
-      scenario,
-      period_start,
-      period_end,
-      force_refresh = false,
-    } = body
+    // Parse and validate request body
+    let body: Record<string, unknown>
+    try {
+      body = await req.json()
+    } catch {
+      return new Response(
+        JSON.stringify({ error: 'Ungültiger JSON-Body' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Extract and validate parameters
+    const region_id = typeof body.region_id === 'string' ? body.region_id : undefined
+    const lat = typeof body.lat === 'number' ? body.lat : undefined
+    const lon = typeof body.lon === 'number' ? body.lon : undefined
+    const grid_code = typeof body.grid_code === 'string' ? body.grid_code : undefined
+    const indicator_codes = Array.isArray(body.indicator_codes) ? body.indicator_codes.filter((c): c is string => typeof c === 'string') : undefined
+    const year = typeof body.year === 'number' ? body.year : new Date().getFullYear()
+    const scenario = typeof body.scenario === 'string' ? body.scenario : undefined
+    const period_start = typeof body.period_start === 'number' ? body.period_start : undefined
+    const period_end = typeof body.period_end === 'number' ? body.period_end : undefined
+    const force_refresh = body.force_refresh === true
+
+    // Validate year range
+    if (year < 1900 || year > 2200) {
+      return new Response(
+        JSON.stringify({ error: 'Jahr muss zwischen 1900 und 2200 liegen' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate lat/lon if provided
+    if (lat !== undefined && (lat < -90 || lat > 90)) {
+      return new Response(
+        JSON.stringify({ error: 'Breitengrad muss zwischen -90 und 90 liegen' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+    if (lon !== undefined && (lon < -180 || lon > 180)) {
+      return new Response(
+        JSON.stringify({ error: 'Längengrad muss zwischen -180 und 180 liegen' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     console.log(`[resolve-indicators] Request: region_id=${region_id}, codes=${indicator_codes?.length || 'all'}, year=${year}, scenario=${scenario}`)
 
@@ -445,9 +476,10 @@ Deno.serve(async (req) => {
     // ========================================
     const indicatorIds = Array.from(indicatorMap.values()).map(i => i.id)
     
+    // Query cache - only select columns that exist in the table
     let cacheQuery = supabase
       .from('indicator_values')
-      .select('indicator_id, value, value_text, year, source_dataset_key, source_meta, expires_at')
+      .select('indicator_id, value, value_text, year, scenario, period_start, period_end, computed_at, expires_at, stale')
       .eq('region_id', resolvedRegionId)
       .in('indicator_id', indicatorIds)
 
@@ -502,9 +534,6 @@ Deno.serve(async (req) => {
       const indicator = indicatorMap.get(code)
       if (!indicator) continue
 
-      const datasetKey = cached.source_dataset_key
-      if (datasetKey) datasetsUsed.add(datasetKey)
-
       cachedCount++
       resultMap.set(code, {
         indicator_code: code,
@@ -517,12 +546,12 @@ Deno.serve(async (req) => {
         precision: indicator.precision || 1,
         direction: indicator.direction || 'neutral',
         year: cached.year,
-        scenario: scenario || null,
-        source_dataset_key: datasetKey,
+        scenario: cached.scenario || null,
+        source_dataset_key: null,
         source_attribution: null,
         cached: true,
         data_available: cached.value !== null || cached.value_text !== null,
-        meta: cached.source_meta as Record<string, unknown>,
+        meta: null,
       })
     }
 
@@ -627,6 +656,7 @@ Deno.serve(async (req) => {
           const expiresAt = new Date()
           expiresAt.setDate(expiresAt.getDate() + result.ttl_days)
 
+          // Upsert to cache - only use columns that exist
           const { error: upsertError } = await supabase
             .from('indicator_values')
             .upsert({
@@ -641,8 +671,6 @@ Deno.serve(async (req) => {
               computed_at: new Date().toISOString(),
               expires_at: expiresAt.toISOString(),
               stale: false,
-              source_dataset_key: result.dataset_key,
-              source_meta: v.meta || null,
             }, {
               onConflict: 'indicator_id,region_id,year,scenario,period_start,period_end',
             })

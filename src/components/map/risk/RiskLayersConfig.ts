@@ -1,7 +1,9 @@
 /**
- * Risk Layers Configuration
+ * Risk Layers Configuration - Virtual Tiling Edition
  * 
  * Centralized configuration for heavy rain risk visualization layers.
+ * Supports Cloud-Native formats (COG, PMTiles) for efficient streaming.
+ * 
  * Data sources: DWD KOSTRA-DWD-2020 and CatRaRE.
  */
 
@@ -24,7 +26,7 @@ export const STORAGE_PATHS = {
 } as const;
 
 // ============================================================================
-// KOSTRA CONFIGURATION (Precipitation Intensity)
+// KOSTRA CONFIGURATION (Precipitation Intensity - COG)
 // ============================================================================
 
 /**
@@ -63,7 +65,8 @@ export const KOSTRA_RETURN_PERIOD_LABELS: Record<KostraReturnPeriod, string> = {
 };
 
 /**
- * Get the COG file URL for a KOSTRA scenario
+ * Get the COG file URL for a KOSTRA scenario.
+ * COGs support HTTP Range Requests for efficient streaming.
  */
 export function getKostraCogUrl(duration: KostraDuration, returnPeriod: KostraReturnPeriod): string {
   return `${STORAGE_PATHS.kostra}/kostra_d${duration}_t${returnPeriod}.tif`;
@@ -92,7 +95,7 @@ export const KOSTRA_COLOR_SCALE: Array<{ value: number; color: string; label: st
 ];
 
 // ============================================================================
-// CATRARE CONFIGURATION (Historical Events)
+// CATRARE CONFIGURATION (Historical Events - PMTiles)
 // ============================================================================
 
 /**
@@ -101,7 +104,7 @@ export const KOSTRA_COLOR_SCALE: Array<{ value: number; color: string; label: st
 export type CatrareWarningLevel = 1 | 2 | 3 | 4;
 
 /**
- * CatRaRE event properties from GeoJSON
+ * CatRaRE event properties from vector tiles
  */
 export interface CatrareEventProperties {
   ID: string;
@@ -116,19 +119,28 @@ export interface CatrareEventProperties {
 }
 
 /**
- * Get the GeoJSON URL for CatRaRE data
+ * Get the PMTiles URL for CatRaRE data.
+ * PMTiles support HTTP Range Requests for serverless vector tile serving.
+ */
+export function getCatrarePmtilesUrl(): string {
+  return `${STORAGE_PATHS.catrare}/catrare.pmtiles`;
+}
+
+/**
+ * Get the GeoJSON fallback URL for CatRaRE data.
+ * Used when PMTiles loading fails or for simplified rendering.
  */
 export function getCatrareGeoJsonUrl(): string {
   return `${STORAGE_PATHS.catrare}/catrare_recent.json`;
 }
 
 /**
- * Color scale for CatRaRE warning levels
+ * Color scale for CatRaRE warning levels (DWD standard colors)
  */
 export const CATRARE_WARNING_COLORS: Record<CatrareWarningLevel, string> = {
   1: '#FFD700', // Yellow - Minor
   2: '#FFA500', // Orange - Moderate
-  3: '#FF4500', // Red-Orange - Severe
+  3: '#FF4500', // Red-Orange - Severe (Unwetter)
   4: '#8B0000', // Dark Red - Extreme
 };
 

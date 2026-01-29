@@ -1,97 +1,155 @@
 # Data Preparation Scripts
 
-This directory contains Python scripts for preparing geospatial data for the Neotopia Navigator heavy rain risk module.
+Diese Skripte bereiten Geodaten für die Neotopia Navigator Anwendung auf.
 
-## Prerequisites
+## 🚀 Virtual Tiling Architecture
 
-### Required: GDAL Tools
+Die Skripte erzeugen **Cloud-Native Formate**, die HTTP Range Requests unterstützen. Der Browser lädt nur die sichtbaren Tiles, nicht die gesamte Datei.
 
-All scripts require GDAL command-line tools (`gdal_translate`, `gdalwarp`, `ogr2ogr`).
+| Format | Typ | Beschreibung |
+|--------|-----|--------------|
+| **COG** (Cloud Optimized GeoTIFF) | Raster | Intern gekachelte TIFFs mit Überblickspyramiden |
+| **PMTiles** | Vektor | Einzelarchiv mit allen Vektorkacheln (z4-z12) |
 
-**macOS (Homebrew):**
+## 📦 Abhängigkeiten
+
+### Erforderlich
+
 ```bash
-brew install gdal
+# macOS
+brew install gdal           # GDAL 3.x für Raster-Konvertierung
+brew install tippecanoe     # Für PMTiles-Generierung
+
+# Linux (Ubuntu/Debian)
+sudo apt install gdal-bin
+# tippecanoe: https://github.com/felt/tippecanoe#installation
+
+# Python
+pip install requests
 ```
 
-**Ubuntu/Debian:**
+### Optional
+
 ```bash
-sudo apt update
-sudo apt install gdal-bin python3-gdal
+npm install -g pmtiles      # PMTiles CLI für Validierung
 ```
 
-**Windows:**
-Download from [OSGeo4W](https://trac.osgeo.org/osgeo4w/) or use Conda.
+## 📂 Skripte
 
-### Python Dependencies
+### `prepare_kostra.py` - Starkregen-Potenzial (Raster)
+
+Konvertiert KOSTRA-DWD-2020 ASCII-Grids in Cloud Optimized GeoTIFFs.
 
 ```bash
-pip install requests geopandas
-```
+# Vollständige Verarbeitung
+python scripts/prepare_kostra.py --output-dir ./data/kostra
 
-## Scripts
-
-### 1. prepare_kostra.py
-
-Downloads and processes KOSTRA-DWD-2020 precipitation intensity data.
-
-**Data Source:** [DWD Open Data KOSTRA](https://opendata.dwd.de/climate_environment/CDC/grids_germany/return_periods/precipitation/KOSTRA/)
-
-**Outputs:** Cloud Optimized GeoTIFFs (COGs) for different scenarios:
-- `kostra_d60min_t10a.tif` - 1 hour duration, 10 year return period
-- `kostra_d60min_t100a.tif` - 1 hour duration, 100 year return period
-- `kostra_d12h_t10a.tif` - 12 hour duration, 10 year return period
-- `kostra_d12h_t100a.tif` - 12 hour duration, 100 year return period
-- `kostra_d24h_t10a.tif` - 24 hour duration, 10 year return period
-- `kostra_d24h_t100a.tif` - 24 hour duration, 100 year return period
-
-**Usage:**
-```bash
-# Default output to ./data/kostra
-python scripts/prepare_kostra.py
-
-# Custom output directory
-python scripts/prepare_kostra.py --output-dir /path/to/output
-
-# Dry run (show what would be done)
+# Vorschau (kein Download)
 python scripts/prepare_kostra.py --dry-run
 ```
 
-### 2. prepare_catrare.py
+**Ausgabe:**
+- `kostra_d60min_t10a.tif` - 1h Dauer, 10-Jahres-Wiederkehr
+- `kostra_d60min_t100a.tif` - 1h Dauer, 100-Jahres-Wiederkehr
+- `kostra_d12h_t10a.tif` etc.
 
-Downloads and processes CatRaRE (Catalogue of Radar-based Heavy Rainfall Events).
+**COG-Eigenschaften:**
+- 256×256 interne Kacheln
+- DEFLATE-Kompression
+- Überblickspyramiden (2×, 4×, 8×, 16×)
+- EPSG:4326 (WGS84)
 
-**Data Source:** [DWD CDC CatRaRE](https://opendata.dwd.de/climate_environment/CDC/grids_germany/hourly/radolan/CatRaRE/)
+### `prepare_catrare.py` - Historische Starkregenereignisse (Vektor)
 
-**Output:** `catrare_recent.json` - GeoJSON with events from the last 10 years
+Konvertiert CatRaRE Shapefiles in PMTiles.
 
-**Usage:**
 ```bash
-# Default (last 10 years)
-python scripts/prepare_catrare.py
+# Vollständige Verarbeitung
+python scripts/prepare_catrare.py --output-dir ./data/catrare
 
-# Custom time range
-python scripts/prepare_catrare.py --years 5
+# Nur GeoJSON (wenn tippecanoe fehlt)
+python scripts/prepare_catrare.py --geojson-only
 
-# Create mock data for development
+# Mock-Daten für Entwicklung
 python scripts/prepare_catrare.py --mock
-
-# Force re-download
-python scripts/prepare_catrare.py --force-download
 ```
 
-## Uploading to Supabase Storage
+**Ausgabe:**
+- `catrare.pmtiles` - Vektorkacheln (z4-z12)
+- `catrare_recent.json` - GeoJSON Fallback
 
-After generating the files, upload them to Supabase Storage:
+**PMTiles-Eigenschaften:**
+- Zoom-Level 4-12
+- Layer: `catrare`
+- Attribute: ID, DATUM, WARNSTUFE, N_MAX, etc.
 
+## 🌐 Deployment
+
+Nach der Generierung:
+
+1. **Supabase Storage Bucket erstellen:**
+   ```sql
+   INSERT INTO storage.buckets (id, name, public)
+   VALUES ('risk-layers', 'risk-layers', true);
+   ```
+
+2. **Dateien hochladen:**
+   ```
+   risk-layers/
+   ├── kostra/
+   │   ├── kostra_d60min_t10a.tif
+   │   ├── kostra_d60min_t100a.tif
+   │   └── ...
+   └── catrare/
+       ├── catrare.pmtiles
+       └── catrare_recent.json  (Fallback)
+   ```
+
+3. **CORS-Konfiguration prüfen** (für Range Requests):
+   - Supabase Storage unterstützt Range Requests standardmäßig
+
+## 🔧 Troubleshooting
+
+### "GDAL not found"
 ```bash
-# Using Supabase CLI
-supabase storage cp ./data/kostra/*.tif supabase://risk-layers/kostra/
-supabase storage cp ./data/catrare/catrare_recent.json supabase://risk-layers/catrare/
+# macOS
+brew install gdal
+
+# Verify
+gdalinfo --version
 ```
 
-Or use the Supabase Dashboard to upload manually to the `risk-layers` bucket.
+### "tippecanoe not found"
+```bash
+# macOS
+brew install tippecanoe
 
-## Data Attribution
+# Linux: Build from source
+git clone https://github.com/felt/tippecanoe.git
+cd tippecanoe
+make -j
+sudo make install
+```
 
-- **KOSTRA-DWD-2020:** Deutscher Wetterdienst (DWD), © DWD, Datenlizenz Deutschland – Namensnennung – Version 2.0
-- **CatRaRE:** Deutscher Wetterdienst (DWD), CC BY 4.0
+### COG-Validierung
+```bash
+# Prüfe interne Struktur
+gdalinfo -json data/kostra/kostra_d24h_t100a.tif | jq '.bands[0].block'
+# Sollte [256, 256] zeigen
+```
+
+### PMTiles-Validierung
+```bash
+# Installiere CLI
+npm install -g pmtiles
+
+# Zeige Metadaten
+pmtiles show data/catrare/catrare.pmtiles
+```
+
+## 📚 Datenquellen
+
+| Datensatz | Quelle | Lizenz |
+|-----------|--------|--------|
+| KOSTRA-DWD-2020 | [DWD Open Data](https://opendata.dwd.de/climate_environment/CDC/grids_germany/return_periods/precipitation/KOSTRA/) | DL-DE 2.0 |
+| CatRaRE | [DWD CDC](https://opendata.dwd.de/climate_environment/CDC/grids_germany/hourly/radolan/CatRaRE/) | CC BY 4.0 |

@@ -12,48 +12,42 @@ import { MAP_STYLES } from './basemapStyles';
 import AirTemperatureOverlay from './AirTemperatureOverlay';
 import EcostressCompositeOverlay from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
-import EcostressOverlay from './EcostressOverlay'; // Legacy/Fallback fallback
 
 export default function RegionMap() {
   const mapRef = useRef<MapRef>(null);
   const { selectedRegion } = useRegionContext();
   const { activeLayers, mapStyle } = useMapOverlays();
   
-  // Data Hooks
+  // Data Fetching
   const { data: tempData } = useDwdTemperature();
   
-  // State to track if map is ready for Deck.gl
-  const [mapReady, setMapReady] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
 
-  // Initialize DeckOverlayManager when map loads
+  // 1. Initial Load
   const onMapLoad = useCallback((e: any) => {
     console.log('[RegionMap] Map Loaded');
-    const mapInstance = e.target;
-    initDeckOverlay(mapInstance);
-    setMapReady(true);
+    initDeckOverlay(e.target);
+    setIsMapReady(true);
   }, []);
 
-  // Re-initialize when style changes (MapLibre creates new canvas)
+  // 2. Style Change Handling (Critical for Satellite switch)
   const onStyleData = useCallback((e: any) => {
+    // Only re-init if it's a style loading event and map exists
     if (e.dataType === 'style' && mapRef.current) {
-      // Force re-init of overlay manager on existing map
-      initDeckOverlay(mapRef.current.getMap(), false, { force: true });
+      initDeckOverlay(mapRef.current.getMap(), true); // Force re-init
     }
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      finalizeDeckOverlay();
-    };
+    return () => finalizeDeckOverlay();
   }, []);
 
-  // Determine Map Style URL safely
-  // @ts-ignore - access safe properties
-  const styleUrl = MAP_STYLES[mapStyle] || MAP_STYLES.LIGHT || MAP_STYLES.light;
+  // Safe Style URL access
+  // @ts-ignore
+  const currentStyle = MAP_STYLES[mapStyle] || MAP_STYLES.LIGHT;
 
   return (
-    <div className="relative w-full h-full bg-muted/20">
+    <div className="relative w-full h-full bg-slate-100">
       <Map
         ref={mapRef}
         initialViewState={{
@@ -62,38 +56,33 @@ export default function RegionMap() {
           zoom: 5.5
         }}
         style={{ width: '100%', height: '100%' }}
-        mapStyle={styleUrl}
+        mapStyle={currentStyle}
         onLoad={onMapLoad}
         onStyleData={onStyleData}
         attributionControl={false}
+        reuseMaps
       >
         <AttributionControl customAttribution="Neotopia Navigator" position="bottom-right" />
         <NavigationControl position="top-right" />
         <ScaleControl position="bottom-left" />
 
-        {/* --- MAPLIBRE LAYERS (Rendered inside Map context) --- */}
-        
-        {/* Lufttemperatur (DWD) */}
+        {/* --- Standard MapLibre Layers --- */}
         <AirTemperatureOverlay 
           visible={activeLayers.includes('air_temperature')}
-          data={tempData?.grid || null} // Pass 'grid' explicitly
+          data={tempData?.grid}
         />
 
-        {/* --- DECK.GL OVERLAYS (Managed via Singleton) --- */}
-        {/* These components don't render DOM elements but update the Deck instance */}
-        
-        {mapReady && (
+        {/* --- Deck.gl Overlays (Logic Only) --- */}
+        {isMapReady && (
           <>
             <EcostressCompositeOverlay 
-              map={mapRef.current?.getMap() || null}
+              map={mapRef.current?.getMap()}
               visible={activeLayers.includes('ecostress')}
-              // We assume 'ecostress' refers to the composite layer now
-              allGranules={[]} // Data fetching is handled internally or via context in a full app
-              // Usually we would pass data here, but for now we ensure it doesn't crash
               regionBbox={selectedRegion?.bbox}
+              // Add granules here if available from context
+              allGranules={[]} 
             />
             
-            {/* If you have Global LST */}
             <GlobalLSTOverlay visible={activeLayers.includes('global_lst')} />
           </>
         )}

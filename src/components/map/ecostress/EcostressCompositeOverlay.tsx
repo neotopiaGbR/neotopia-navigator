@@ -80,9 +80,22 @@ export default function EcostressCompositeOverlay({
 
         if (data?.status === 'match' && Array.isArray(data.all_granules)) {
           const yearDist = data.year_distribution || {};
-          console.log(`[EcostressComposite] ✓ ${data.all_granules.length} peak-heat granules from ${data.summers_queried?.length || 3} summers`);
-          console.log(`[EcostressComposite] Year distribution:`, yearDist);
-          console.log(`[EcostressComposite] Filter: ${data.peak_heat_filter}, discarded ${data.filtered_non_peak} non-peak granules`);
+          
+          // VALIDATION: Log actual years present in granules
+          const actualYears = [...new Set(data.all_granules.map((g: GranuleInput) => 
+            g.datetime?.substring(0, 4)
+          ))].filter(Boolean).sort();
+          
+          console.log(`[EcostressComposite] ✓ ${data.all_granules.length} peak-heat granules loaded`);
+          console.log(`[EcostressComposite] Summers queried:`, data.summers_queried);
+          console.log(`[EcostressComposite] Year distribution (from API):`, yearDist);
+          console.log(`[EcostressComposite] Actual years in granules:`, actualYears);
+          console.log(`[EcostressComposite] Filter: ${data.peak_heat_filter}`);
+          
+          if (actualYears.length < 3) {
+            console.warn(`[EcostressComposite] ⚠️ Only ${actualYears.length} years loaded: ${actualYears.join(', ')}`);
+          }
+          
           setFetchedGranules(data.all_granules);
         } else if (data?.status === 'no_coverage') {
           console.warn('[EcostressComposite] No peak-heat coverage:', data.message);

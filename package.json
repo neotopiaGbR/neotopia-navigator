@@ -15,9 +15,9 @@
   "dependencies": {
     "@deck.gl/aggregation-layers": "^9.2.6",
     "@deck.gl/core": "^9.2.6",
-    "@deck.gl/geo-layers": "^9.0.38",
-    "@deck.gl/layers": "^9.0.38",
-    "@deck.gl/mapbox": "^9.0.38",
+    "@deck.gl/geo-layers": "^9.2.6",
+    "@deck.gl/layers": "^9.2.6",
+    "@deck.gl/mapbox": "^9.2.6",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",

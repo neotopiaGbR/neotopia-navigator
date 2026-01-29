@@ -16,6 +16,9 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Prevent Vite/Rollup build failures when dependencies reference Node built-ins
+      // in optional code paths (e.g. loaders.gl process utils).
+      child_process: path.resolve(__dirname, "./src/shims/child_process.ts"),
     },
   },
 }));

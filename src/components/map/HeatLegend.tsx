@@ -28,8 +28,7 @@ const HeatLegend: React.FC<HeatLegendProps> = ({
   if (!visible) return null;
 
   const aggregationLabel = 
-    aggregationMethod === 'max' ? 'Maximum' :
-    aggregationMethod === 'p90' ? '90. Perzentil' : 'Median';
+    aggregationMethod === 'max' ? 'Maximum' : '90. Perzentil';
 
   return (
     <div className="bg-background/90 backdrop-blur p-3 rounded-lg border border-border/50 shadow-sm text-xs min-w-[200px]">

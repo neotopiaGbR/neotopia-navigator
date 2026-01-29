@@ -1,52 +1,34 @@
-import { useEffect, useState, useRef } from 'react';
-import { updateLayer, removeLayer, getAttachedMap } from '../DeckOverlayManager';
-import { createComposite, type CompositeResult } from './compositeUtils';
+import { useEffect, useState } from 'react';
+import { updateLayer, removeLayer } from '../DeckOverlayManager';
+import { createComposite } from './compositeUtils';
 import { supabase } from '@/integrations/supabase/client';
 
-interface GranuleData {
-  cog_url: string;
-  datetime: string;
-  granule_id: string;
-  granule_bounds: [number, number, number, number];
-  quality_score: number;
-  coverage_percent: number;
-  cloud_percent: number;
-}
-
-interface EcostressCompositeOverlayProps {
-  map?: any;
+interface Props {
   visible: boolean;
   opacity?: number;
-  allGranules?: GranuleData[];
+  allGranules?: any[];
   regionBbox?: [number, number, number, number];
 }
 
 export function EcostressCompositeOverlay({
   visible,
   opacity = 0.8,
-  allGranules = [], // Standardmäßig leer
+  allGranules = [],
   regionBbox,
-}: EcostressCompositeOverlayProps) {
-  const [internalGranules, setInternalGranules] = useState<GranuleData[]>([]);
-  const [layerData, setLayerData] = useState<{ image: HTMLCanvasElement; bounds: [number, number, number, number] } | null>(null);
-  const [loading, setLoading] = useState(false);
+}: Props) {
+  const [internalGranules, setInternalGranules] = useState<any[]>([]);
+  // Wir speichern jetzt ImageBitmap statt HTMLCanvasElement
+  const [layerData, setLayerData] = useState<{ image: ImageBitmap; bounds: any } | null>(null);
 
-  // 1. DATA FETCHING (Fallback-Modus)
+  // 1. DATA FETCHING (Self-Service)
   useEffect(() => {
-    // Wenn wir von außen Daten bekommen, nutzen wir die.
     if (allGranules && allGranules.length > 0) {
       setInternalGranules(allGranules);
       return;
     }
-
-    // Wenn nicht sichtbar oder keine Region, nichts tun.
     if (!visible || !regionBbox) return;
 
-    // SELBSTSTÄNDIG DATEN LADEN
     const fetchGranules = async () => {
-      setLoading(true);
-      console.log('[Ecostress] Fetching data for region:', regionBbox);
-
       try {
         const centerLat = (regionBbox[1] + regionBbox[3]) / 2;
         const centerLon = (regionBbox[0] + regionBbox[2]) / 2;
@@ -56,33 +38,24 @@ export function EcostressCompositeOverlay({
             lat: centerLat,
             lon: centerLon,
             region_bbox: regionBbox,
-            date_from: getDaysAgo(60), // Letzte 2 Monate (Sommer)
+            date_from: getDaysAgo(60),
             date_to: new Date().toISOString().split('T')[0],
           },
         });
 
-        if (error) throw error;
-
-        if (data?.all_granules && Array.isArray(data.all_granules)) {
-          console.log(`[Ecostress] Fetched ${data.all_granules.length} granules via Edge Function.`);
-          setInternalGranules(data.all_granules);
-        } else {
-          console.warn('[Ecostress] No granules found in response:', data);
-          setInternalGranules([]);
+        if (!error && data?.all_granules) {
+            console.log(`[Ecostress] Fetched ${data.all_granules.length} granules`);
+            setInternalGranules(data.all_granules);
         }
       } catch (err) {
-        console.error('[Ecostress] Data fetch failed:', err);
-      } finally {
-        setLoading(false);
+        console.error(err);
       }
     };
-
     fetchGranules();
-  }, [visible, regionBbox, allGranules]); // Re-run wenn Region oder Sichtbarkeit sich ändert
+  }, [visible, regionBbox, allGranules]);
 
-  // 2. COMPOSITE GENERATION
+  // 2. COMPOSITE & BITMAP GENERATION
   useEffect(() => {
-    // Wenn keine Daten da sind (weder von außen noch intern), Layer entfernen
     const granulesToUse = allGranules.length > 0 ? allGranules : internalGranules;
 
     if (!visible || !regionBbox || granulesToUse.length === 0) {
@@ -94,58 +67,59 @@ export function EcostressCompositeOverlay({
 
     async function generate() {
       try {
-        console.log('[Ecostress] Generating composite from', granulesToUse.length, 'granules...');
         const result = await createComposite(granulesToUse, regionBbox!, 'median');
         
-        if (!active) return;
-        if (!result) {
-          console.warn('[Ecostress] Composite generation returned empty result.');
-          return;
-        }
+        if (!active || !result) return;
 
-        // Convert ImageData to Canvas for Deck.gl
+        // Schritt 1: Auf temporären Canvas zeichnen
         const cvs = document.createElement('canvas');
         cvs.width = result.imageData.width;
         cvs.height = result.imageData.height;
         const ctx = cvs.getContext('2d');
         if (!ctx) return;
+        
         ctx.putImageData(result.imageData, 0, 0);
 
-        setLayerData({ image: cvs, bounds: result.bounds });
-        console.log('[Ecostress] Composite generated successfully.', result.bounds);
+        // Schritt 2: Zu ImageBitmap konvertieren (Viel stabiler für WebGL!)
+        const bitmap = await createImageBitmap(cvs);
 
+        if (active) {
+             setLayerData({ image: bitmap, bounds: result.bounds });
+        }
       } catch (e) {
-        console.error('[Ecostress] Generation failed:', e);
+        console.error('[Ecostress] Bitmap generation failed:', e);
       }
     }
 
     generate();
-    return () => { active = false; };
+    return () => { 
+        active = false;
+        // Optional: Bitmap schließen um Speicher freizugeben
+        if (layerData?.image) layerData.image.close();
+    };
   }, [visible, regionBbox, allGranules, internalGranules]);
 
-  // 3. DECK.GL LAYER UPDATE
+  // 3. UPDATE DECK LAYER
   useEffect(() => {
     if (!visible || !layerData) {
       removeLayer('ecostress-composite');
       return;
     }
 
-    // CRITICAL FIX: Bounds Order Normalization
-    // Deck.gl BitmapLayer erwartet: [West, South, East, North]
-    // Wir sortieren die Werte, um sicherzugehen.
+    // Bounds sicherstellen [W, S, E, N]
     const b = layerData.bounds;
-    const west = Math.min(b[0], b[2]);
-    const south = Math.min(b[1], b[3]);
-    const east = Math.max(b[0], b[2]);
-    const north = Math.max(b[1], b[3]);
-
-    const safeBounds: [number, number, number, number] = [west, south, east, north];
+    const safeBounds: [number, number, number, number] = [
+      Math.min(b[0], b[2]),
+      Math.min(b[1], b[3]),
+      Math.max(b[0], b[2]),
+      Math.max(b[1], b[3])
+    ];
 
     updateLayer({
       id: 'ecostress-composite',
       type: 'bitmap',
       visible: true,
-      image: layerData.image,
+      image: layerData.image, // Jetzt ein ImageBitmap
       bounds: safeBounds,
       opacity,
     });
@@ -155,7 +129,6 @@ export function EcostressCompositeOverlay({
   return null;
 }
 
-// Helper
 function getDaysAgo(days: number) {
   const d = new Date();
   d.setDate(d.getDate() - days);

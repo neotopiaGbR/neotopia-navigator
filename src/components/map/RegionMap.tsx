@@ -240,7 +240,7 @@ export default function RegionMap() {
           <EcostressCompositeOverlay 
             visible={activeLayers.includes('ecostress')}
             regionBbox={selectedRegion?.bbox}
-            allGranules={[]} 
+            allGranules={(overlays.ecostress.metadata?.allGranules as any[]) ?? []} 
           />
           <GlobalLSTOverlay 
             map={mapRef.current.getMap()} 

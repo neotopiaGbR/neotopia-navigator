@@ -128,10 +128,11 @@ export default function EcostressCompositeOverlay({
 
     async function generate() {
       setIsGenerating(true);
-      console.log(`[EcostressComposite] Starting ${aggregationMethod} composite from ${effectiveGranules.length} granules...`);
+      console.log(`[EcostressComposite] Starting P90 (hotspot) composite from ${effectiveGranules.length} granules...`);
       
       try {
-        const result = await createComposite(effectiveGranules, regionBbox!, aggregationMethod);
+        // HARDCODED to 'p90' for Urban Heat Island hotspot analysis
+        const result = await createComposite(effectiveGranules, regionBbox!, 'p90');
         
         // Check if this generation is still current
         if (genId !== generationIdRef.current) {

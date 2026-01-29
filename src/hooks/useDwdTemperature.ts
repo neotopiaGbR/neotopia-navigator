@@ -10,6 +10,12 @@ import { supabase } from '@/integrations/supabase/client';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 import { useMapLayers, AirTemperatureData, AirTempAggregation } from '@/components/map/MapLayersContext';
 
+interface MonthlyValue {
+  month: number;
+  monthName: string;
+  value: number;
+}
+
 interface DwdResponse {
   status: 'ok' | 'error' | 'no_data';
   data?: {
@@ -27,7 +33,8 @@ interface DwdResponse {
       min: number;
       max: number;
     };
-    gridMetadata: {
+    monthlyValues?: MonthlyValue[];
+    gridMetadata?: {
       ncols: number;
       nrows: number;
       xllcorner: number;

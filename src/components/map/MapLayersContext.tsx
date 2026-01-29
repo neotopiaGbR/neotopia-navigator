@@ -32,6 +32,12 @@ export interface AirTemperatureConfig {
   metadata: AirTemperatureMetadata | null;
 }
 
+export interface MonthlyTemperatureValue {
+  month: number;
+  monthName: string;
+  value: number;
+}
+
 export interface AirTemperatureData {
   grid: Array<{ lat: number; lon: number; value: number }>;
   bounds: [number, number, number, number];
@@ -47,6 +53,8 @@ export interface AirTemperatureData {
     min: number;
     max: number;
   };
+  /** Monthly values for selected region (June, July, August) */
+  monthlyValues?: MonthlyTemperatureValue[];
 }
 
 export interface AirTemperatureMetadata {

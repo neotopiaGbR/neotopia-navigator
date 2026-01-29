@@ -2,13 +2,9 @@
  * Supabase Edge Function: get-dwd-temperature
  *
  * Purpose
- * - Fetch HYRAS-DE seasonal (JJA) air temperature grids (ESRI ASCII Grid .asc.gz) from DWD OpenData
+ * - Fetch HYRAS-DE seasonal (JJA) or monthly air temperature grids from DWD OpenData
  * - Parse + convert to WGS84 point grid for client-side rendering (deck.gl)
- *
- * Fix implemented
- * - Robust CRS detection: EPSG:3035 vs UTM32/33 vs Gauss-Krüger (31467/31468)
- * - Uses BOTH raw-coordinate range heuristics AND Germany-bbox overlap scoring
- * - Prevents "Greenland bounds" / projection mismatch by choosing the best CRS candidate
+ * - Supports both seasonal aggregate and individual months (June, July, August)
  */
 
 import { gunzip } from "https://deno.land/x/compress@v0.4.5/mod.ts";
@@ -26,12 +22,20 @@ const corsHeaders: Record<string, string> = {
 };
 
 const DWD_BASE_URL =
-  "https://opendata.dwd.de/climate_environment/CDC/grids_germany/seasonal";
+  "https://opendata.dwd.de/climate_environment/CDC/grids_germany";
 
-const VARIABLE_PATHS: Record<string, string> = {
-  mean: "air_temperature_mean/14_JJA",
-  max: "air_temperature_max/14_JJA",
-  min: "air_temperature_min/14_JJA",
+// Seasonal paths (JJA = summer, code 14)
+const SEASONAL_PATHS: Record<string, string> = {
+  mean: "seasonal/air_temperature_mean/14_JJA",
+  max: "seasonal/air_temperature_max/14_JJA",
+  min: "seasonal/air_temperature_min/14_JJA",
+};
+
+// Monthly paths
+const MONTHLY_PATHS: Record<string, string> = {
+  mean: "monthly/air_temperature_mean",
+  max: "monthly/air_temperature_max",
+  min: "monthly/air_temperature_min",
 };
 
 // --- Projections ---
@@ -82,6 +86,15 @@ interface RequestBody {
   year?: number;
   variable?: "mean" | "max" | "min";
   sample?: number; // sample every Nth cell
+  includeMonthly?: boolean; // Also fetch individual months
+  lat?: number; // Optional: filter to region around this lat
+  lon?: number; // Optional: filter to region around this lon
+}
+
+interface MonthlyValue {
+  month: number;
+  monthName: string;
+  value: number;
 }
 
 function projectToWgs84(crs: SourceCrs, x: number, y: number): { lon: number; lat: number } {
@@ -100,9 +113,7 @@ function finiteBounds(b: [number, number, number, number]): boolean {
 function intersectsGermanyBox(b: [number, number, number, number]): boolean {
   const [minLon, minLat, maxLon, maxLat] = b;
   if (!finiteBounds(b)) return false;
-  // basic sanity
   if (minLon < -180 || maxLon > 180 || minLat < -90 || maxLat > 90) return false;
-  // intersection test
   const inter =
     !(maxLon < GER_BBOX.minLon ||
       minLon > GER_BBOX.maxLon ||
@@ -131,9 +142,6 @@ function overlapScore(b: [number, number, number, number]): number {
   return interArea / bboxArea;
 }
 
-/**
- * Raw-coordinate plausibility filter.
- */
 function rawRangeLikely(crs: SourceCrs, x: number, y: number): boolean {
   switch (crs) {
     case "EPSG:3035":
@@ -266,7 +274,6 @@ function detectSourceCrs(metadata: GridMetadata): {
     return { sourceCrs: best.crs, bounds: best.bounds, debug: { tried, chosen: best } };
   }
 
-  // Fallback to 3035
   return {
     sourceCrs: "EPSG:3035",
     bounds: [0, 0, 0, 0],
@@ -274,10 +281,18 @@ function detectSourceCrs(metadata: GridMetadata): {
   };
 }
 
-function buildDwdUrl(year: number, variable: "mean" | "max" | "min"): string {
-  const path = VARIABLE_PATHS[variable];
+function buildSeasonalUrl(year: number, variable: "mean" | "max" | "min"): string {
+  const path = SEASONAL_PATHS[variable];
   const varPart = variable === "mean" ? "mean" : variable === "max" ? "max" : "min";
   const filename = `grids_germany_seasonal_air_temp_${varPart}_${year}14.asc.gz`;
+  return `${DWD_BASE_URL}/${path}/${filename}`;
+}
+
+function buildMonthlyUrl(year: number, month: number, variable: "mean" | "max" | "min"): string {
+  const path = MONTHLY_PATHS[variable];
+  const varPart = variable === "mean" ? "mean" : variable === "max" ? "max" : "min";
+  const monthStr = month.toString().padStart(2, "0");
+  const filename = `grids_germany_monthly_air_temp_${varPart}_${year}${monthStr}.asc.gz`;
   return `${DWD_BASE_URL}/${path}/${filename}`;
 }
 
@@ -285,6 +300,73 @@ function quantile(sorted: number[], q: number): number {
   if (sorted.length === 0) return 0;
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * q)));
   return sorted[idx];
+}
+
+const MONTH_NAMES: Record<number, string> = {
+  6: "Juni",
+  7: "Juli",
+  8: "August",
+};
+
+/**
+ * Fetch and parse a single grid file, returning the value at a specific location
+ */
+async function fetchGridValueAtLocation(
+  url: string,
+  targetLat: number,
+  targetLon: number,
+): Promise<number | null> {
+  try {
+    const resp = await fetch(url, { 
+      headers: { "User-Agent": "Neotopia Navigator / DWD Data Access" } 
+    });
+    
+    if (!resp.ok) {
+      console.log(`[DWD] Monthly grid not found: ${url}`);
+      return null;
+    }
+
+    const gz = new Uint8Array(await resp.arrayBuffer());
+    const dec = gunzip(gz);
+    const text = new TextDecoder().decode(dec);
+
+    const { metadata, data } = parseAsciiGrid(text);
+    const det = detectSourceCrs(metadata);
+    const sourceCrs = det.sourceCrs;
+
+    // Find the grid cell closest to the target location
+    // First, convert target WGS84 to source CRS
+    let closestValue: number | null = null;
+    let closestDist = Infinity;
+
+    // Sample the grid to find the closest cell
+    for (let row = 0; row < data.length; row++) {
+      const r = data[row];
+      if (!r) continue;
+
+      for (let col = 0; col < r.length; col++) {
+        const raw = r[col];
+        if (raw === metadata.nodata_value || raw <= -999) continue;
+
+        const x = metadata.xllcorner + (col + 0.5) * metadata.cellsize;
+        const y = metadata.yllcorner + ((data.length - 1 - row) + 0.5) * metadata.cellsize;
+
+        const p = projectToWgs84(sourceCrs, x, y);
+        if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
+
+        const dist = Math.pow(p.lon - targetLon, 2) + Math.pow(p.lat - targetLat, 2);
+        if (dist < closestDist) {
+          closestDist = dist;
+          closestValue = raw / 10; // Convert from 0.1°C to °C
+        }
+      }
+    }
+
+    return closestValue;
+  } catch (err) {
+    console.error(`[DWD] Error fetching monthly grid: ${err}`);
+    return null;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -297,9 +379,12 @@ Deno.serve(async (req) => {
     const year = body.year ?? (nowYear - 1);
     const variable = body.variable ?? "mean";
     const sampleStep = Math.max(1, Math.floor(body.sample ?? 3));
+    const includeMonthly = body.includeMonthly ?? false;
+    const targetLat = body.lat;
+    const targetLon = body.lon;
 
-    const url = buildDwdUrl(year, variable);
-    console.log(`[DWD] Fetch ${variable} JJA ${year} sample=${sampleStep}`);
+    const url = buildSeasonalUrl(year, variable);
+    console.log(`[DWD] Fetch ${variable} JJA ${year} sample=${sampleStep} monthly=${includeMonthly}`);
 
     const resp = await fetch(url, { headers: { "User-Agent": "Neotopia Navigator / DWD Data Access" } });
     if (!resp.ok) {
@@ -327,10 +412,8 @@ Deno.serve(async (req) => {
 
     console.log(`[DWD] CRS chosen: ${sourceCrs} bounds=${JSON.stringify(bounds)}`);
 
-    // Check bounds but DO NOT THROW hard error, just log warning if suspicious
     if (!intersectsGermanyBox(bounds)) {
       console.warn(`[DWD] Warning: Bounds do not intersect Germany strictly. Bounds: ${JSON.stringify(bounds)}`);
-      // Proceed anyway, might be a border product
     }
 
     const values: number[] = [];
@@ -346,14 +429,12 @@ Deno.serve(async (req) => {
 
         const temp = raw / 10; // 0.1°C units
 
-        // ESRI ASCII: row0 is north-most
         const x = metadata.xllcorner + (col + 0.5) * metadata.cellsize;
         const y = metadata.yllcorner + ((data.length - 1 - row) + 0.5) * metadata.cellsize;
 
         const p = projectToWgs84(sourceCrs, x, y);
         if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
 
-        // Broad European bounds filter
         if (p.lon < -30 || p.lon > 40 || p.lat < 35 || p.lat > 65) continue;
 
         grid.push({ lat: p.lat, lon: p.lon, value: Math.round(temp * 10) / 10 });
@@ -366,6 +447,30 @@ Deno.serve(async (req) => {
     const max = values[values.length - 1] ?? 0;
     const p5 = quantile(values, 0.05);
     const p95 = quantile(values, 0.95);
+
+    // Fetch monthly values if requested and we have a target location
+    let monthlyValues: MonthlyValue[] | undefined;
+    
+    if (includeMonthly && targetLat !== undefined && targetLon !== undefined) {
+      console.log(`[DWD] Fetching monthly values for lat=${targetLat}, lon=${targetLon}`);
+      
+      const monthPromises = [6, 7, 8].map(async (month) => {
+        const monthUrl = buildMonthlyUrl(year, month, variable);
+        const value = await fetchGridValueAtLocation(monthUrl, targetLat, targetLon);
+        return {
+          month,
+          monthName: MONTH_NAMES[month],
+          value: value !== null ? Math.round(value * 10) / 10 : null,
+        };
+      });
+      
+      const results = await Promise.all(monthPromises);
+      monthlyValues = results
+        .filter((r) => r.value !== null)
+        .map((r) => ({ month: r.month, monthName: r.monthName, value: r.value as number }));
+      
+      console.log(`[DWD] Monthly values:`, monthlyValues);
+    }
 
     return new Response(
       JSON.stringify({
@@ -386,6 +491,7 @@ Deno.serve(async (req) => {
             p5: Math.round(p5 * 10) / 10,
             p95: Math.round(p95 * 10) / 10,
           },
+          monthlyValues,
         },
         attribution: "Deutscher Wetterdienst (DWD), HYRAS-DE, CC BY 4.0",
       }),

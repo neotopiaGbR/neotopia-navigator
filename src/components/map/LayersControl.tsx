@@ -97,7 +97,7 @@ const LayersControl: React.FC = () => {
   } = useMapLayers();
 
   return (
-    <div className="absolute left-3 bottom-8 z-10">
+    <div className="relative z-10">
       {/* Layers Button */}
       <Button
         variant="secondary"

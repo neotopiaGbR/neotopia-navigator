@@ -89,24 +89,41 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
 }
 
 export function updateLayer(config: DeckLayerConfig) {
+  console.log(`[DeckOverlayManager] updateLayer: ${config.id}`, {
+    visible: config.visible,
+    hasBounds: !!config.bounds,
+    hasImage: !!config.image,
+    bounds: config.bounds,
+    opacity: config.opacity,
+  });
   currentLayers.set(config.id, config);
   rebuildLayers();
 }
 
 export function removeLayer(id: string) {
   if (currentLayers.has(id)) {
+    console.log(`[DeckOverlayManager] removeLayer: ${id}`);
     currentLayers.delete(id);
     rebuildLayers();
   }
 }
 
 function rebuildLayers() {
-  if (!overlayInstance) return;
+  if (!overlayInstance) {
+    console.warn('[DeckOverlayManager] rebuildLayers called but overlayInstance is null');
+    return;
+  }
 
-  const layers = Array.from(currentLayers.values())
-    .filter(l => l.visible)
+  const visibleConfigs = Array.from(currentLayers.values()).filter(l => l.visible);
+  
+  const layers = visibleConfigs
     .map(c => {
       if (c.type === 'bitmap' && c.image && c.bounds) {
+        console.log(`[DeckOverlayManager] Building BitmapLayer: ${c.id}`, {
+          bounds: c.bounds,
+          imageType: c.image.constructor.name,
+          opacity: c.opacity,
+        });
         return new BitmapLayer({
           id: c.id,
           image: c.image,
@@ -119,10 +136,16 @@ function rebuildLayers() {
           }
         });
       }
+      console.warn(`[DeckOverlayManager] Skipping layer ${c.id}: missing image or bounds`, {
+        hasImage: !!c.image,
+        hasBounds: !!c.bounds,
+        type: c.type,
+      });
       return null;
     })
     .filter(Boolean);
 
+  console.log(`[DeckOverlayManager] setProps with ${layers.length} layers:`, layers.map((l: any) => l.id));
   overlayInstance.setProps({ layers });
 }
 

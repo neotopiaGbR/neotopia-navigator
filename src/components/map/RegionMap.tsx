@@ -129,6 +129,32 @@ export default function RegionMap() {
   const ecostressGranuleCount = (overlays.ecostress.metadata?.granuleCount as number) || 
     (overlays.ecostress.metadata?.allGranules as any[])?.length || 0;
 
+  // Find temperature value for selected region (nearest grid cell)
+  const regionTempValue = (() => {
+    if (!selectedRegion || !tempData?.grid || tempData.grid.length === 0) return null;
+    
+    // Get region center from bbox
+    const bbox = selectedRegion.bbox;
+    if (!bbox) return null;
+    
+    const centerLon = (bbox[0] + bbox[2]) / 2;
+    const centerLat = (bbox[1] + bbox[3]) / 2;
+    
+    // Find nearest grid cell
+    let nearest = tempData.grid[0];
+    let minDist = Infinity;
+    
+    for (const cell of tempData.grid) {
+      const dist = Math.pow(cell.lon - centerLon, 2) + Math.pow(cell.lat - centerLat, 2);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = cell;
+      }
+    }
+    
+    return nearest?.value ?? null;
+  })();
+
   return (
     <div className="relative w-full h-full bg-background overflow-hidden">
       
@@ -193,6 +219,7 @@ export default function RegionMap() {
         <AirTemperatureOverlay 
           visible={activeLayers.includes('air_temperature')}
           data={tempData?.grid}
+          cellSizeMeters={tempData?.cellsize_m ?? 3000}
         />
       </Map>
 
@@ -221,12 +248,14 @@ export default function RegionMap() {
         />
 
         {/* Air Temperature Legend */}
-        {showAirTempLegend && tempData?.normalization && (
-          <AirTemperatureLegend 
-            min={tempData.normalization.p5} 
-            max={tempData.normalization.p95}
-          />
-        )}
+        <AirTemperatureLegend 
+          visible={!!showAirTempLegend}
+          aggregation={airTemperature.aggregation}
+          normalization={tempData?.normalization}
+          year={tempData?.year}
+          regionValue={regionTempValue}
+          regionName={selectedRegion?.name}
+        />
       </div>
 
       {/* Ebenen-Button (unten links gemäß Design) */}

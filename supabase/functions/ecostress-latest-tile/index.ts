@@ -78,41 +78,51 @@ interface SummerWindow {
 }
 
 /**
- * Generate summer time windows for the last N years
+ * Generate summer time windows for heat analysis.
+ * 
+ * FIXED LOGIC: We want the last N COMPLETED summers, not just N years back.
+ * If we're before June of the current year, we start from last year's summer.
+ * 
+ * Example (January 2026):
+ * - Current year (2026) has no summer data yet → skip
+ * - We need: 2025, 2024, 2023 summers
  */
-function getSummerWindows(numYears: number = 3): SummerWindow[] {
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1; // 1-12
-  const currentDay = new Date().getDate();
+function getSummerWindows(numCompletedSummers: number = 3): SummerWindow[] {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // 1-12
+  const currentDay = now.getDate();
   
   const windows: SummerWindow[] = [];
   
-  for (let i = 0; i < numYears; i++) {
-    const year = currentYear - i;
-    
-    // For current year, only include if we're in or past June
-    if (year === currentYear) {
-      if (currentMonth >= 6) {
-        // Current year summer: June 1 to today (or Aug 31 if past August)
-        const endDate = currentMonth > 8 
-          ? `${year}-08-31` 
-          : `${year}-${String(currentMonth).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`;
-        windows.push({
-          year,
-          startDate: `${year}-06-01`,
-          endDate,
-        });
-      }
-      // If before June, skip current year entirely
-    } else {
-      // Previous years: full June-August window
+  // Determine starting year: if before June, start from last year
+  const hasCurrentSummerData = currentMonth >= 6;
+  let yearCursor = hasCurrentSummerData ? currentYear : currentYear - 1;
+  
+  // Collect N summers going backwards
+  while (windows.length < numCompletedSummers && yearCursor >= 2020) {
+    if (yearCursor === currentYear && hasCurrentSummerData) {
+      // Current year: partial summer (June 1 to today, or Aug 31 if past)
+      const endDate = currentMonth > 8 
+        ? `${yearCursor}-08-31` 
+        : `${yearCursor}-${String(currentMonth).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`;
       windows.push({
-        year,
-        startDate: `${year}-06-01`,
-        endDate: `${year}-08-31`,
+        year: yearCursor,
+        startDate: `${yearCursor}-06-01`,
+        endDate,
+      });
+    } else {
+      // Past years: full June-August window
+      windows.push({
+        year: yearCursor,
+        startDate: `${yearCursor}-06-01`,
+        endDate: `${yearCursor}-08-31`,
       });
     }
+    yearCursor--;
   }
+  
+  console.log(`[ECOSTRESS] Summer windows generated:`, windows.map(w => `${w.year}: ${w.startDate} to ${w.endDate}`));
   
   return windows;
 }

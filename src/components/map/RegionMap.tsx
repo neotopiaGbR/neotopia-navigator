@@ -270,21 +270,22 @@ export default function RegionMap() {
         />
       </Map>
 
-      {/* LOGIC LAYERS (Outside Map to prevent ref warnings) */}
+      {/* LOGIC LAYERS - Rendered OUTSIDE Map component as invisible React nodes */}
+      {/* These components use the DeckOverlayManager singleton - no refs needed */}
+      {isMapReady && (
+        <EcostressCompositeOverlay 
+          visible={activeLayers.includes('ecostress')}
+          regionBbox={computedBbox ?? undefined}
+          allGranules={(overlays.ecostress.metadata?.allGranules as any[]) ?? []}
+          aggregationMethod={heatLayers.aggregationMethod}
+          opacity={heatLayers.ecostressOpacity / 100}
+        />
+      )}
       {isMapReady && mapRef.current && (
-        <>
-          <EcostressCompositeOverlay 
-            visible={activeLayers.includes('ecostress')}
-            regionBbox={computedBbox ?? undefined}
-            allGranules={(overlays.ecostress.metadata?.allGranules as any[]) ?? []}
-            aggregationMethod={heatLayers.aggregationMethod}
-            opacity={heatLayers.ecostressOpacity / 100}
-          />
-          <GlobalLSTOverlay 
-            map={mapRef.current.getMap()} 
-            visible={activeLayers.includes('global_lst')} 
-          />
-        </>
+        <GlobalLSTOverlay 
+          map={mapRef.current.getMap()} 
+          visible={activeLayers.includes('global_lst')} 
+        />
       )}
 
       {/* Legends (top-right, below nav controls) */}

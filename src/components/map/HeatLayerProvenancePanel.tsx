@@ -42,7 +42,7 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
   ecostressLoading = false,
   globalLSTOpacity = 80,
   ecostressOpacity = 80,
-  aggregationMethod = 'median',
+  aggregationMethod = 'p90',
 }) => {
   if (!visible) return null;
 

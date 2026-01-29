@@ -22,7 +22,7 @@ interface HeatLegendProps {
 
 const HeatLegend: React.FC<HeatLegendProps> = ({ 
   visible, 
-  aggregationMethod = 'median',
+  aggregationMethod = 'p90',
   granuleCount,
 }) => {
   if (!visible) return null;

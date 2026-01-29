@@ -14,6 +14,10 @@ interface AirTemperatureLegendProps {
   /** Monthly values (June, July, August) */
   monthlyValues?: MonthlyTemperatureValue[] | null;
   monthlyLoading?: boolean;
+  /** Year the monthly data actually comes from (may differ if fallback was used) */
+  monthlyYear?: number | null;
+  /** True if monthly data is from a fallback year */
+  monthlyIsFallback?: boolean;
 }
 
 /**
@@ -38,6 +42,8 @@ export function AirTemperatureLegend({
   regionName,
   monthlyValues,
   monthlyLoading,
+  monthlyYear,
+  monthlyIsFallback,
 }: AirTemperatureLegendProps) {
   if (!visible) return null;
 
@@ -101,6 +107,13 @@ export function AirTemperatureLegend({
           
           {!monthlyLoading && monthlyValues && monthlyValues.length > 0 && (
             <div className="mt-2 pt-2 border-t border-border/30">
+              {/* Fallback indicator */}
+              {monthlyIsFallback && monthlyYear && (
+                <div className="text-[9px] text-amber-600 dark:text-amber-400 mb-1 flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  Stand: {monthlyYear} (aktuellste verfügbare Daten)
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-1">
                 {monthlyValues.map((mv) => (
                   <div key={mv.month} className="text-center">

@@ -27,6 +27,7 @@ export interface CompositeResult {
   stats: {
     min: number;
     max: number;
+    mean: number; // Average temperature across all valid pixels
     validPixels: number;
     noDataPixels: number;
     totalPixels: number;
@@ -370,6 +371,7 @@ export async function createComposite(
   let noDataPixels = 0;
   let minTemp = Infinity;
   let maxTemp = -Infinity;
+  let tempSum = 0; // For calculating mean
   
   // Debug: sample distribution
   let pixelsWith2Plus = 0;
@@ -399,6 +401,7 @@ export async function createComposite(
     validPixels++;
     minTemp = Math.min(minTemp, value);
     maxTemp = Math.max(maxTemp, value);
+    tempSum += value; // Accumulate for mean
     
     const [r, g, b, a] = kelvinToRGBA(value);
     pixels[offset] = r;
@@ -407,6 +410,9 @@ export async function createComposite(
     pixels[offset + 3] = a;
   }
   
+  // Calculate mean temperature
+  const meanTemp = validPixels > 0 ? tempSum / validPixels : 0;
+  
   const totalPixels = OUTPUT_SIZE * OUTPUT_SIZE;
   
   // IMPORTANT: Log stack depth analysis for P90 vs Max differentiation
@@ -414,7 +420,7 @@ export async function createComposite(
   console.log(`[CompositeUtils] COMPOSITE STATS (${aggregationMethod.toUpperCase()})`);
   console.log(`[CompositeUtils] ───────────────────────────────────────────────────`);
   console.log(`[CompositeUtils] Valid pixels: ${validPixels}/${totalPixels} (${(validPixels/totalPixels*100).toFixed(1)}%)`);
-  console.log(`[CompositeUtils] Temperature: ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C`);
+  console.log(`[CompositeUtils] Temperature: ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C (Ø ${(meanTemp - 273.15).toFixed(1)}°C)`);
   console.log(`[CompositeUtils] ───────────────────────────────────────────────────`);
   console.log(`[CompositeUtils] STACK DEPTH ANALYSIS (kritisch für P90 vs Max):`);
   console.log(`[CompositeUtils]   → Pixels mit 2+ Samples: ${pixelsWith2Plus} (${(pixelsWith2Plus/totalPixels*100).toFixed(1)}%)`);
@@ -430,6 +436,7 @@ export async function createComposite(
     stats: {
       min: minTemp,
       max: maxTemp,
+      mean: meanTemp,
       validPixels,
       noDataPixels,
       totalPixels,

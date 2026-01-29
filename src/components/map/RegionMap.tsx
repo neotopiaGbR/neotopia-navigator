@@ -297,6 +297,7 @@ export default function RegionMap() {
           visible={showHeatLegend}
           aggregationMethod={heatLayers.aggregationMethod}
           granuleCount={ecostressGranuleCount}
+          meanTemperature={heatLayers.ecostressStats?.mean}
         />
 
         {/* Air Temperature Legend */}

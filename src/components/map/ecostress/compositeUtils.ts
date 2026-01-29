@@ -13,8 +13,9 @@ import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 
 // LST temperature range (Kelvin) for colorization - fixed scale
-export const LST_MIN_K = 280; // 7°C (cool)
-export const LST_MAX_K = 320; // 47°C (hot summer)
+// Adjusted for realistic summer surface temperatures
+export const LST_MIN_K = 293; // 20°C - typical cool surfaces in summer
+export const LST_MAX_K = 328; // 55°C - very hot asphalt/roofs
 
 // Aggregation methods: median (typical), p90 (extreme), max (absolute hottest)
 export type AggregationMethod = 'median' | 'p90' | 'max';
@@ -59,34 +60,48 @@ interface RasterData {
 
 /**
  * Heat colormap with fixed temperature scale
- * Yellow → Orange gradient for warm temperatures only
+ * Yellow → Orange → Red gradient for warm temperatures only
+ * 
+ * Scale: 20°C (293K) = Light Yellow → 55°C (328K) = Dark Red
+ * Typical summer surface temps: 25-45°C
  */
 export function kelvinToRGBA(kelvin: number): [number, number, number, number] {
-  const range = LST_MAX_K - LST_MIN_K;
+  const range = LST_MAX_K - LST_MIN_K; // 35K range
   const t = Math.max(0, Math.min(1, (kelvin - LST_MIN_K) / range));
   
-  // Yellow (#FDE047) → Orange (#F97316) → Dark Orange (#EA580C)
-  // Warm color palette only - no blue/green
+  // Multi-stop gradient for better differentiation:
+  // 0.0 (20°C) = Light Yellow #FEF9C3
+  // 0.3 (30.5°C) = Yellow #FDE047
+  // 0.5 (37.5°C) = Orange #F97316
+  // 0.7 (44.5°C) = Dark Orange #EA580C
+  // 1.0 (55°C) = Red #DC2626
+  
   let r: number, g: number, b: number;
   
-  if (t < 0.5) {
-    // Light Yellow (#FEF08A) → Yellow (#FACC15)
-    const s = t / 0.5;
-    r = 254;
-    g = Math.round(240 - s * 36); // 240 → 204
-    b = Math.round(138 - s * 117); // 138 → 21
-  } else if (t < 0.75) {
-    // Yellow (#FACC15) → Orange (#F97316)
-    const s = (t - 0.5) / 0.25;
-    r = Math.round(250 - s * 1); // 250 → 249
-    g = Math.round(204 - s * 89); // 204 → 115
-    b = Math.round(21 + s * 1); // 21 → 22
+  if (t < 0.3) {
+    // Light Yellow (#FEF9C3) → Yellow (#FDE047)
+    const s = t / 0.3;
+    r = Math.round(254 - s * 1);   // 254 → 253
+    g = Math.round(249 - s * 25);  // 249 → 224
+    b = Math.round(195 - s * 124); // 195 → 71
+  } else if (t < 0.5) {
+    // Yellow (#FDE047) → Orange (#F97316)
+    const s = (t - 0.3) / 0.2;
+    r = Math.round(253 - s * 4);   // 253 → 249
+    g = Math.round(224 - s * 109); // 224 → 115
+    b = Math.round(71 - s * 49);   // 71 → 22
+  } else if (t < 0.7) {
+    // Orange (#F97316) → Dark Orange (#EA580C)
+    const s = (t - 0.5) / 0.2;
+    r = Math.round(249 - s * 15);  // 249 → 234
+    g = Math.round(115 - s * 27);  // 115 → 88
+    b = Math.round(22 - s * 10);   // 22 → 12
   } else {
-    // Orange (#F97316) → Dark Orange/Red (#DC2626)
-    const s = (t - 0.75) / 0.25;
-    r = Math.round(249 - s * 29); // 249 → 220
-    g = Math.round(115 - s * 77); // 115 → 38
-    b = Math.round(22 + s * 16); // 22 → 38
+    // Dark Orange (#EA580C) → Red (#DC2626)
+    const s = (t - 0.7) / 0.3;
+    r = Math.round(234 - s * 14);  // 234 → 220
+    g = Math.round(88 - s * 50);   // 88 → 38
+    b = Math.round(12 + s * 26);   // 12 → 38
   }
   
   return [r, g, b, 220];

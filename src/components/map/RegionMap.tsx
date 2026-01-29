@@ -23,8 +23,6 @@ export default function RegionMap() {
   const mapRef = useRef<MapRef>(null);
   const { selectedRegion } = useRegion();
   const { activeLayers, mapStyle } = useMapOverlays();
-  
-  // Data
   const { data: tempData } = useDwdTemperature();
   
   const [isMapReady, setIsMapReady] = useState(false);
@@ -33,26 +31,30 @@ export default function RegionMap() {
   // @ts-ignore
   const styleUrl = MAP_STYLES[mapStyle] || MAP_STYLES.LIGHT || MAP_STYLES.light;
 
-  // Init Deck.gl
+  // 1. Initialisierung
   const onMapLoad = useCallback((e: any) => {
     console.log('[RegionMap] Map Loaded');
+    // Wir übergeben das rohe maplibre-Objekt an den Manager
     initDeckOverlay(e.target);
     setIsMapReady(true);
   }, []);
 
+  // 2. Style-Wechsel (z.B. Satellit) zerstört den Canvas -> Re-Init nötig
   const onStyleData = useCallback((e: any) => {
     if (e.dataType === 'style' && mapRef.current) {
       initDeckOverlay(mapRef.current.getMap(), true);
     }
   }, []);
 
+  // 3. Cleanup
   useEffect(() => {
     return () => finalizeDeckOverlay();
   }, []);
 
   return (
     <div className="relative w-full h-full bg-slate-100 overflow-hidden">
-      {/* 1. Die Karte (Hintergrund) */}
+      
+      {/* LAYER A: Die Karte */}
       <Map
         ref={mapRef}
         initialViewState={{
@@ -71,48 +73,40 @@ export default function RegionMap() {
         <NavigationControl position="top-right" style={{ marginRight: '50px' }} />
         <ScaleControl position="bottom-left" />
 
-        {/* --- Native MapLibre Layers (MÜSSEN in <Map> bleiben) --- */}
+        {/* Native Layer (z.B. Punkte) MÜSSEN hier drin sein */}
         <AirTemperatureOverlay 
           visible={activeLayers.includes('air_temperature')}
           data={tempData?.grid}
         />
-        
-        {/* HIER WAREN DIE DECK.GL LAYER - JETZT SIND SIE WEG */}
       </Map>
 
-      {/* --- Logik-Layer (Deck.gl) --- 
-          FIX: Außerhalb von <Map> platzieren, um Ref-Fehler zu vermeiden.
+      {/* LAYER B: Deck.gl Overlays (Logik) 
+          WICHTIG: Diese MÜSSEN hier draußen sein, sonst gibt es Ref-Fehler!
       */}
-      {isMapReady && mapRef.current && (
+      {isMapReady && (
         <>
           <EcostressCompositeOverlay 
-            // Wir übergeben die Map-Instanz explizit
-            // map={mapRef.current.getMap()} -> Nicht zwingend nötig dank Singleton, aber sicherer
             visible={activeLayers.includes('ecostress')}
             regionBbox={selectedRegion?.bbox}
-            allGranules={[]} // Leeres Array -> Triggered den Self-Fetch im Overlay
+            allGranules={[]} 
           />
           <GlobalLSTOverlay visible={activeLayers.includes('global_lst')} />
         </>
       )}
 
-      {/* 2. Die UI Tools */}
-      
-      {/* Sidebar Links */}
+      {/* LAYER C: UI Tools (Overlays) */}
       <div className="absolute top-0 left-0 z-20 h-full p-4 pointer-events-none">
         <div className="pointer-events-auto h-full max-w-md shadow-2xl">
            <RegionSidebar />
         </div>
       </div>
 
-      {/* Layer Control Rechts Oben */}
       <div className="absolute top-4 right-4 z-20 pointer-events-none">
         <div className="pointer-events-auto">
           <LayersControl />
         </div>
       </div>
 
-      {/* Diagnose Panel Unten Rechts */}
       <div className="absolute bottom-10 right-14 z-20 pointer-events-auto">
          <OverlayDiagnosticsPanel />
       </div>

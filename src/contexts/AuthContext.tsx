@@ -69,7 +69,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       // Use get_user_role() database function to fetch role from user_roles table
-      const fetchPromise = supabase.rpc('get_user_role', { _user_id: userId });
+      const fetchPromise = supabase.rpc('get_user_role', { p_user_id: userId });
 
       // Race between fetch and timeout
       const { data: role, error } = await Promise.race([

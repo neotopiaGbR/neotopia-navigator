@@ -52,8 +52,8 @@ END $$;
 
 -- 5. OVERWRITE EXISTING FUNCTION (The Critical Fix)
 -- We replace the body of 'has_role(uuid, text)' to use the new table.
--- This keeps existing RLS policies working without needing DROP CASCADE.
-CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role text)
+-- IMPORTANT: Keep parameter names (p_user_id, p_role) to match existing function signature!
+CREATE OR REPLACE FUNCTION public.has_role(p_user_id uuid, p_role text)
 RETURNS boolean
 LANGUAGE sql
 STABLE
@@ -63,15 +63,15 @@ AS $$
   SELECT EXISTS (
     SELECT 1
     FROM public.user_roles
-    WHERE user_id = _user_id
+    WHERE user_id = p_user_id
       -- We explicitly cast the text input to the enum type
-      AND role = _role::app_role
+      AND role = p_role::app_role
   )
 $$;
 
 -- 6. CREATE TYPED OVERLOAD (Better Safety)
 -- We also add the strict version for future use
-CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role app_role)
+CREATE OR REPLACE FUNCTION public.has_role(p_user_id uuid, p_role app_role)
 RETURNS boolean
 LANGUAGE sql
 STABLE
@@ -81,8 +81,8 @@ AS $$
   SELECT EXISTS (
     SELECT 1
     FROM public.user_roles
-    WHERE user_id = _user_id
-      AND role = _role
+    WHERE user_id = p_user_id
+      AND role = p_role
   )
 $$;
 
@@ -113,7 +113,7 @@ CREATE POLICY "Service role manages roles" ON public.user_roles
   WITH CHECK (true);
 
 -- 8. HELPER FUNCTION: Get user's primary role
-CREATE OR REPLACE FUNCTION public.get_user_role(_user_id uuid)
+CREATE OR REPLACE FUNCTION public.get_user_role(p_user_id uuid)
 RETURNS text
 LANGUAGE sql
 STABLE
@@ -122,7 +122,7 @@ SET search_path = public
 AS $$
   SELECT role::text
   FROM public.user_roles
-  WHERE user_id = _user_id
+  WHERE user_id = p_user_id
   ORDER BY 
     CASE role 
       WHEN 'admin' THEN 1 

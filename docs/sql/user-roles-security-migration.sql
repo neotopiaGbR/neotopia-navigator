@@ -6,9 +6,9 @@
 -- 1. Update AuthContext.tsx to query user_roles instead of profiles.role
 -- 2. Test admin functionality before removing old profiles.role column
 
--- 0. DROP OLD has_role FUNCTION (if exists with text signature)
--- This prevents "function name is not unique" errors
+-- 0. DROP ALL OLD has_role FUNCTIONS (prevents "function name is not unique" errors)
 DROP FUNCTION IF EXISTS public.has_role(uuid, text);
+DROP FUNCTION IF EXISTS public.has_role(uuid, app_role);
 
 -- 1. CREATE ROLE ENUM TYPE (if not exists)
 DO $$ 

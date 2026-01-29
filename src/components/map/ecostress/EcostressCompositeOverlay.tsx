@@ -26,7 +26,7 @@ export default function EcostressCompositeOverlay({
   opacity = 0.8,
   allGranules = [],
   regionBbox,
-  aggregationMethod = 'median',
+  aggregationMethod = 'p90',
 }: Props) {
   const [layerData, setLayerData] = useState<{ image: ImageBitmap; bounds: [number, number, number, number] } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);

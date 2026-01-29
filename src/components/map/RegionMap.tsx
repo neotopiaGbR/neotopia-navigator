@@ -18,7 +18,7 @@ import { GlobalLSTOverlay } from "./GlobalLSTOverlay";
 import { AirTemperatureOverlay } from "./AirTemperatureOverlay";
 import { AirTemperatureLegend } from "./AirTemperatureLegend";
 import { DwdTemperatureHealthCheck } from "./DwdTemperatureHealthCheck";
-import { EcostressCompositeOverlay } from "./ecostress";
+import { EcostressCompositeOverlay, type GranuleData } from "./ecostress";
 
 import { initDeckOverlay, finalizeDeckOverlay } from "./DeckOverlayManager";
 
@@ -245,8 +245,8 @@ const RegionMap: React.FC = () => {
           map={map.current}
           visible
           opacity={heatLayers.ecostressOpacity / 100}
-          allGranules={overlays.ecostress.metadata?.allGranules}
-          regionBbox={overlays.ecostress.metadata?.regionBbox}
+          allGranules={overlays.ecostress.metadata?.allGranules as GranuleData[] | undefined}
+          regionBbox={overlays.ecostress.metadata?.regionBbox as [number, number, number, number] | undefined}
           aggregationMethod={heatLayers.aggregationMethod}
         />
       )}

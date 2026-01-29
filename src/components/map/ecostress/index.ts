@@ -1,4 +1,4 @@
-export { EcostressCompositeOverlay } from './EcostressCompositeOverlay';
+export { default as EcostressCompositeOverlay } from './EcostressCompositeOverlay';
 export { 
   createComposite, 
   imageDataToDataUrl, 

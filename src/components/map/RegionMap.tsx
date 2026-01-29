@@ -137,6 +137,7 @@ export default function RegionMap() {
   const monthlyData = useDwdMonthlyTemperature({
     lat: regionCenter?.lat ?? null,
     lon: regionCenter?.lon ?? null,
+    year: tempData?.year ?? null,
     enabled: airTemperature.enabled && !!selectedRegion,
   });
 

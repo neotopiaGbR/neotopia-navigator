@@ -16,6 +16,7 @@ export interface DeckLayerConfig {
 let overlayInstance: MapboxOverlay | null = null;
 let attachedMap: MapLibreMap | null = null;
 let currentLayers: Map<string, DeckLayerConfig> = new Map();
+let overlayContainerEl: HTMLElement | null = null;
 
 // CSS Injection um Canvas sichtbar zu machen
 function injectCSS() {
@@ -25,8 +26,10 @@ function injectCSS() {
     const s = document.createElement('style');
     s.id = id;
     s.textContent = `
-      .maplibregl-map canvas.deckgl-canvas {
-        z-index: 5 !important;
+      .maplibregl-map canvas.deckgl-canvas,
+      .maplibregl-map canvas.deck-canvas,
+      .maplibregl-map canvas[data-deck] {
+        z-index: 20 !important;
         pointer-events: none !important;
         opacity: 1 !important;
       }
@@ -41,7 +44,18 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
   injectCSS();
   
   if (overlayInstance) {
-    try { overlayInstance.finalize(); } catch(e) {}
+    try {
+      if (attachedMap) {
+        // If we attached manually, detach first.
+        try { (overlayInstance as any).onRemove(attachedMap as any); } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+    try { overlayInstance.finalize(); } catch { /* ignore */ }
+  }
+
+  if (overlayContainerEl) {
+    try { overlayContainerEl.remove(); } catch { /* ignore */ }
+    overlayContainerEl = null;
   }
 
   overlayInstance = new MapboxOverlay({
@@ -49,7 +63,25 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
     layers: []
   });
 
-  map.addControl(overlayInstance as any);
+  // NOTE: In this project we attach deck manually to avoid MapLibre control/lifecycle edge cases
+  // (canvas occasionally not visible / lost on style changes).
+  try {
+    const container = map.getContainer();
+    overlayContainerEl = overlayInstance.onAdd(map as any) as unknown as HTMLElement;
+    overlayContainerEl.classList.add('deckgl-overlay-container');
+    // Ensure the container sits above the map canvas.
+    overlayContainerEl.style.position = 'absolute';
+    overlayContainerEl.style.top = '0';
+    overlayContainerEl.style.left = '0';
+    overlayContainerEl.style.right = '0';
+    overlayContainerEl.style.bottom = '0';
+    overlayContainerEl.style.pointerEvents = 'none';
+    overlayContainerEl.style.zIndex = '20';
+    container.appendChild(overlayContainerEl);
+  } catch (err) {
+    // Fallback to standard control mounting
+    map.addControl(overlayInstance as any);
+  }
   attachedMap = map;
   
   rebuildLayers();
@@ -95,10 +127,20 @@ function rebuildLayers() {
 }
 
 export function finalizeDeckOverlay() {
-  if (overlayInstance) overlayInstance.finalize();
+  if (overlayInstance && attachedMap) {
+    try { (overlayInstance as any).onRemove(attachedMap as any); } catch { /* ignore */ }
+  }
+  if (overlayInstance) {
+    try { overlayInstance.finalize(); } catch { /* ignore */ }
+  }
   overlayInstance = null;
   attachedMap = null;
   currentLayers.clear();
+
+  if (overlayContainerEl) {
+    try { overlayContainerEl.remove(); } catch { /* ignore */ }
+    overlayContainerEl = null;
+  }
 }
 
 export function isReady(): boolean {
@@ -112,7 +154,9 @@ export function getAttachedMap() {
 export function getDiagnostics() {
   const canvas = attachedMap?.getCanvas?.();
   const container = attachedMap?.getContainer?.();
-  const deckCanvas = container?.querySelector?.('canvas.deckgl-canvas') as HTMLCanvasElement | null;
+  const deckCanvas = container?.querySelector?.(
+    'canvas.deckgl-canvas, canvas[id*="deck"], canvas.deck-canvas, canvas[data-deck]'
+  ) as HTMLCanvasElement | null;
   
   return {
     initialized: !!overlayInstance,

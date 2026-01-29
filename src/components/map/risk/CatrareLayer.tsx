@@ -1,8 +1,9 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { updateLayer, removeLayer } from '../DeckOverlayManager';
 import { getCatrarePmtilesUrl, getCatrareGeoJsonUrl, CATRARE_WARNING_COLORS, type CatrareEventProperties } from './RiskLayersConfig';
 import { toast } from '@/hooks/use-toast';
 import { PMTiles } from 'pmtiles';
+import { devLog } from '@/lib/geoUtils';
 
 interface CatrareLayerProps {
   visible: boolean;
@@ -40,12 +41,10 @@ export default function CatrareLayer({
   opacity = 0.6,
   onEventHover,
 }: CatrareLayerProps) {
-  const [dataSource, setDataSource] = useState<'pmtiles' | 'geojson' | null>(null);
-  const [geoJsonData, setGeoJsonData] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [pmtilesUrl, setPmtilesUrl] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
+  const dataSourceRef = useRef<'pmtiles' | 'geojson' | null>(null);
+  const geoJsonDataRef = useRef<GeoJSON.FeatureCollection | null>(null);
+  const pmtilesUrlRef = useRef<string>('');
+  const isLoadingRef = useRef(false);
   const loadIdRef = useRef(0);
   const hasAttemptedRef = useRef(false);
 
@@ -56,7 +55,7 @@ export default function CatrareLayer({
       return;
     }
 
-    if (hasAttemptedRef.current && (dataSource === 'pmtiles' || geoJsonData)) {
+    if (hasAttemptedRef.current && (dataSourceRef.current === 'pmtiles' || geoJsonDataRef.current)) {
       return; // Already loaded
     }
 
@@ -64,13 +63,14 @@ export default function CatrareLayer({
   }, [visible]);
 
   const initDataSource = useCallback(async () => {
+    if (isLoadingRef.current) return;
+    
     const loadId = ++loadIdRef.current;
-    setIsLoading(true);
-    setError(null);
+    isLoadingRef.current = true;
     hasAttemptedRef.current = true;
 
     const pmtilesFullUrl = getCatrarePmtilesUrl();
-    console.log(`[CatrareLayer] Loading PMTiles: ${pmtilesFullUrl}`);
+    devLog('CatrareLayer', `Loading PMTiles: ${pmtilesFullUrl}`);
 
     try {
       // Validate PMTiles file
@@ -79,18 +79,23 @@ export default function CatrareLayer({
 
       if (loadId !== loadIdRef.current) return;
 
-      console.log(`[CatrareLayer] PMTiles valid: z${header.minZoom}-${header.maxZoom}, ${header.numAddressedTiles} tiles`);
+      devLog('CatrareLayer', `PMTiles valid: z${header.minZoom}-${header.maxZoom}, ${header.numAddressedTiles} tiles`);
 
-      setPmtilesUrl(pmtilesFullUrl);
-      setDataSource('pmtiles');
-      setIsLoading(false);
+      pmtilesUrlRef.current = pmtilesFullUrl;
+      dataSourceRef.current = 'pmtiles';
+      isLoadingRef.current = false;
+      
+      // Register the layer
+      registerPmtilesLayer(pmtilesFullUrl, opacity);
     } catch (err) {
-      console.warn('[CatrareLayer] PMTiles not available, falling back to GeoJSON:', err);
+      if (import.meta.env.DEV) {
+        console.warn('[CatrareLayer] PMTiles not available, falling back to GeoJSON:', err);
+      }
 
       // Fallback to GeoJSON
       try {
         const geojsonUrl = getCatrareGeoJsonUrl();
-        console.log(`[CatrareLayer] Falling back to GeoJSON: ${geojsonUrl}`);
+        devLog('CatrareLayer', `Falling back to GeoJSON: ${geojsonUrl}`);
 
         const response = await fetch(geojsonUrl);
 
@@ -102,17 +107,20 @@ export default function CatrareLayer({
 
         if (loadId !== loadIdRef.current) return;
 
-        console.log(`[CatrareLayer] Loaded ${data.features?.length || 0} events from GeoJSON`);
+        devLog('CatrareLayer', `Loaded ${data.features?.length || 0} events from GeoJSON`);
 
-        setGeoJsonData(data);
-        setDataSource('geojson');
-        setIsLoading(false);
+        geoJsonDataRef.current = data;
+        dataSourceRef.current = 'geojson';
+        isLoadingRef.current = false;
+        
+        // Register the layer
+        registerGeoJsonLayer(data, opacity);
       } catch (fallbackErr) {
-        console.error('[CatrareLayer] Both PMTiles and GeoJSON failed:', fallbackErr);
+        if (import.meta.env.DEV) {
+          console.error('[CatrareLayer] Both PMTiles and GeoJSON failed:', fallbackErr);
+        }
 
-        const message = fallbackErr instanceof Error ? fallbackErr.message : 'Unbekannter Fehler';
-        setError(message);
-        setIsLoading(false);
+        isLoadingRef.current = false;
 
         toast({
           title: 'CatRaRE-Daten nicht verfügbar',
@@ -121,68 +129,75 @@ export default function CatrareLayer({
         });
       }
     }
+  }, [opacity]);
+
+  // Register PMTiles layer
+  const registerPmtilesLayer = useCallback((url: string, layerOpacity: number) => {
+    devLog('CatrareLayer', 'Registering MVTLayer for PMTiles');
+
+    updateLayer({
+      id: LAYER_ID,
+      type: 'mvt',
+      visible: true,
+      opacity: layerOpacity,
+      pmtilesUrl: url,
+      layerName: 'catrare',
+      styleConfig: {
+        getFillColor: (feature: any) => {
+          const warningLevel = feature.properties?.WARNSTUFE || 3;
+          const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
+          return hexToRGBA(hex, 0.4);
+        },
+        getLineColor: (feature: any) => {
+          const warningLevel = feature.properties?.WARNSTUFE || 3;
+          const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
+          return hexToRGBA(hex, 1);
+        },
+        lineWidth: 2,
+        pickable: true,
+      },
+    } as any);
   }, []);
 
-  // Register layer based on data source
+  // Register GeoJSON layer
+  const registerGeoJsonLayer = useCallback((data: GeoJSON.FeatureCollection, layerOpacity: number) => {
+    devLog('CatrareLayer', 'Registering GeoJsonLayer (fallback)');
+
+    updateLayer({
+      id: LAYER_ID,
+      type: 'geojson',
+      visible: true,
+      opacity: layerOpacity,
+      data: data,
+      styleConfig: {
+        getFillColor: (feature: GeoJSON.Feature) => {
+          const props = feature.properties as CatrareEventProperties;
+          const warningLevel = props?.WARNSTUFE || 3;
+          const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
+          return hexToRGBA(hex, 0.4);
+        },
+        getLineColor: (feature: GeoJSON.Feature) => {
+          const props = feature.properties as CatrareEventProperties;
+          const warningLevel = props?.WARNSTUFE || 3;
+          const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
+          return hexToRGBA(hex, 1);
+        },
+        lineWidth: 2,
+        pickable: true,
+      },
+    } as any);
+  }, []);
+
+  // Update layer when opacity changes
   useEffect(() => {
-    if (!visible || !dataSource) {
-      removeLayer(LAYER_ID);
-      return;
+    if (!visible || !dataSourceRef.current) return;
+    
+    if (dataSourceRef.current === 'pmtiles' && pmtilesUrlRef.current) {
+      registerPmtilesLayer(pmtilesUrlRef.current, opacity);
+    } else if (dataSourceRef.current === 'geojson' && geoJsonDataRef.current) {
+      registerGeoJsonLayer(geoJsonDataRef.current, opacity);
     }
-
-    if (dataSource === 'pmtiles' && pmtilesUrl) {
-      console.log('[CatrareLayer] Registering MVTLayer for PMTiles');
-
-      updateLayer({
-        id: LAYER_ID,
-        type: 'mvt',
-        visible: true,
-        opacity,
-        pmtilesUrl,
-        layerName: 'catrare',
-        styleConfig: {
-          getFillColor: (feature: any) => {
-            const warningLevel = feature.properties?.WARNSTUFE || 3;
-            const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
-            return hexToRGBA(hex, 0.4);
-          },
-          getLineColor: (feature: any) => {
-            const warningLevel = feature.properties?.WARNSTUFE || 3;
-            const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
-            return hexToRGBA(hex, 1);
-          },
-          lineWidth: 2,
-          pickable: true,
-        },
-      } as any);
-    } else if (dataSource === 'geojson' && geoJsonData) {
-      console.log('[CatrareLayer] Registering GeoJsonLayer (fallback)');
-
-      updateLayer({
-        id: LAYER_ID,
-        type: 'geojson',
-        visible: true,
-        opacity,
-        data: geoJsonData,
-        styleConfig: {
-          getFillColor: (feature: GeoJSON.Feature) => {
-            const props = feature.properties as CatrareEventProperties;
-            const warningLevel = props?.WARNSTUFE || 3;
-            const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
-            return hexToRGBA(hex, 0.4);
-          },
-          getLineColor: (feature: GeoJSON.Feature) => {
-            const props = feature.properties as CatrareEventProperties;
-            const warningLevel = props?.WARNSTUFE || 3;
-            const hex = CATRARE_WARNING_COLORS[warningLevel as keyof typeof CATRARE_WARNING_COLORS] || CATRARE_WARNING_COLORS[3];
-            return hexToRGBA(hex, 1);
-          },
-          lineWidth: 2,
-          pickable: true,
-        },
-      } as any);
-    }
-  }, [visible, dataSource, pmtilesUrl, geoJsonData, opacity]);
+  }, [visible, opacity, registerPmtilesLayer, registerGeoJsonLayer]);
 
   // Cleanup on unmount
   useEffect(() => {

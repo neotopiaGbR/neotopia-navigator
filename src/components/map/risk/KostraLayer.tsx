@@ -1,8 +1,9 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { updateLayer, removeLayer } from '../DeckOverlayManager';
 import { getKostraPmtilesUrl, type KostraDuration, type KostraReturnPeriod } from './RiskLayersConfig';
 import { toast } from '@/hooks/use-toast';
 import { PMTiles } from 'pmtiles';
+import { devLog } from '@/lib/geoUtils';
 
 interface KostraLayerProps {
   visible: boolean;
@@ -13,7 +14,7 @@ interface KostraLayerProps {
 
 const LAYER_ID = 'kostra-precipitation';
 
-// Track if we've logged properties (for debugging)
+// Track if we've logged properties (development only)
 let hasLoggedProps = false;
 
 /**
@@ -45,10 +46,8 @@ export default function KostraLayer({
   duration,
   returnPeriod,
 }: KostraLayerProps) {
-  const [pmtilesUrl, setPmtilesUrl] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
+  const pmtilesUrlRef = useRef<string>('');
+  const isLoadingRef = useRef(false);
   const loadIdRef = useRef(0);
   const hasAttemptedRef = useRef(false);
 
@@ -59,7 +58,7 @@ export default function KostraLayer({
       return;
     }
 
-    if (hasAttemptedRef.current && pmtilesUrl) {
+    if (hasAttemptedRef.current && pmtilesUrlRef.current) {
       return; // Already loaded
     }
 
@@ -67,13 +66,14 @@ export default function KostraLayer({
   }, [visible, duration, returnPeriod]);
 
   const initDataSource = useCallback(async () => {
+    if (isLoadingRef.current) return;
+    
     const loadId = ++loadIdRef.current;
-    setIsLoading(true);
-    setError(null);
+    isLoadingRef.current = true;
     hasAttemptedRef.current = true;
 
     const url = getKostraPmtilesUrl(duration, returnPeriod);
-    console.log(`[KostraLayer] Loading PMTiles: ${url}`);
+    devLog('KostraLayer', `Loading PMTiles: ${url}`);
 
     try {
       // Validate PMTiles file
@@ -82,16 +82,19 @@ export default function KostraLayer({
 
       if (loadId !== loadIdRef.current) return;
 
-      console.log(`[KostraLayer] PMTiles valid: z${header.minZoom}-${header.maxZoom}, ${header.numAddressedTiles} tiles`);
+      devLog('KostraLayer', `PMTiles valid: z${header.minZoom}-${header.maxZoom}, ${header.numAddressedTiles} tiles`);
 
-      setPmtilesUrl(url);
-      setIsLoading(false);
+      pmtilesUrlRef.current = url;
+      isLoadingRef.current = false;
+      
+      // Trigger re-render by updating the layer
+      registerLayer(url, opacity);
     } catch (err) {
-      console.error('[KostraLayer] Failed to load PMTiles:', err);
+      if (import.meta.env.DEV) {
+        console.error('[KostraLayer] Failed to load PMTiles:', err);
+      }
 
-      const message = err instanceof Error ? err.message : 'Unbekannter Fehler';
-      setError(message);
-      setIsLoading(false);
+      isLoadingRef.current = false;
 
       toast({
         title: 'KOSTRA-Daten nicht verfügbar',
@@ -99,30 +102,27 @@ export default function KostraLayer({
         variant: 'destructive',
       });
     }
-  }, [duration, returnPeriod]);
+  }, [duration, returnPeriod, opacity]);
 
-  // Register layer when URL is available
-  useEffect(() => {
-    if (!visible || !pmtilesUrl) {
-      removeLayer(LAYER_ID);
-      return;
-    }
-
-    console.log('[KostraLayer] Registering MVTLayer for PMTiles');
+  // Register layer function
+  const registerLayer = useCallback((url: string, layerOpacity: number) => {
+    if (!url) return;
+    
+    devLog('KostraLayer', 'Registering MVTLayer for PMTiles');
 
     updateLayer({
       id: LAYER_ID,
       type: 'mvt',
       visible: true,
-      opacity,
-      pmtilesUrl,
+      opacity: layerOpacity,
+      pmtilesUrl: url,
       layerName: 'kostra',
       styleConfig: {
         getFillColor: (feature: any) => {
           const props = feature.properties || {};
 
-          // Debug: Log available properties for first feature
-          if (!hasLoggedProps) {
+          // Debug: Log available properties for first feature (dev only)
+          if (!hasLoggedProps && import.meta.env.DEV) {
             console.log('[KostraLayer] Feature properties:', Object.keys(props));
             hasLoggedProps = true;
           }
@@ -136,7 +136,14 @@ export default function KostraLayer({
         pickable: true,
       },
     } as any);
-  }, [visible, pmtilesUrl, opacity]);
+  }, []);
+
+  // Update layer when opacity changes
+  useEffect(() => {
+    if (visible && pmtilesUrlRef.current) {
+      registerLayer(pmtilesUrlRef.current, opacity);
+    }
+  }, [visible, opacity, registerLayer]);
 
   // Cleanup on unmount
   useEffect(() => {

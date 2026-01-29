@@ -5,6 +5,11 @@ import { MVTLayer } from '@deck.gl/geo-layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { COORDINATE_SYSTEM } from '@deck.gl/core';
 
+// Development-only logging
+const DEV = import.meta.env.DEV;
+const log = (msg: string, ...args: unknown[]) => DEV && console.log(`[DeckOverlayManager] ${msg}`, ...args);
+const warn = (msg: string, ...args: unknown[]) => DEV && console.warn(`[DeckOverlayManager] ${msg}`, ...args);
+
 export interface DeckLayerConfig {
   id: string;
   type: 'bitmap' | 'scatterplot' | 'geojson' | 'tile' | 'mvt';
@@ -33,9 +38,10 @@ export interface DeckLayerConfig {
   layerName?: string;
 }
 
+// Singleton state - managed carefully to prevent memory leaks
 let overlayInstance: MapboxOverlay | null = null;
 let attachedMap: MapLibreMap | null = null;
-let currentLayers: Map<string, DeckLayerConfig> = new Map();
+const currentLayers: Map<string, DeckLayerConfig> = new Map();
 let overlayContainerEl: HTMLElement | null = null;
 
 // CSS Injection um Canvas sichtbar zu machen
@@ -63,6 +69,7 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
 
   injectCSS();
   
+  // Clean up existing overlay
   if (overlayInstance) {
     try {
       if (attachedMap) {
@@ -101,30 +108,26 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
     }
     
     canvasContainer.appendChild(overlayContainerEl);
-    console.log('[DeckOverlayManager] Attached to canvasContainer, canvas size:', mapCanvas?.width, 'x', mapCanvas?.height);
+    log('Attached to canvasContainer, canvas size:', mapCanvas?.width, 'x', mapCanvas?.height);
   } catch (err) {
-    console.warn('[DeckOverlayManager] Manual attach failed, using addControl fallback:', err);
+    warn('Manual attach failed, using addControl fallback:', err);
     map.addControl(overlayInstance as any);
   }
   attachedMap = map;
   
   rebuildLayers();
-  console.log('[DeckOverlayManager] Initialized');
+  log('Initialized');
 }
 
 export function updateLayer(config: DeckLayerConfig) {
-  console.log(`[DeckOverlayManager] updateLayer: ${config.id}`, {
-    type: config.type,
-    visible: config.visible,
-    opacity: config.opacity,
-  });
+  log(`updateLayer: ${config.id}`, { type: config.type, visible: config.visible, opacity: config.opacity });
   currentLayers.set(config.id, config);
   rebuildLayers();
 }
 
 export function removeLayer(id: string) {
   if (currentLayers.has(id)) {
-    console.log(`[DeckOverlayManager] removeLayer: ${id}`);
+    log(`removeLayer: ${id}`);
     currentLayers.delete(id);
     rebuildLayers();
   }
@@ -132,7 +135,7 @@ export function removeLayer(id: string) {
 
 function rebuildLayers() {
   if (!overlayInstance) {
-    console.warn('[DeckOverlayManager] rebuildLayers called but overlayInstance is null');
+    warn('rebuildLayers called but overlayInstance is null');
     return;
   }
 
@@ -142,7 +145,7 @@ function rebuildLayers() {
     .map(c => {
       // BitmapLayer for raster data
       if (c.type === 'bitmap' && c.image && c.bounds) {
-        console.log(`[DeckOverlayManager] Building BitmapLayer: ${c.id}`);
+        log(`Building BitmapLayer: ${c.id}`);
         return new BitmapLayer({
           id: c.id,
           image: c.image,
@@ -158,7 +161,7 @@ function rebuildLayers() {
       
       // GeoJsonLayer for vector data
       if (c.type === 'geojson' && c.data) {
-        console.log(`[DeckOverlayManager] Building GeoJsonLayer: ${c.id}`);
+        log(`Building GeoJsonLayer: ${c.id}`);
         
         const style = c.styleConfig || {};
         return new GeoJsonLayer({
@@ -182,7 +185,7 @@ function rebuildLayers() {
       
       // TileLayer for COG streaming (KOSTRA)
       if (c.type === 'tile' && c.tileUrl && c.loadTile) {
-        console.log(`[DeckOverlayManager] Building TileLayer (COG): ${c.id}`);
+        log(`Building TileLayer (COG): ${c.id}`);
         
         const tileBounds = c.tileBounds || { west: 5.87, south: 47.27, east: 15.04, north: 55.06 };
         
@@ -200,13 +203,13 @@ function rebuildLayers() {
               const result = await c.loadTile!({ bbox, z });
               return result;
             } catch (err) {
-              console.warn(`[DeckOverlayManager] Tile load failed:`, err);
+              warn(`Tile load failed:`, err);
               return null;
             }
           },
           
           renderSubLayers: (props: any) => {
-            const { data, tile } = props;
+            const { data } = props;
             if (!data || !data.image) return null;
             
             return new BitmapLayer({
@@ -226,7 +229,7 @@ function rebuildLayers() {
       
       // MVTLayer for PMTiles streaming (CatRaRE)
       if (c.type === 'mvt' && c.pmtilesUrl) {
-        console.log(`[DeckOverlayManager] Building MVTLayer (PMTiles): ${c.id}`);
+        log(`Building MVTLayer (PMTiles): ${c.id}`);
         
         const style = c.styleConfig || {};
         
@@ -260,19 +263,17 @@ function rebuildLayers() {
           
           // Handle errors gracefully
           onTileError: (err: any) => {
-            console.warn(`[DeckOverlayManager] MVT tile error:`, err);
+            warn(`MVT tile error:`, err);
           },
         });
       }
       
-      console.warn(`[DeckOverlayManager] Skipping layer ${c.id}: unsupported type or missing data`, {
-        type: c.type,
-      });
+      warn(`Skipping layer ${c.id}: unsupported type or missing data`, { type: c.type });
       return null;
     })
     .filter(Boolean);
 
-  console.log(`[DeckOverlayManager] setProps with ${layers.length} layers:`, layers.map((l: any) => l.id));
+  log(`setProps with ${layers.length} layers:`, layers.map((l: any) => l.id));
   overlayInstance.setProps({ layers });
 }
 

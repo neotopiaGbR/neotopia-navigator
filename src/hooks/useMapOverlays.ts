@@ -9,6 +9,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useMapLayers } from '@/components/map/MapLayersContext';
 import { useRegion } from '@/contexts/RegionContext';
+import { getCentroidFromGeom, getBboxFromGeom, devLog } from '@/lib/geoUtils';
 
 interface NearestCandidate {
   granule_id: string;
@@ -92,7 +93,7 @@ export function useMapOverlays() {
 
   // Fetch ECOSTRESS data when overlay is enabled
   const fetchEcostress = useCallback(async () => {
-    console.log('[useMapOverlays] fetchEcostress called', { 
+    devLog('useMapOverlays', 'fetchEcostress called', { 
       selectedRegionId: selectedRegion?.id,
       hasGeom: !!selectedRegion?.geom,
       enabled: overlays.ecostress.enabled 
@@ -110,7 +111,7 @@ export function useMapOverlays() {
       return;
     }
 
-    // Get centroid and bbox from geometry
+    // Get centroid and bbox from geometry using shared utils
     const coords = getCentroidFromGeom(selectedRegion.geom);
     const bbox = getBboxFromGeom(selectedRegion.geom);
     
@@ -120,14 +121,14 @@ export function useMapOverlays() {
     }
 
     const fetchKey = `${coords.lat.toFixed(3)},${coords.lon.toFixed(3)}`;
-    console.log('[useMapOverlays] ECOSTRESS query:', { 
+    devLog('useMapOverlays', 'ECOSTRESS query:', { 
       centroid: { lat: coords.lat.toFixed(4), lon: coords.lon.toFixed(4) },
       bbox,
       regionId: selectedRegion.id,
     });
     
     if (lastFetchRef.current.ecostress === fetchKey) {
-      console.log('[useMapOverlays] Skipping ECOSTRESS fetch - already fetched for this region');
+      devLog('useMapOverlays', 'Skipping ECOSTRESS fetch - already fetched for this region');
       return;
     }
 
@@ -154,7 +155,7 @@ export function useMapOverlays() {
       }
 
       const response = data as EcostressResponse;
-      console.log('[useMapOverlays] ECOSTRESS response:', { status: response.status, hasMatch: !!response.cog_url });
+      devLog('useMapOverlays', 'ECOSTRESS response:', { status: response.status, hasMatch: !!response.cog_url });
 
       if (response.status === 'auth_required') {
         setOverlayError('ecostress', 'ECOSTRESS erfordert Earthdata-Zugangsdaten in Supabase Secrets');
@@ -218,7 +219,9 @@ export function useMapOverlays() {
       setOverlayError('ecostress', 'Unbekannter Antwortstatus');
       
     } catch (err) {
-      console.error('[useMapOverlays] ECOSTRESS error:', err);
+      if (import.meta.env.DEV) {
+        console.error('[useMapOverlays] ECOSTRESS error:', err);
+      }
       setOverlayError(
         'ecostress',
         err instanceof Error ? err.message : 'Fehler beim Laden der ECOSTRESS-Daten'
@@ -228,7 +231,7 @@ export function useMapOverlays() {
 
   // Fetch Flood Risk layers when overlay is enabled
   const fetchFloodRisk = useCallback(async () => {
-    console.log('[useMapOverlays] fetchFloodRisk called', { 
+    devLog('useMapOverlays', 'fetchFloodRisk called', { 
       selectedRegionId: selectedRegion?.id,
       hasGeom: !!selectedRegion?.geom,
       enabled: overlays.floodRisk.enabled 
@@ -246,6 +249,7 @@ export function useMapOverlays() {
       return;
     }
 
+    // Use shared geometry utilities
     const coords = getCentroidFromGeom(selectedRegion.geom);
     if (!coords) {
       setOverlayError('floodRisk', 'Region-Geometrie ungültig');
@@ -289,10 +293,12 @@ export function useMapOverlays() {
         selectedReturnPeriod: response.default_return_period || 100,
         message: response.message,
       });
-      console.log('[useMapOverlays] Flood risk layers loaded:', response.layers.length);
+      devLog('useMapOverlays', 'Flood risk layers loaded:', response.layers.length);
       setOverlayLoading('floodRisk', false);
     } catch (err) {
-      console.error('[useMapOverlays] Flood risk error:', err);
+      if (import.meta.env.DEV) {
+        console.error('[useMapOverlays] Flood risk error:', err);
+      }
       setOverlayError(
         'floodRisk',
         err instanceof Error ? err.message : 'Fehler beim Laden der Hochwasser-Daten'
@@ -353,80 +359,3 @@ export function useMapOverlays() {
   };
 }
 
-// Utility to get centroid from GeoJSON geometry
-function getCentroidFromGeom(geom: GeoJSON.Geometry): { lat: number; lon: number } | null {
-  try {
-    if (geom.type === 'Point') {
-      return { lon: geom.coordinates[0], lat: geom.coordinates[1] };
-    }
-
-    if (geom.type === 'Polygon') {
-      const coords = geom.coordinates[0];
-      const sumLon = coords.reduce((sum, c) => sum + c[0], 0);
-      const sumLat = coords.reduce((sum, c) => sum + c[1], 0);
-      return { lon: sumLon / coords.length, lat: sumLat / coords.length };
-    }
-
-    if (geom.type === 'MultiPolygon') {
-      let totalLon = 0;
-      let totalLat = 0;
-      let count = 0;
-      for (const polygon of geom.coordinates) {
-        for (const coord of polygon[0]) {
-          totalLon += coord[0];
-          totalLat += coord[1];
-          count++;
-        }
-      }
-      if (count === 0) return null;
-      return { lon: totalLon / count, lat: totalLat / count };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// Utility to get bounding box from GeoJSON geometry
-function getBboxFromGeom(geom: GeoJSON.Geometry): [number, number, number, number] | null {
-  try {
-    let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
-
-    function processCoords(coords: number[]) {
-      if (coords[0] < minLon) minLon = coords[0];
-      if (coords[0] > maxLon) maxLon = coords[0];
-      if (coords[1] < minLat) minLat = coords[1];
-      if (coords[1] > maxLat) maxLat = coords[1];
-    }
-
-    if (geom.type === 'Point') {
-      processCoords(geom.coordinates);
-    } else if (geom.type === 'Polygon') {
-      for (const ring of geom.coordinates) {
-        for (const coord of ring) {
-          processCoords(coord);
-        }
-      }
-    } else if (geom.type === 'MultiPolygon') {
-      for (const polygon of geom.coordinates) {
-        for (const ring of polygon) {
-          for (const coord of ring) {
-            processCoords(coord);
-          }
-        }
-      }
-    }
-
-    if (minLon === Infinity) return null;
-    return [minLon, minLat, maxLon, maxLat];
-  } catch {
-    return null;
-  }
-}
-
-function getDateDaysAgo(days: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() - days);
-  return date.toISOString().split('T')[0];
-}

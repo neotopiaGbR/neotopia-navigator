@@ -7,6 +7,8 @@ export interface GridPoint {
 }
 
 export function gridToGeoJson(grid: GridPoint[]): FeatureCollection<Point> {
+  if (!Array.isArray(grid)) return { type: 'FeatureCollection', features: [] };
+
   return {
     type: 'FeatureCollection',
     features: grid.map((point, index) => ({
@@ -14,8 +16,8 @@ export function gridToGeoJson(grid: GridPoint[]): FeatureCollection<Point> {
       id: index,
       geometry: {
         type: 'Point',
-        // CRITICAL FIX: GeoJSON requires [Longitude, Latitude] (X, Y)
-        // If this was [lat, lon], data would appear in Somalia/Indian Ocean
+        // ARCHITECT FIX: GeoJSON is ALWAYS [Lon, Lat] (X, Y).
+        // Never swap this order.
         coordinates: [point.lon, point.lat], 
       },
       properties: {

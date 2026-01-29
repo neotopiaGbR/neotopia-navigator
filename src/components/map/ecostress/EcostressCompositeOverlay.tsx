@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { updateLayer, removeLayer } from '../DeckOverlayManager';
-import { createComposite } from './compositeUtils';
+import { createComposite, type AggregationMethod } from './compositeUtils';
 import { supabase } from '@/integrations/supabase/client';
 
 interface Props {
@@ -8,6 +8,7 @@ interface Props {
   opacity?: number;
   allGranules?: any[];
   regionBbox?: [number, number, number, number];
+  aggregationMethod?: AggregationMethod;
 }
 
 // NUR "export function", KEIN "export default"
@@ -16,6 +17,7 @@ export function EcostressCompositeOverlay({
   opacity = 0.8,
   allGranules = [],
   regionBbox,
+  aggregationMethod = 'median',
 }: Props) {
   const [internalGranules, setInternalGranules] = useState<any[]>([]);
   const [layerData, setLayerData] = useState<{ image: ImageBitmap; bounds: any } | null>(null);
@@ -67,7 +69,7 @@ export function EcostressCompositeOverlay({
 
     async function generate() {
       try {
-        const result = await createComposite(granulesToUse, regionBbox!, 'median');
+        const result = await createComposite(granulesToUse, regionBbox!, aggregationMethod);
         if (!active || !result) return;
 
         const cvs = document.createElement('canvas');
@@ -96,7 +98,7 @@ export function EcostressCompositeOverlay({
         active = false;
         if (layerData?.image) layerData.image.close();
     };
-  }, [visible, regionBbox, allGranules, internalGranules]);
+  }, [visible, regionBbox, allGranules, internalGranules, aggregationMethod]);
 
   // 3. Update Deck
   useEffect(() => {

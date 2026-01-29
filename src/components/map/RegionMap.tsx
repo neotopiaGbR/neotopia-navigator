@@ -268,6 +268,8 @@ export default function RegionMap() {
           regionName={selectedRegion?.name}
           monthlyValues={monthlyData.values}
           monthlyLoading={monthlyData.loading}
+          monthlyYear={monthlyData.year}
+          monthlyIsFallback={monthlyData.isFallback}
         />
       </div>
 

@@ -31,7 +31,9 @@ const HeatLegend: React.FC<HeatLegendProps> = ({
   if (!visible) return null;
 
   const aggregationLabel = 
-    aggregationMethod === 'max' ? 'Maximum' : '90. Perzentil';
+    aggregationMethod === 'max' ? 'Maximum' 
+    : aggregationMethod === 'median' ? 'Median (Kontrolle)'
+    : '90. Perzentil';
 
   // Convert Kelvin to Celsius for display
   const meanCelsius = meanTemperature ? (meanTemperature - 273.15).toFixed(1) : null;

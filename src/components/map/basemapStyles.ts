@@ -1,128 +1,88 @@
-import type { StyleSpecification } from 'maplibre-gl';
-import { BasemapType } from './MapLayersContext';
+/**
+ * Map Style Definitions & Color Utilities
+ */
 
-// Dark Carto basemap (default)
-export const DARK_STYLE: StyleSpecification = {
-  version: 8,
-  name: 'Dark',
-  sources: {
-    'carto-dark': {
-      type: 'raster',
-      tiles: [
-        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-      ],
-      tileSize: 256,
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    },
-  },
-  layers: [
-    {
-      id: 'carto-dark-layer',
-      type: 'raster',
-      source: 'carto-dark',
-      minzoom: 0,
-      maxzoom: 22,
-    },
-  ],
+// Standard Map Styles (Light/Dark/Satellite)
+export const MAP_STYLES = {
+  LIGHT: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+  DARK: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  SATELLITE: 'https://api.maptiler.com/maps/satellite/style.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL',
 };
 
-// Satellite basemap using ESRI World Imagery (free tier)
-export const SATELLITE_STYLE: StyleSpecification = {
-  version: 8,
-  name: 'Satellite',
-  sources: {
-    'esri-satellite': {
-      type: 'raster',
-      tiles: [
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      ],
-      tileSize: 256,
-      attribution: '&copy; Esri, Maxar, Earthstar Geographics',
-      maxzoom: 19,
-    },
-  },
-  layers: [
-    {
-      id: 'esri-satellite-layer',
-      type: 'raster',
-      source: 'esri-satellite',
-      minzoom: 0,
-      maxzoom: 22,
-    },
-  ],
-};
+// Fallback color if something goes wrong
+export const DEFAULT_COLOR = '#ccc';
 
-// Terrain basemap using Stadia Outdoors
-export const TERRAIN_STYLE: StyleSpecification = {
-  version: 8,
-  name: 'Terrain',
-  sources: {
-    'stadia-terrain': {
-      type: 'raster',
-      tiles: [
-        'https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}@2x.png',
-      ],
-      tileSize: 256,
-      attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://stamen.com/">Stamen</a>',
-    },
-  },
-  layers: [
-    {
-      id: 'stadia-terrain-layer',
-      type: 'raster',
-      source: 'stadia-terrain',
-      minzoom: 0,
-      maxzoom: 18,
-    },
-  ],
-};
+/**
+ * Erstellt einen Mapbox-GL Style Expression für Temperaturfarben.
+ * Skala: Blau (kalt) -> Gelb -> Rot (heiß)
+ */
+export function buildTemperatureColorExpression(min: number = -20, max: number = 40): any[] {
+  // Sicherstellen, dass Min < Max ist, um Fehler zu vermeiden
+  const safeMin = min >= max ? max - 10 : min;
+  const safeMax = max <= min ? min + 10 : max;
+  
+  // Berechne Zwischenschritte für einen sanften Farbverlauf
+  const range = safeMax - safeMin;
+  const step = range / 5;
 
-export function getBasemapStyle(basemap: BasemapType): StyleSpecification {
-  switch (basemap) {
-    case 'satellite':
-      return SATELLITE_STYLE;
-    case 'terrain':
-      return TERRAIN_STYLE;
-    case 'map':
-    default:
-      return DARK_STYLE;
+  return [
+    'interpolate',
+    ['linear'],
+    ['get', 'value'],
+    // Extrem Kalt (Dunkelblau)
+    safeMin, '#2c7bb6',
+    // Kalt (Hellblau)
+    safeMin + step, '#abd9e9',
+    // Mild (Gelb/Creme)
+    safeMin + step * 2.5, '#ffffbf',
+    // Warm (Orange)
+    safeMin + step * 4, '#fdae61',
+    // Heiß (Rot)
+    safeMax, '#d7191c'
+  ];
+}
+
+/**
+ * Gibt die CSS-Farbe für einen bestimmten Temperaturwert zurück (für Legenden etc.)
+ */
+export function getTemperatureColor(value: number, min: number = -20, max: number = 40): string {
+  // Einfache Approximation für JS-seitige Farbgebung
+  if (value <= min) return '#2c7bb6';
+  if (value >= max) return '#d7191c';
+  
+  const t = (value - min) / (max - min);
+  
+  // Simple Interpolation zwischen Blau und Rot über Gelb
+  if (t < 0.5) {
+    // Blau zu Gelb (0.0 bis 0.5 -> 0.0 bis 1.0)
+    return interpolateColor('#2c7bb6', '#ffffbf', t * 2);
+  } else {
+    // Gelb zu Rot (0.5 bis 1.0 -> 0.0 bis 1.0)
+    return interpolateColor('#ffffbf', '#d7191c', (t - 0.5) * 2);
   }
 }
 
-// WMS layer configuration for flood risk
-export const FLOOD_RISK_WMS = {
-  // European Flood Awareness System (EFAS) from Copernicus
-  efas: {
-    url: 'https://maps.copernicus.eu/services/wms',
-    layers: 'efas:efas_hazard',
-    attribution: 'Copernicus Emergency Management Service',
-  },
-  // JRC Global Surface Water (alternative)
-  jrc_gsw: {
-    url: 'https://global-surface-water.appspot.com/tiles/2021/',
-    type: 'xyz' as const,
-    attribution: 'JRC/Google Global Surface Water',
-  },
-};
+// Hilfsfunktion für einfache JS-Farbinterpolation (RGB)
+function interpolateColor(color1: string, color2: string, factor: number): string {
+  if (typeof window === 'undefined') return color1; // SSR check
+  
+  const c1 = hexToRgb(color1);
+  const c2 = hexToRgb(color2);
+  
+  const result = [
+    Math.round(c1[0] + factor * (c2[0] - c1[0])),
+    Math.round(c1[1] + factor * (c2[1] - c1[1])),
+    Math.round(c1[2] + factor * (c2[2] - c1[2]))
+  ];
+  
+  return `rgb(${result.join(',')})`;
+}
 
-// ECOSTRESS colormap for LST (Land Surface Temperature)
-export const ECOSTRESS_COLORMAP = {
-  // Kelvin to Celsius: K - 273.15
-  // Range: 15°C (288K) to 55°C (328K)
-  stops: [
-    [288, '#313695'], // < 15°C - deep blue
-    [293, '#4575b4'], // 20°C - blue
-    [298, '#74add1'], // 25°C - light blue
-    [303, '#abd9e9'], // 30°C - pale blue
-    [308, '#e0f3f8'], // 35°C - very pale
-    [313, '#fee090'], // 40°C - yellow
-    [318, '#fdae61'], // 45°C - orange
-    [323, '#f46d43'], // 50°C - red-orange
-    [328, '#d73027'], // 55°C - red
-    [333, '#a50026'], // > 60°C - dark red
-  ] as [number, string][],
-  noDataValue: 0,
-  scaleFactor: 0.02, // ECOSTRESS LST scale factor
-};
+function hexToRgb(hex: string): [number, number, number] {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? [
+    parseInt(result[1], 16),
+    parseInt(result[2], 16),
+    parseInt(result[3], 16)
+  ] : [0, 0, 0];
+}

@@ -14,7 +14,8 @@ import { MAP_STYLES } from './basemapStyles';
 import AirTemperatureOverlay from './AirTemperatureOverlay';
 import AirTemperatureLegend from './AirTemperatureLegend';
 import HeatLegend from './HeatLegend';
-import { EcostressCompositeOverlay } from './ecostress/EcostressCompositeOverlay';
+// Default imports for overlay components (fixes ref warnings)
+import EcostressCompositeOverlay from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
 
 import LayersControl from './LayersControl';
@@ -23,8 +24,6 @@ import OverlayDiagnosticsPanel from './OverlayDiagnosticsPanel';
 // Accent color for regions (green)
 const ACCENT_COLOR = '#22c55e';
 const ACCENT_COLOR_SELECTED = '#16a34a';
-const ACCENT_COLOR_HOVER = 'rgba(34, 197, 94, 0.6)';
-const ACCENT_COLOR_FILL = 'rgba(34, 197, 94, 0.2)';
 
 export default function RegionMap() {
   const mapRef = useRef<MapRef>(null);
@@ -123,6 +122,7 @@ export default function RegionMap() {
       );
     }
   }, [selectedRegion?.id]);
+
   // Compute region bbox from geometry if not precomputed
   const computedBbox = useMemo((): [number, number, number, number] | null => {
     if (selectedRegion?.bbox) return selectedRegion.bbox;
@@ -205,7 +205,7 @@ export default function RegionMap() {
   return (
     <div className="relative w-full h-full bg-background overflow-hidden">
       
-      {/* KARTE */}
+      {/* MAP */}
       <Map
         ref={mapRef}
         initialViewState={{
@@ -270,7 +270,7 @@ export default function RegionMap() {
         />
       </Map>
 
-      {/* LOGIK-LAYER (Außerhalb der Map um Refs-Fehler zu vermeiden) */}
+      {/* LOGIC LAYERS (Outside Map to prevent ref warnings) */}
       {isMapReady && mapRef.current && (
         <>
           <EcostressCompositeOverlay 
@@ -311,12 +311,12 @@ export default function RegionMap() {
         />
       </div>
 
-      {/* Ebenen-Button (unten links gemäß Design) */}
+      {/* Layers Button (bottom left per design) */}
       <div className="absolute bottom-8 left-4 z-20 pointer-events-auto">
         <LayersControl />
       </div>
 
-      {/* Diagnostics Panel (unten rechts) */}
+      {/* Diagnostics Panel (bottom right) */}
       <div className="absolute bottom-8 right-4 z-20 pointer-events-auto">
         <OverlayDiagnosticsPanel visible={true} mapRef={mapRef} />
       </div>

@@ -1,8 +1,11 @@
 /**
  * ecostress-latest-tile Edge Function
- * * Discovers NASA ECOSTRESS LST tiles that INTERSECT the selected region.
- * Uses quality-based scoring to select the BEST granule, not just the newest.
- * * Scoring formula:
+ * 
+ * Discovers NASA ECOSTRESS LST tiles that INTERSECT the selected region.
+ * Uses quality-based scoring + daytime filtering + pagination for complete results.
+ * Returns top N granules (by quality) for composite rendering.
+ * 
+ * Scoring formula:
  * score = 0.4 * coverage_ratio + 0.3 * valid_pixel_estimate + 0.2 * (1 - cloud_ratio) + 0.1 * recency
  */
 
@@ -20,12 +23,20 @@ interface RequestBody {
   date_to?: string;
   min_quality_threshold?: number; // Minimum quality score (0-1), default 0.2
   daytime_only?: boolean; // Filter to daytime acquisitions only (default: true)
+  max_granules?: number; // Cap on returned granules (default: 40)
 }
 
 // Daytime filter: Use approximate *solar local time* derived from longitude.
 // solarLocalTime ≈ UTC + lon/15 (hours). This is more robust than filtering by UTC.
 const DAYTIME_START_LOCAL = 9;
 const DAYTIME_END_LOCAL = 17;
+
+// Maximum granules to return (balance between coverage and performance)
+const DEFAULT_MAX_GRANULES = 40;
+// CMR page size (max 2000)
+const CMR_PAGE_SIZE = 500;
+// Max pages to fetch (safety limit)
+const MAX_CMR_PAGES = 5;
 
 function getSolarLocalHour(date: Date, lon: number): number {
   const utcHours = date.getUTCHours() + date.getUTCMinutes() / 60;
@@ -44,7 +55,10 @@ interface CMRGranule {
 }
 
 interface CMRResponse {
-  feed: { entry: CMRGranule[] };
+  feed: { 
+    entry: CMRGranule[];
+    // CMR returns total hits in headers, but we can infer from result count
+  };
 }
 
 interface ScoredGranule extends CMRGranule {
@@ -55,12 +69,12 @@ interface ScoredGranule extends CMRGranule {
   cloudRatio: number; // 0-1: cloud cover percentage
   recencyScore: number; // 0-1: how recent (1 = today, 0 = oldest)
   qualityScore: number; // Combined weighted score
+  solarLocalHour: number; // For debugging
 }
 
 const ECOSTRESS_CONCEPT_ID = 'C2076090826-LPCLOUD';
 const CMR_API_URL = 'https://cmr.earthdata.nasa.gov/search/granules.json';
-const SEARCH_RADIUS_DEG = 2.5; // Slightly increased for better catch
-const DEFAULT_MIN_QUALITY = 0.15; // Slightly lowered to allow more candidates
+const DEFAULT_MIN_QUALITY = 0.15;
 
 function getDateDaysAgo(days: number): string {
   const date = new Date();
@@ -245,6 +259,56 @@ function findCogUrl(granule: CMRGranule): { lstUrl: string | null; cloudMaskUrl:
   return { lstUrl, cloudMaskUrl: cloudMaskLink?.href || null };
 }
 
+/**
+ * Fetch all pages from CMR (with pagination)
+ */
+async function fetchAllCMRGranules(
+  regionBbox: [number, number, number, number],
+  startDate: string,
+  endDate: string
+): Promise<CMRGranule[]> {
+  const allGranules: CMRGranule[] = [];
+  let page = 1;
+  let hasMore = true;
+  
+  // Use region bbox directly for more precise search
+  const searchBbox = `${regionBbox[0]},${regionBbox[1]},${regionBbox[2]},${regionBbox[3]}`;
+  
+  while (hasMore && page <= MAX_CMR_PAGES) {
+    const cmrParams = new URLSearchParams({
+      concept_id: ECOSTRESS_CONCEPT_ID,
+      bounding_box: searchBbox,
+      temporal: `${startDate}T00:00:00Z,${endDate}T23:59:59Z`,
+      sort_key: '-start_date',
+      page_size: String(CMR_PAGE_SIZE),
+      page_num: String(page),
+    });
+
+    console.log(`[ECOSTRESS] Fetching CMR page ${page}:`, `${CMR_API_URL}?${cmrParams.toString()}`);
+
+    const cmrResponse = await fetch(`${CMR_API_URL}?${cmrParams}`, {
+      headers: { Accept: 'application/json' },
+    });
+
+    if (!cmrResponse.ok) {
+      console.error('[ECOSTRESS] CMR error:', cmrResponse.status, await cmrResponse.text());
+      break;
+    }
+
+    const cmrData = await cmrResponse.json() as CMRResponse;
+    const granules = cmrData.feed?.entry || [];
+    
+    allGranules.push(...granules);
+    
+    // If we got fewer than page_size, we've reached the end
+    hasMore = granules.length === CMR_PAGE_SIZE;
+    page++;
+  }
+  
+  console.log(`[ECOSTRESS] Fetched ${allGranules.length} total granules from ${page - 1} CMR pages`);
+  return allGranules;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -252,10 +316,7 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json() as RequestBody;
-    const { lat, lon, region_bbox, date_from, date_to, min_quality_threshold, daytime_only } = body;
-    
-    // Default to daytime-only filtering for warmer surface temps
-    const filterDaytime = daytime_only !== false;
+    const { lat, lon, region_bbox, date_from, date_to, min_quality_threshold, daytime_only, max_granules } = body;
 
     if (typeof lat !== 'number' || typeof lon !== 'number') {
       return new Response(
@@ -267,6 +328,8 @@ Deno.serve(async (req) => {
     const endDate = date_to || new Date().toISOString().split('T')[0];
     const startDate = date_from || getDateDaysAgo(365);
     const minQuality = min_quality_threshold ?? DEFAULT_MIN_QUALITY;
+    const filterDaytime = daytime_only !== false; // Default to true
+    const maxGranulesToReturn = max_granules ?? DEFAULT_MAX_GRANULES;
 
     // Build region bbox if not provided (default 1km grid cell around centroid)
     const regionBbox: [number, number, number, number] = region_bbox || [
@@ -278,41 +341,18 @@ Deno.serve(async (req) => {
       regionBbox,
       dateRange: `${startDate} to ${endDate}`,
       daytimeFilter: filterDaytime ? `${DAYTIME_START_LOCAL}:00-${DAYTIME_END_LOCAL}:00 (solar local)` : 'disabled',
+      maxGranules: maxGranulesToReturn,
     });
 
-    // Query NASA CMR with search radius
-    const searchBbox = `${lon - SEARCH_RADIUS_DEG},${lat - SEARCH_RADIUS_DEG},${lon + SEARCH_RADIUS_DEG},${lat + SEARCH_RADIUS_DEG}`;
-    const cmrParams = new URLSearchParams({
-      concept_id: ECOSTRESS_CONCEPT_ID,
-      bounding_box: searchBbox,
-      temporal: `${startDate}T00:00:00Z,${endDate}T23:59:59Z`,
-      sort_key: '-start_date',
-      page_size: '200',
-    });
-
-    console.log('[ECOSTRESS] Fetching CMR:', `${CMR_API_URL}?${cmrParams.toString()}`);
-
-    const cmrResponse = await fetch(`${CMR_API_URL}?${cmrParams}`, {
-      headers: { Accept: 'application/json' },
-    });
-
-    if (!cmrResponse.ok) {
-      console.error('[ECOSTRESS] CMR error:', cmrResponse.status, await cmrResponse.text());
-      return new Response(
-        JSON.stringify({ status: 'error', error: `NASA CMR query failed: ${cmrResponse.status}` }),
-        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const cmrData = await cmrResponse.json() as CMRResponse;
-    const granules = cmrData.feed?.entry || [];
+    // Fetch ALL granules with pagination
+    const granules = await fetchAllCMRGranules(regionBbox, startDate, endDate);
 
     if (granules.length === 0) {
       console.log('[ECOSTRESS] No granules found in CMR.');
       return new Response(
         JSON.stringify({
           status: 'no_coverage',
-          message: `Keine ECOSTRESS-Daten im Umkreis von ${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E im Zeitraum ${startDate} bis ${endDate} gefunden.`,
+          message: `Keine ECOSTRESS-Daten für Region ${regionBbox.map(n => n.toFixed(3)).join(',')} im Zeitraum ${startDate} bis ${endDate} gefunden.`,
           attribution: 'NASA LP DAAC / ECOSTRESS',
           candidates_checked: 0,
         }),
@@ -326,15 +366,21 @@ Deno.serve(async (req) => {
     const scoredGranules: ScoredGranule[] = [];
     
     let skippedNighttime = 0;
+    let skippedNoBounds = 0;
+    let skippedNoIntersect = 0;
     
     for (const granule of granules) {
       const bounds = parseGranuleBounds(granule);
-      if (!bounds) continue;
+      if (!bounds) {
+        skippedNoBounds++;
+        continue;
+      }
+      
+      const acquisitionTime = new Date(granule.time_start);
+      const solarLocalHour = getSolarLocalHour(acquisitionTime, lon);
       
       // DAYTIME FILTER: Skip nighttime acquisitions for warmer surface temps
       if (filterDaytime) {
-        const acquisitionTime = new Date(granule.time_start);
-        const solarLocalHour = getSolarLocalHour(acquisitionTime, lon);
         if (solarLocalHour < DAYTIME_START_LOCAL || solarLocalHour >= DAYTIME_END_LOCAL) {
           skippedNighttime++;
           continue; // Skip this granule (nighttime)
@@ -345,27 +391,16 @@ Deno.serve(async (req) => {
       const distanceToCentroid = distanceToBboxCenter(lon, lat, bounds);
       
       if (!intersectsRegion) {
-        // Track non-intersecting for "nearest" fallback
-        scoredGranules.push({
-          ...granule,
-          wgs84Bounds: bounds,
-          distanceToCentroid,
-          intersectsRegion: false,
-          coverageRatio: 0,
-          cloudRatio: (granule.cloud_cover ?? 50) / 100,
-          recencyScore: 0,
-          qualityScore: 0,
-        });
+        skippedNoIntersect++;
         continue;
       }
       
       // Calculate quality score for intersecting granules
-      const acquisitionDate = new Date(granule.time_start);
       const { score, coverageRatio, cloudRatio, recencyScore } = calculateQualityScore(
         bounds,
         regionBbox,
         granule.cloud_cover,
-        acquisitionDate,
+        acquisitionTime,
         oldestDate,
         newestDate
       );
@@ -379,17 +414,16 @@ Deno.serve(async (req) => {
         cloudRatio,
         recencyScore,
         qualityScore: score,
+        solarLocalHour,
       });
     }
 
     // Sort by quality score (highest first)
-    const intersecting = scoredGranules
-      .filter(g => g.intersectsRegion)
-      .sort((a, b) => b.qualityScore - a.qualityScore);
+    const intersecting = scoredGranules.sort((a, b) => b.qualityScore - a.qualityScore);
 
     console.log(
-      `[ECOSTRESS] Found ${intersecting.length} daytime intersecting granules out of ${granules.length} candidates ` +
-      `(skipped ${skippedNighttime} outside ${DAYTIME_START_LOCAL}-${DAYTIME_END_LOCAL} solar-local hours).`
+      `[ECOSTRESS] Results: ${intersecting.length} daytime intersecting granules from ${granules.length} total ` +
+      `(skipped: ${skippedNighttime} nighttime, ${skippedNoBounds} no bounds, ${skippedNoIntersect} no intersect)`
     );
 
     // NO INTERSECTING GRANULES
@@ -408,14 +442,16 @@ Deno.serve(async (req) => {
       );
     }
 
-    // RETURN ALL INTERSECTING GRANULES for composite layering
-    // Sort by date (newest first) for proper layer ordering
-    const sortedByDate = intersecting.sort((a, b) => 
-      new Date(b.time_start).getTime() - new Date(a.time_start).getTime()
+    // CAP at top N granules by quality score
+    const topGranules = intersecting.slice(0, maxGranulesToReturn);
+    
+    console.log(
+      `[ECOSTRESS] Returning top ${topGranules.length} granules (quality scores: ` +
+      `${topGranules.slice(0, 3).map(g => g.qualityScore.toFixed(3)).join(', ')}...)`
     );
 
-    // Build array of all granule data
-    const allGranules = sortedByDate.map(granule => {
+    // Build array of granule data with debug info
+    const allGranulesData = topGranules.map(granule => {
       const { lstUrl, cloudMaskUrl } = findCogUrl(granule);
       return {
         cog_url: lstUrl,
@@ -426,19 +462,21 @@ Deno.serve(async (req) => {
         quality_score: granule.qualityScore,
         coverage_percent: Math.round(granule.coverageRatio * 100),
         cloud_percent: Math.round(granule.cloudRatio * 100),
+        solar_local_hour: granule.solarLocalHour.toFixed(1),
       };
     });
 
-    // Also return the best granule for backwards compatibility
-    const bestGranule = sortedByDate.sort((a, b) => b.qualityScore - a.qualityScore)[0];
+    // Best granule for backwards compatibility
+    const bestGranule = topGranules[0];
     const { lstUrl, cloudMaskUrl } = findCogUrl(bestGranule);
 
     return new Response(
       JSON.stringify({
         status: 'match',
-        // Primary: all granules for composite
-        all_granules: allGranules,
-        granule_count: allGranules.length,
+        // Primary: all granules for composite (capped)
+        all_granules: allGranulesData,
+        granule_count: allGranulesData.length,
+        total_available: intersecting.length,
         // Legacy: best single granule
         cog_url: lstUrl,
         cloud_mask_url: cloudMaskUrl,
@@ -450,9 +488,12 @@ Deno.serve(async (req) => {
         coverage_percent: Math.round(bestGranule.coverageRatio * 100),
         cloud_percent: Math.round(bestGranule.cloudRatio * 100),
         recency_score: bestGranule.recencyScore,
+        // Debug stats
         candidates_checked: granules.length,
         intersecting_count: intersecting.length,
         skipped_nighttime: skippedNighttime,
+        skipped_no_bounds: skippedNoBounds,
+        skipped_no_intersect: skippedNoIntersect,
         daytime_filter: filterDaytime ? `${DAYTIME_START_LOCAL}:00-${DAYTIME_END_LOCAL}:00 solar-lokal` : null,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

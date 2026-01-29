@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { Thermometer } from 'lucide-react';
+import { Thermometer, Info } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AirTempAggregation } from './MapLayersContext';
 
 interface AirTemperatureLegendProps {
@@ -10,6 +11,8 @@ interface AirTemperatureLegendProps {
   /** Temperature value for the selected region (if available) */
   regionValue?: number | null;
   regionName?: string | null;
+  /** Full grid data to compute top 3 hottest cells */
+  gridData?: Array<{ lat: number; lon: number; value: number }>;
 }
 
 /**
@@ -32,10 +35,15 @@ export function AirTemperatureLegend({
   year,
   regionValue,
   regionName,
+  gridData,
 }: AirTemperatureLegendProps) {
   if (!visible) return null;
 
-  const aggregationLabel = aggregation === 'daily_max' ? 'Tagesmaximum' : 'Tagesmittel';
+  // Precise labels with Ø prefix
+  const aggregationLabel = aggregation === 'daily_max' ? 'Ø Tagesmaximum' : 'Ø Tagesmittel';
+  const aggregationTooltip = aggregation === 'daily_max' 
+    ? 'Durchschnitt der täglichen Höchsttemperaturen über den gesamten Sommer (Juni–August)'
+    : 'Durchschnitt der 24h-Mittelwerte über den gesamten Sommer (Juni–August)';
   
   // Build gradient CSS from color stops
   const gradientCss = useMemo(() => {
@@ -46,13 +54,33 @@ export function AirTemperatureLegend({
     return `linear-gradient(to right, ${stops.join(', ')})`;
   }, []);
 
+  // Compute top 3 hottest cells from grid data
+  const top3Hottest = useMemo(() => {
+    if (!gridData || gridData.length === 0) return null;
+    
+    // Sort by value descending and take top 3
+    const sorted = [...gridData].sort((a, b) => b.value - a.value);
+    return sorted.slice(0, 3);
+  }, [gridData]);
+
   return (
     <div className="bg-background/90 backdrop-blur p-3 rounded-lg border border-border/50 shadow-sm text-xs min-w-[220px]">
       {/* Header */}
       <div className="flex items-center gap-2 mb-2">
         <Thermometer className="h-4 w-4 text-orange-500" />
         <div className="flex-1">
-          <div className="font-medium">Lufttemperatur (DWD)</div>
+          <div className="font-medium flex items-center gap-1">
+            Lufttemperatur (DWD)
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[250px] text-xs">
+                <p className="font-medium mb-1">{aggregationLabel}</p>
+                <p>{aggregationTooltip}</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
           <div className="text-[10px] text-muted-foreground">
             {aggregationLabel} · Sommer {year ?? '—'}
           </div>
@@ -83,6 +111,23 @@ export function AirTemperatureLegend({
           <span key={stop.temp}>{stop.label}</span>
         ))}
       </div>
+      
+      {/* Top 3 Hottest Cells */}
+      {top3Hottest && top3Hottest.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-border/30">
+          <div className="text-[10px] text-muted-foreground mb-1 font-medium">
+            🔥 Top 3 heißeste Zellen (DE)
+          </div>
+          <div className="space-y-0.5">
+            {top3Hottest.map((cell, idx) => (
+              <div key={idx} className="flex justify-between text-[10px]">
+                <span className="text-muted-foreground">#{idx + 1}</span>
+                <span className="font-mono font-medium">{cell.value.toFixed(1)}°C</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       
       {/* Stats */}
       {normalization && (

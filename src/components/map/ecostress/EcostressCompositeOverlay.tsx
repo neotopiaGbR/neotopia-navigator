@@ -10,6 +10,7 @@ interface Props {
   regionBbox?: [number, number, number, number];
 }
 
+// NUR "export function", KEIN "export default"
 export function EcostressCompositeOverlay({
   visible,
   opacity = 0.8,
@@ -17,10 +18,9 @@ export function EcostressCompositeOverlay({
   regionBbox,
 }: Props) {
   const [internalGranules, setInternalGranules] = useState<any[]>([]);
-  // Wir speichern jetzt ImageBitmap statt HTMLCanvasElement
   const [layerData, setLayerData] = useState<{ image: ImageBitmap; bounds: any } | null>(null);
 
-  // 1. DATA FETCHING (Self-Service)
+  // 1. Fetching
   useEffect(() => {
     if (allGranules && allGranules.length > 0) {
       setInternalGranules(allGranules);
@@ -54,7 +54,7 @@ export function EcostressCompositeOverlay({
     fetchGranules();
   }, [visible, regionBbox, allGranules]);
 
-  // 2. COMPOSITE & BITMAP GENERATION
+  // 2. Generation (ImageBitmap)
   useEffect(() => {
     const granulesToUse = allGranules.length > 0 ? allGranules : internalGranules;
 
@@ -68,10 +68,8 @@ export function EcostressCompositeOverlay({
     async function generate() {
       try {
         const result = await createComposite(granulesToUse, regionBbox!, 'median');
-        
         if (!active || !result) return;
 
-        // Schritt 1: Auf temporären Canvas zeichnen
         const cvs = document.createElement('canvas');
         cvs.width = result.imageData.width;
         cvs.height = result.imageData.height;
@@ -79,34 +77,35 @@ export function EcostressCompositeOverlay({
         if (!ctx) return;
         
         ctx.putImageData(result.imageData, 0, 0);
-
-        // Schritt 2: Zu ImageBitmap konvertieren (Viel stabiler für WebGL!)
+        
+        // ImageBitmap für Performance & Stabilität
         const bitmap = await createImageBitmap(cvs);
 
         if (active) {
              setLayerData({ image: bitmap, bounds: result.bounds });
+        } else {
+             bitmap.close();
         }
       } catch (e) {
-        console.error('[Ecostress] Bitmap generation failed:', e);
+        console.error('[Ecostress] Bitmap error:', e);
       }
     }
 
     generate();
     return () => { 
         active = false;
-        // Optional: Bitmap schließen um Speicher freizugeben
         if (layerData?.image) layerData.image.close();
     };
   }, [visible, regionBbox, allGranules, internalGranules]);
 
-  // 3. UPDATE DECK LAYER
+  // 3. Update Deck
   useEffect(() => {
     if (!visible || !layerData) {
       removeLayer('ecostress-composite');
       return;
     }
 
-    // Bounds sicherstellen [W, S, E, N]
+    // Bounds sicherstellen
     const b = layerData.bounds;
     const safeBounds: [number, number, number, number] = [
       Math.min(b[0], b[2]),
@@ -119,7 +118,7 @@ export function EcostressCompositeOverlay({
       id: 'ecostress-composite',
       type: 'bitmap',
       visible: true,
-      image: layerData.image, // Jetzt ein ImageBitmap
+      image: layerData.image,
       bounds: safeBounds,
       opacity,
     });
@@ -134,5 +133,3 @@ function getDaysAgo(days: number) {
   d.setDate(d.getDate() - days);
   return d.toISOString().split('T')[0];
 }
-
-export default EcostressCompositeOverlay;

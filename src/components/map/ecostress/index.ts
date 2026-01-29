@@ -5,5 +5,4 @@ export {
   kelvinToRGBA, 
   type AggregationMethod, 
   type CompositeResult,
-  type CoverageConfidence,
 } from './compositeUtils';

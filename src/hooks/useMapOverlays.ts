@@ -18,23 +18,12 @@ interface NearestCandidate {
   cloud_cover?: number;
 }
 
-interface BestRejectedGranule {
-  granule_id: string;
-  datetime: string;
-  quality_score: number;
-  coverage_percent: number;
-  cloud_percent: number;
-}
-
 interface GranuleData {
   cog_url: string;
   cloud_mask_url?: string;
   datetime: string;
   granule_id: string;
   granule_bounds: [number, number, number, number];
-  quality_score: number;
-  coverage_percent: number;
-  cloud_percent: number;
 }
 
 interface EcostressResponse {
@@ -56,14 +45,6 @@ interface EcostressResponse {
   colormap_suggestion?: string;
   error?: string;
   nearest_candidate?: NearestCandidate;
-  // Quality metrics
-  quality_score?: number;
-  coverage_percent?: number;
-  cloud_percent?: number;
-  recency_score?: number;
-  candidates_checked?: number;
-  intersecting_count?: number;
-  best_rejected?: BestRejectedGranule;
 }
 
 interface FloodRiskLayer {
@@ -185,16 +166,13 @@ export function useMapOverlays() {
         return;
       }
 
-      // NO COVERAGE - granule doesn't intersect region or quality too low
+      // NO COVERAGE - granule doesn't intersect region
       if (response.status === 'no_coverage' || response.status === 'no_data') {
         lastFetchRef.current.ecostress = fetchKey;
         setOverlayMetadata('ecostress', {
           status: 'no_coverage',
           message: response.message || 'Keine ECOSTRESS-Daten für diese Region verfügbar',
           nearestCandidate: response.nearest_candidate || null,
-          bestRejected: response.best_rejected || null,
-          candidatesChecked: response.candidates_checked,
-          intersectingCount: response.intersecting_count,
           attribution: response.attribution,
         });
         setOverlayLoading('ecostress', false);
@@ -212,9 +190,6 @@ export function useMapOverlays() {
           datetime: response.datetime || '',
           granule_id: response.granule_id || '',
           granule_bounds: response.granule_bounds || [0, 0, 0, 0] as [number, number, number, number],
-          quality_score: response.quality_score || 0,
-          coverage_percent: response.coverage_percent || 0,
-          cloud_percent: response.cloud_percent || 0,
         }] : []);
         
         setOverlayMetadata('ecostress', {
@@ -234,13 +209,6 @@ export function useMapOverlays() {
           attribution: response.attribution,
           unit: response.value_unit,
           colormap: response.colormap_suggestion,
-          // Quality metrics from best granule
-          qualityScore: response.quality_score,
-          coveragePercent: response.coverage_percent,
-          cloudPercent: response.cloud_percent,
-          recencyScore: response.recency_score,
-          candidatesChecked: response.candidates_checked,
-          intersectingCount: response.intersecting_count,
         });
         setOverlayLoading('ecostress', false);
         return;

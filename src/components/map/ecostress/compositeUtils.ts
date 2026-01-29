@@ -1,19 +1,19 @@
 /**
  * ECOSTRESS Composite Utilities
  * 
- * Implements pixel-level aggregation for multi-granule compositing.
+ * Implements simple pixel-level aggregation for multi-granule compositing.
  * 
  * Key features:
  * - NO quality filtering: ALL granules are included for maximum coverage
- * - Regional percentile normalization: uses shared P5-P95 scale to prevent tile-to-tile jumps
- * - Single stable output: no overlapping swaths, no rotated tiles
+ * - Fixed temperature scale (LST_MIN_K to LST_MAX_K)
+ * - Simple aggregation (median, p90, max)
  */
 
 import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 
-// LST temperature range (Kelvin) for colorization
-export const LST_MIN_K = 260; // -13°C (winter)
+// LST temperature range (Kelvin) for colorization - fixed scale
+export const LST_MIN_K = 280; // 7°C (cool)
 export const LST_MAX_K = 320; // 47°C (hot summer)
 
 // Aggregation methods: median (typical), p90 (extreme), max (absolute hottest)
@@ -23,15 +23,6 @@ export interface GranuleInput {
   cog_url: string;
   datetime: string;
   granule_id: string;
-  cloud_percent?: number;
-  coverage_percent?: number;
-  quality_score?: number;
-}
-
-export interface CoverageConfidence {
-  level: 'high' | 'medium' | 'low';
-  percent: number;
-  reason: string;
 }
 
 export interface CompositeResult {
@@ -40,22 +31,17 @@ export interface CompositeResult {
   stats: {
     min: number;
     max: number;
-    p5: number;  // 5th percentile for normalization
-    p95: number; // 95th percentile for normalization
     validPixels: number;
     noDataPixels: number;
     totalPixels: number;
     aggregationMethod: AggregationMethod;
     granuleCount: number;
     successfulGranules: number;
-    discardedGranules: number;
-    discardReasons: { cloud: number; coverage: number; invalid: number };
   };
   metadata: {
     timeWindow: { from: string; to: string };
     acquisitionDates: string[];
     granuleIds: string[];
-    coverageConfidence: CoverageConfidence;
   };
 }
 
@@ -65,19 +51,16 @@ interface RasterData {
   height: number;
   bounds: [number, number, number, number]; // WGS84 bounds
   noDataValue: number;
-  weight: number; // Quality weight for this granule
   datetime: string;
   granuleId: string;
 }
 
 /**
- * Heat colormap with percentile normalization
- * Uses regional P5-P95 for consistent scaling across tiles
+ * Heat colormap with fixed temperature scale
  */
-export function kelvinToRGBA(kelvin: number, p5: number = LST_MIN_K, p95: number = LST_MAX_K): [number, number, number, number] {
-  // Normalize using regional percentiles to prevent tile-to-tile jumps
-  const range = p95 - p5;
-  const t = Math.max(0, Math.min(1, (kelvin - p5) / (range || 1)));
+export function kelvinToRGBA(kelvin: number): [number, number, number, number] {
+  const range = LST_MAX_K - LST_MIN_K;
+  const t = Math.max(0, Math.min(1, (kelvin - LST_MIN_K) / range));
   
   let r: number, g: number, b: number;
   
@@ -187,29 +170,7 @@ function convertBoundsToWgs84(bounds: number[], utm: { zone: number; isNorth: bo
 }
 
 /**
- * Calculate quality weight for a granule
- * Weights by: cloud confidence (40%), spatial continuity proxy (30%), view angle proxy (30%)
- */
-function calculateGranuleWeight(granule: GranuleInput): number {
-  const cloudPercent = granule.cloud_percent ?? 20;
-  const coveragePercent = granule.coverage_percent ?? 80;
-  const qualityScore = granule.quality_score ?? 0.5;
-  
-  // Cloud confidence: lower cloud = higher weight
-  const cloudWeight = Math.max(0, (100 - cloudPercent) / 100);
-  
-  // Coverage/continuity: higher coverage = higher weight
-  const continuityWeight = Math.min(1, coveragePercent / 100);
-  
-  // Quality score already incorporates view angle proxy
-  const qualityWeight = qualityScore;
-  
-  // Combined weight
-  return 0.4 * cloudWeight + 0.3 * continuityWeight + 0.3 * qualityWeight;
-}
-
-/**
- * Fetch and decode a single COG, returning raw raster values with quality weight
+ * Fetch and decode a single COG, returning raw raster values
  */
 async function fetchCOGRaster(granule: GranuleInput): Promise<RasterData | null> {
   const proxyUrl = `${SUPABASE_URL}/functions/v1/ecostress-proxy?url=${encodeURIComponent(granule.cog_url)}`;
@@ -265,7 +226,6 @@ async function fetchCOGRaster(granule: GranuleInput): Promise<RasterData | null>
       height: targetHeight,
       bounds: wgs84Bounds,
       noDataValue: 0,
-      weight: calculateGranuleWeight(granule),
       datetime: granule.datetime,
       granuleId: granule.granule_id,
     };
@@ -276,96 +236,43 @@ async function fetchCOGRaster(granule: GranuleInput): Promise<RasterData | null>
 }
 
 /**
- * Compute aggregated value from array of {value, weight} pairs
- * Uses SIMPLE (unweighted) aggregation for median to show true temperature distribution.
+ * Simple aggregation of temperature values
  * Supports: median (typical), p90 (extreme 90th percentile), max (absolute maximum)
  */
-function weightedAggregate(samples: { value: number; weight: number }[], method: AggregationMethod): number {
-  if (samples.length === 0) return NaN;
-  if (samples.length === 1) return samples[0].value;
+function aggregate(values: number[], method: AggregationMethod): number {
+  if (values.length === 0) return NaN;
+  if (values.length === 1) return values[0];
   
-  // Extract just the values for simple percentile calculations
-  const values = samples.map(s => s.value).sort((a, b) => a - b);
-  
-  // For MAX method - return the absolute highest temperature
-  if (method === 'max') {
-    return values[values.length - 1];
-  }
-  
-  // For P90 method - return the 90th percentile (extreme heat)
-  if (method === 'p90') {
-    const idx = Math.floor(values.length * 0.9);
-    return values[Math.min(idx, values.length - 1)];
-  }
-  
-  // For MEDIAN - return the true middle value (unweighted)
-  // This ensures we see the actual typical summer heat, not biased by weights
-  const mid = Math.floor(values.length / 2);
-  if (values.length % 2 === 0) {
-    return (values[mid - 1] + values[mid]) / 2;
-  }
-  return values[mid];
-}
-
-/**
- * Compute percentile from array of values
- */
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) return 0;
   const sorted = values.slice().sort((a, b) => a - b);
-  const idx = (sorted.length - 1) * p;
-  const lower = Math.floor(idx);
-  const upper = Math.ceil(idx);
-  if (lower === upper) return sorted[lower];
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (idx - lower);
+  
+  if (method === 'max') {
+    return sorted[sorted.length - 1];
+  }
+  
+  if (method === 'p90') {
+    const idx = Math.floor(sorted.length * 0.9);
+    return sorted[Math.min(idx, sorted.length - 1)];
+  }
+  
+  // median
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return sorted[mid];
 }
 
 /**
- * Determine coverage confidence based on valid pixel ratio and granule count
- */
-function calculateCoverageConfidence(
-  validPixels: number, 
-  totalPixels: number, 
-  successfulGranules: number
-): CoverageConfidence {
-  const coverageRatio = validPixels / (totalPixels || 1);
-  
-  if (coverageRatio >= 0.8 && successfulGranules >= 3) {
-    return { 
-      level: 'high', 
-      percent: Math.round(coverageRatio * 100),
-      reason: `${Math.round(coverageRatio * 100)}% Abdeckung mit ${successfulGranules} Aufnahmen`
-    };
-  }
-  
-  if (coverageRatio >= 0.5 && successfulGranules >= 2) {
-    return { 
-      level: 'medium', 
-      percent: Math.round(coverageRatio * 100),
-      reason: `${Math.round(coverageRatio * 100)}% Abdeckung mit ${successfulGranules} Aufnahmen – partielle Daten`
-    };
-  }
-  
-  return { 
-    level: 'low', 
-    percent: Math.round(coverageRatio * 100),
-    reason: coverageRatio < 0.3 
-      ? 'Geringe räumliche Abdeckung in dieser Region' 
-      : `Begrenzte Daten: ${successfulGranules} Aufnahme${successfulGranules !== 1 ? 'n' : ''}`
-  };
-}
-
-/**
- * Create a composite raster from multiple granules using quality-weighted pixel aggregation.
+ * Create a composite raster from multiple granules using simple pixel aggregation.
  * 
  * Algorithm:
- * 1. Filter granules by quality thresholds (cloud ≤40%, coverage ≥60%)
+ * 1. Fetch all granules (no quality filtering)
  * 2. Compute union bounding box of all valid rasters
  * 3. Create output grid at fixed resolution (~100m)
- * 4. For each output pixel, sample from all input rasters with weights
- * 5. Compute quality-weighted median/P90 of valid values
- * 6. Normalize using regional P5-P95 percentiles
- * 7. Colorize and return ImageData
+ * 4. For each output pixel, sample from all input rasters
+ * 5. Compute median/P90/max of valid values
+ * 6. Colorize using fixed temperature scale
+ * 7. Return ImageData
  */
 export async function createComposite(
   granules: GranuleInput[],
@@ -377,25 +284,14 @@ export async function createComposite(
   
   console.log(`[CompositeUtils] Creating ${aggregationMethod} composite from ${granules.length} granules`);
   
-  // NO QUALITY FILTERING - include ALL granules for maximum coverage
-  const qualifiedGranules = granules;
-  const discardReasons = { cloud: 0, coverage: 0, invalid: 0 };
-  
-  console.log(`[CompositeUtils] Using all ${qualifiedGranules.length} granules (no quality filtering)`);
-  
-  if (qualifiedGranules.length === 0) {
-    console.warn('[CompositeUtils] No granules provided');
-    return null;
-  }
-  
-  // 2. Fetch all qualified raster data in parallel (with limit)
+  // Fetch all raster data in parallel (with limit)
   const rasters: RasterData[] = [];
-  const batchSize = 4; // Limit concurrent fetches
+  const batchSize = 4;
   const acquisitionDates: string[] = [];
   const granuleIds: string[] = [];
   
-  for (let i = 0; i < qualifiedGranules.length; i += batchSize) {
-    const batch = qualifiedGranules.slice(i, i + batchSize);
+  for (let i = 0; i < granules.length; i += batchSize) {
+    const batch = granules.slice(i, i + batchSize);
     const results = await Promise.all(batch.map(fetchCOGRaster));
     
     for (const r of results) {
@@ -403,12 +299,10 @@ export async function createComposite(
         rasters.push(r);
         acquisitionDates.push(r.datetime);
         granuleIds.push(r.granuleId);
-      } else {
-        discardReasons.invalid++;
       }
     }
     
-    onProgress?.(Math.min(i + batchSize, qualifiedGranules.length), qualifiedGranules.length);
+    onProgress?.(Math.min(i + batchSize, granules.length), granules.length);
   }
   
   if (rasters.length === 0) {
@@ -416,9 +310,9 @@ export async function createComposite(
     return null;
   }
   
-  console.log(`[CompositeUtils] Successfully loaded ${rasters.length}/${qualifiedGranules.length} rasters`);
+  console.log(`[CompositeUtils] Successfully loaded ${rasters.length}/${granules.length} rasters`);
   
-  // 3. Compute union bounding box, clipped to region
+  // Compute union bounding box, clipped to region
   let unionBounds: [number, number, number, number] = [
     Math.max(regionBbox[0], Math.min(...rasters.map(r => r.bounds[0]))),
     Math.max(regionBbox[1], Math.min(...rasters.map(r => r.bounds[1]))),
@@ -432,13 +326,12 @@ export async function createComposite(
     return null;
   }
   
-  // 4. Create output grid (~100m resolution, max 1024x1024)
+  // Create output grid (~100m resolution, max 1024x1024)
   const boundsWidth = unionBounds[2] - unionBounds[0];
   const boundsHeight = unionBounds[3] - unionBounds[1];
   const aspectRatio = boundsWidth / boundsHeight;
   
-  // Aim for ~100m pixels (0.001 degrees ≈ 100m at mid-latitudes)
-  const targetRes = 0.001;
+  const targetRes = 0.001; // ~100m
   let outputWidth = Math.ceil(boundsWidth / targetRes);
   let outputHeight = Math.ceil(boundsHeight / targetRes);
   
@@ -458,19 +351,23 @@ export async function createComposite(
   const totalPixels = outputWidth * outputHeight;
   console.log(`[CompositeUtils] Output grid: ${outputWidth}x${outputHeight} = ${totalPixels} pixels`);
   
-  // 5. FIRST PASS: Collect all valid temperature values for percentile calculation
+  // Sample all rasters and aggregate
   const pixelWidth = boundsWidth / outputWidth;
   const pixelHeight = boundsHeight / outputHeight;
   
-  const allValidTemps: number[] = [];
-  const pixelSamples: { value: number; weight: number }[][] = new Array(totalPixels);
+  const imageData = new ImageData(outputWidth, outputHeight);
+  const data = imageData.data;
+  let validPixels = 0;
+  let noDataPixels = 0;
+  let minTemp = Infinity;
+  let maxTemp = -Infinity;
   
   for (let y = 0; y < outputHeight; y++) {
     for (let x = 0; x < outputWidth; x++) {
       const lon = unionBounds[0] + (x + 0.5) * pixelWidth;
       const lat = unionBounds[3] - (y + 0.5) * pixelHeight;
       
-      const samples: { value: number; weight: number }[] = [];
+      const samples: number[] = [];
       
       for (const raster of rasters) {
         // Check if point is within raster bounds
@@ -491,57 +388,33 @@ export async function createComposite(
         
         // ECOSTRESS LST validity check (200-400K is valid temperature range)
         if (value > 200 && value < 400 && !isNaN(value)) {
-          samples.push({ value, weight: raster.weight });
-          allValidTemps.push(value);
+          samples.push(value);
         }
       }
       
-      pixelSamples[y * outputWidth + x] = samples;
-    }
-  }
-  
-  if (allValidTemps.length === 0) {
-    console.warn('[CompositeUtils] No valid temperature values found');
-    return null;
-  }
-  
-  // 6. Calculate regional percentiles for NORMALIZED colorization
-  const p5 = percentile(allValidTemps, 0.05);
-  const p95 = percentile(allValidTemps, 0.95);
-  const minTemp = Math.min(...allValidTemps);
-  const maxTemp = Math.max(...allValidTemps);
-  
-  console.log(`[CompositeUtils] Regional percentiles: P5=${(p5-273.15).toFixed(1)}°C, P95=${(p95-273.15).toFixed(1)}°C`);
-  
-  // 7. SECOND PASS: Generate colorized output using quality-weighted aggregation
-  const imageData = new ImageData(outputWidth, outputHeight);
-  const data = imageData.data;
-  let validPixels = 0;
-  let noDataPixels = 0;
-  
-  for (let i = 0; i < totalPixels; i++) {
-    const samples = pixelSamples[i];
-    const pixelOffset = i * 4;
-    
-    if (samples.length > 0) {
-      const aggValue = weightedAggregate(samples, aggregationMethod);
+      const pixelOffset = (y * outputWidth + x) * 4;
       
-      if (!isNaN(aggValue)) {
-        validPixels++;
+      if (samples.length > 0) {
+        const aggValue = aggregate(samples, aggregationMethod);
         
-        // Use regional percentiles for normalization to prevent tile-to-tile contrast jumps
-        const [r, g, b, a] = kelvinToRGBA(aggValue, p5, p95);
-        data[pixelOffset] = r;
-        data[pixelOffset + 1] = g;
-        data[pixelOffset + 2] = b;
-        data[pixelOffset + 3] = a;
+        if (!isNaN(aggValue)) {
+          validPixels++;
+          minTemp = Math.min(minTemp, aggValue);
+          maxTemp = Math.max(maxTemp, aggValue);
+          
+          const [r, g, b, a] = kelvinToRGBA(aggValue);
+          data[pixelOffset] = r;
+          data[pixelOffset + 1] = g;
+          data[pixelOffset + 2] = b;
+          data[pixelOffset + 3] = a;
+        } else {
+          noDataPixels++;
+          data[pixelOffset + 3] = 0;
+        }
       } else {
         noDataPixels++;
-        data[pixelOffset + 3] = 0; // Transparent
+        data[pixelOffset + 3] = 0;
       }
-    } else {
-      noDataPixels++;
-      data[pixelOffset + 3] = 0; // Transparent
     }
   }
   
@@ -550,25 +423,18 @@ export async function createComposite(
   // Sort dates to get time window
   const sortedDates = acquisitionDates.filter(d => d).sort();
   
-  // Calculate coverage confidence
-  const coverageConfidence = calculateCoverageConfidence(validPixels, totalPixels, rasters.length);
-  
   return {
     imageData,
     bounds: unionBounds,
     stats: {
       min: minTemp,
       max: maxTemp,
-      p5,
-      p95,
       validPixels,
       noDataPixels,
       totalPixels,
       aggregationMethod,
       granuleCount: granules.length,
       successfulGranules: rasters.length,
-      discardedGranules: granules.length - qualifiedGranules.length + discardReasons.invalid,
-      discardReasons,
     },
     metadata: {
       timeWindow: {
@@ -577,7 +443,6 @@ export async function createComposite(
       },
       acquisitionDates,
       granuleIds,
-      coverageConfidence,
     },
   };
 }

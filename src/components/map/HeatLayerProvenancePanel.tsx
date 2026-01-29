@@ -175,20 +175,6 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
         </div>
       )}
 
-      {/* Scientific methodology note */}
-      {ecostressEnabled && hasEcostressMatch && (
-        <div className="flex items-start gap-2 p-2 rounded bg-blue-500/10 border border-blue-500/20">
-          <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
-          <div className="text-[11px] text-blue-700 dark:text-blue-300 space-y-1">
-            <p><strong>Wissenschaftliche Methodik:</strong></p>
-            <ul className="list-disc pl-4 space-y-0.5">
-              <li>Qualitätsfilterung: Wolken ≤40%, Abdeckung ≥60%</li>
-              <li>Gewichtete Aggregation nach Wolkenkonfidenz und Datenqualität</li>
-              <li>Regionale Perzentil-Normalisierung (P5–P95) verhindert Kachel-Kontraste</li>
-            </ul>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

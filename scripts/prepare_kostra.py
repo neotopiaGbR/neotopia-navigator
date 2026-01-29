@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-KOSTRA-DWD-2020 Data Preparation Script
+KOSTRA-DWD-2020 Data Preparation Script - Virtual Tiling Edition
 
 This script downloads and processes KOSTRA-DWD-2020 precipitation intensity data
 for heavy rain risk visualization. Converts DWD ASCII Grid files to Cloud Optimized
-GeoTIFFs (COGs) for efficient client-side rendering.
+GeoTIFFs (COGs) optimized for HTTP Range Request streaming.
+
+COG BENEFITS:
+- Browser loads only visible tiles via HTTP Range Requests
+- No tile server needed - works with static hosting (Supabase Storage)
+- Internal tiling + overviews enable efficient zoom-level rendering
 
 DEPENDENCIES:
 - Python 3.9+
-- GDAL (with gdal_translate): `brew install gdal` or `apt install gdal-bin`
+- GDAL 3.x (with gdal_translate, gdalwarp, gdaladdo): 
+    macOS: `brew install gdal`
+    Linux: `apt install gdal-bin`
 - requests: `pip install requests`
 
 SOURCE:
@@ -16,10 +23,12 @@ SOURCE:
 
 OUTPUT:
 - Cloud Optimized GeoTIFFs in EPSG:4326 (WGS84) projection
+- Internal 256x256 tiling + overview pyramids
 - Naming: kostra_d{duration}_t{return_period}.tif
 
 USAGE:
     python scripts/prepare_kostra.py --output-dir ./data/kostra
+    python scripts/prepare_kostra.py --dry-run  # Preview what would be done
 
 Author: Neotopia Navigator
 License: MIT
@@ -63,17 +72,30 @@ RETURN_PERIODS = {
 # KOSTRA file naming pattern: hN_D{duration}m_T{period}a.asc.gz
 # Example: hN_D060m_T010a.asc.gz
 
+# COG creation options for optimal streaming
+COG_CREATION_OPTIONS = [
+    "-of", "COG",
+    "-co", "COMPRESS=DEFLATE",
+    "-co", "PREDICTOR=2",
+    "-co", "BLOCKSIZE=256",        # 256x256 internal tiles
+    "-co", "OVERVIEW_RESAMPLING=AVERAGE",
+    "-co", "BIGTIFF=IF_SAFER",
+]
+
 
 def check_gdal_installed() -> bool:
-    """Verify GDAL tools are available."""
+    """Verify GDAL tools are available with version info."""
     try:
         result = subprocess.run(
-            ["gdal_translate", "--version"],
+            ["gdalinfo", "--version"],
             capture_output=True,
             text=True,
             check=False
         )
-        return result.returncode == 0
+        if result.returncode == 0:
+            print(f"  GDAL Version: {result.stdout.strip()}")
+            return True
+        return False
     except FileNotFoundError:
         return False
 
@@ -118,8 +140,13 @@ def convert_to_cog(
     """
     Convert ASCII Grid to Cloud Optimized GeoTIFF with reprojection.
     
-    KOSTRA data is typically in EPSG:31467 (Gauss-Krüger Zone 3) or EPSG:3035.
-    We reproject to WGS84 for web map compatibility.
+    Creates a COG with:
+    - 256x256 internal tiles for efficient streaming
+    - Built-in overview pyramids (2x, 4x, 8x, 16x)
+    - DEFLATE compression for smaller file size
+    - WGS84 projection for web map compatibility
+    
+    HTTP Range Requests allow the browser to fetch only the tiles it needs.
     """
     try:
         # Step 1: Convert to intermediate GeoTIFF with proper CRS assignment
@@ -136,26 +163,25 @@ def convert_to_cog(
             str(intermediate_path)
         ]
         
+        print(f"  Running: gdal_translate (assign CRS)...")
         result = subprocess.run(cmd_translate, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             print(f"  ✗ gdal_translate failed: {result.stderr}")
             return False
         
-        # Step 2: Warp to target CRS and create COG
+        # Step 2: Warp to target CRS and create COG with internal tiling
         cmd_warp = [
             "gdalwarp",
             "-s_srs", source_srs,
             "-t_srs", target_srs,
             "-r", "bilinear",
-            "-of", "COG",
-            "-co", "COMPRESS=LZW",
-            "-co", "PREDICTOR=2",
-            "-co", "BIGTIFF=IF_SAFER",
+            *COG_CREATION_OPTIONS,
             "-overwrite",
             str(intermediate_path),
             str(output_path)
         ]
         
+        print(f"  Running: gdalwarp (reproject + COG creation)...")
         result = subprocess.run(cmd_warp, capture_output=True, text=True, check=False)
         
         # Cleanup intermediate file
@@ -165,11 +191,48 @@ def convert_to_cog(
             print(f"  ✗ gdalwarp failed: {result.stderr}")
             return False
         
-        print(f"  ✓ Created COG: {output_path.name} ({output_path.stat().st_size / 1024:.1f} KB)")
+        # Step 3: Verify COG structure
+        if not verify_cog(output_path):
+            print("  ⚠ Warning: COG validation failed, file may not be optimally structured")
+        
+        file_size = output_path.stat().st_size / 1024
+        print(f"  ✓ Created COG: {output_path.name} ({file_size:.1f} KB)")
         return True
         
     except Exception as e:
         print(f"  ✗ Conversion failed: {e}")
+        return False
+
+
+def verify_cog(cog_path: Path) -> bool:
+    """
+    Verify that the output is a valid Cloud Optimized GeoTIFF.
+    Uses gdalinfo to check for required COG structure.
+    """
+    try:
+        result = subprocess.run(
+            ["gdalinfo", "-json", str(cog_path)],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            return False
+        
+        import json
+        info = json.loads(result.stdout)
+        
+        # Check for internal tiling (block size should be 256x256)
+        bands = info.get("bands", [])
+        if bands:
+            block = bands[0].get("block", [])
+            if block and block[0] == 256:
+                print(f"  ✓ COG validated: {block[0]}x{block[1]} tiles")
+                return True
+        
+        return False
+        
+    except Exception:
         return False
 
 
@@ -179,7 +242,8 @@ def process_scenario(
     period_key: str,
     period_code: str,
     output_dir: Path,
-    temp_dir: Path
+    temp_dir: Path,
+    source_srs: str
 ) -> bool:
     """Download and process a single KOSTRA scenario."""
     
@@ -203,7 +267,7 @@ def process_scenario(
         return False
     
     # Convert to COG
-    if not convert_to_cog(asc_path, output_path):
+    if not convert_to_cog(asc_path, output_path, source_srs=source_srs):
         return False
     
     # Cleanup temp files
@@ -215,7 +279,7 @@ def process_scenario(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Prepare KOSTRA-DWD-2020 precipitation data for heavy rain risk visualization"
+        description="Prepare KOSTRA-DWD-2020 precipitation data as Cloud Optimized GeoTIFFs"
     )
     parser.add_argument(
         "--output-dir",
@@ -237,11 +301,18 @@ def main():
     
     args = parser.parse_args()
     
-    print("=" * 60)
-    print("KOSTRA-DWD-2020 Data Preparation")
-    print("=" * 60)
+    print("=" * 70)
+    print("KOSTRA-DWD-2020 Data Preparation (COG Virtual Tiling)")
+    print("=" * 70)
+    print()
+    print("Output format: Cloud Optimized GeoTIFF (COG)")
+    print("  - 256x256 internal tiles for HTTP Range Request streaming")
+    print("  - Built-in overview pyramids for multi-zoom rendering")
+    print("  - DEFLATE compression for optimal file size")
+    print()
     
     # Check GDAL
+    print("Checking dependencies...")
     if not check_gdal_installed():
         print("\n✗ ERROR: GDAL tools not found!")
         print("  Install with: brew install gdal (macOS) or apt install gdal-bin (Linux)")
@@ -271,13 +342,21 @@ def main():
         
         for d_key, d_code in DURATIONS.items():
             for p_key, p_code in RETURN_PERIODS.items():
-                if process_scenario(d_key, d_code, p_key, p_code, args.output_dir, temp_path):
+                if process_scenario(
+                    d_key, d_code, p_key, p_code, 
+                    args.output_dir, temp_path, args.source_srs
+                ):
                     success_count += 1
     
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print(f"COMPLETE: {success_count}/{total_count} scenarios processed")
     print(f"Output: {args.output_dir.absolute()}")
-    print("=" * 60)
+    print()
+    print("Next steps:")
+    print("  1. Upload COG files to Supabase Storage bucket 'risk-layers/kostra/'")
+    print("  2. Ensure bucket is public or configure appropriate RLS")
+    print("  3. Browser will stream tiles via HTTP Range Requests")
+    print("=" * 70)
     
     if success_count < total_count:
         print("\n⚠ WARNING: Some scenarios failed. Check logs above.")

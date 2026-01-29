@@ -1,15 +1,19 @@
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { BitmapLayer, GeoJsonLayer } from '@deck.gl/layers';
+import { TileLayer } from '@deck.gl/geo-layers';
+import { MVTLayer } from '@deck.gl/geo-layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { COORDINATE_SYSTEM } from '@deck.gl/core';
 
 export interface DeckLayerConfig {
   id: string;
-  type: 'bitmap' | 'scatterplot' | 'geojson';
+  type: 'bitmap' | 'scatterplot' | 'geojson' | 'tile' | 'mvt';
   visible: boolean;
   opacity?: number;
+  // Bitmap layer
   image?: HTMLCanvasElement | ImageBitmap;
   bounds?: [number, number, number, number];
+  // GeoJson layer
   data?: any;
   styleConfig?: {
     getFillColor?: (feature: any) => [number, number, number, number];
@@ -17,6 +21,16 @@ export interface DeckLayerConfig {
     lineWidth?: number;
     pickable?: boolean;
   };
+  // Tile layer (COG)
+  tileUrl?: string;
+  tileBounds?: { west: number; south: number; east: number; north: number };
+  tileSize?: number;
+  minZoom?: number;
+  maxZoom?: number;
+  loadTile?: (tile: { bbox: any; z: number }) => Promise<{ image: ImageBitmap; bounds: [number, number, number, number] } | null>;
+  // MVT layer (PMTiles)
+  pmtilesUrl?: string;
+  layerName?: string;
 }
 
 let overlayInstance: MapboxOverlay | null = null;
@@ -52,7 +66,6 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
   if (overlayInstance) {
     try {
       if (attachedMap) {
-        // If we attached manually, detach first.
         try { (overlayInstance as any).onRemove(attachedMap as any); } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
@@ -67,24 +80,18 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
   overlayInstance = new MapboxOverlay({
     interleaved: false,
     layers: [],
-    // Prevent WebGL context loss issues
     _typedArrayManagerProps: {
       overAlloc: 2,
       poolSize: 100,
     },
   });
 
-  // NOTE: In this project we attach deck manually to avoid MapLibre control/lifecycle edge cases
-  // (canvas occasionally not visible / lost on style changes).
-  // CRITICAL: Use getCanvasContainer() to insert directly above the map canvas, not getContainer()
   try {
     const canvasContainer = map.getCanvasContainer();
     overlayContainerEl = overlayInstance.onAdd(map as any) as unknown as HTMLElement;
     overlayContainerEl.classList.add('deckgl-overlay-container');
-    // Ensure the container sits directly above the map canvas using inset shorthand
     overlayContainerEl.style.cssText = 'position: absolute; inset: 0; z-index: 20; pointer-events: none;';
     
-    // Ensure the overlay canvas matches MapLibre canvas size
     const mapCanvas = map.getCanvas();
     const deckCanvas = overlayContainerEl.querySelector('canvas');
     if (deckCanvas && mapCanvas) {
@@ -97,7 +104,6 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
     console.log('[DeckOverlayManager] Attached to canvasContainer, canvas size:', mapCanvas?.width, 'x', mapCanvas?.height);
   } catch (err) {
     console.warn('[DeckOverlayManager] Manual attach failed, using addControl fallback:', err);
-    // Fallback to standard control mounting
     map.addControl(overlayInstance as any);
   }
   attachedMap = map;
@@ -108,10 +114,8 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
 
 export function updateLayer(config: DeckLayerConfig) {
   console.log(`[DeckOverlayManager] updateLayer: ${config.id}`, {
+    type: config.type,
     visible: config.visible,
-    hasBounds: !!config.bounds,
-    hasImage: !!config.image,
-    bounds: config.bounds,
     opacity: config.opacity,
   });
   currentLayers.set(config.id, config);
@@ -138,11 +142,7 @@ function rebuildLayers() {
     .map(c => {
       // BitmapLayer for raster data
       if (c.type === 'bitmap' && c.image && c.bounds) {
-        console.log(`[DeckOverlayManager] Building BitmapLayer: ${c.id}`, {
-          bounds: c.bounds,
-          imageType: c.image.constructor.name,
-          opacity: c.opacity,
-        });
+        console.log(`[DeckOverlayManager] Building BitmapLayer: ${c.id}`);
         return new BitmapLayer({
           id: c.id,
           image: c.image,
@@ -156,12 +156,9 @@ function rebuildLayers() {
         });
       }
       
-      // GeoJsonLayer for vector data (e.g., CatRaRE events)
+      // GeoJsonLayer for vector data
       if (c.type === 'geojson' && c.data) {
-        console.log(`[DeckOverlayManager] Building GeoJsonLayer: ${c.id}`, {
-          featureCount: c.data?.features?.length || 0,
-          opacity: c.opacity,
-        });
+        console.log(`[DeckOverlayManager] Building GeoJsonLayer: ${c.id}`);
         
         const style = c.styleConfig || {};
         return new GeoJsonLayer({
@@ -183,10 +180,92 @@ function rebuildLayers() {
         });
       }
       
-      console.warn(`[DeckOverlayManager] Skipping layer ${c.id}: missing required data`, {
-        hasImage: !!c.image,
-        hasBounds: !!c.bounds,
-        hasData: !!c.data,
+      // TileLayer for COG streaming (KOSTRA)
+      if (c.type === 'tile' && c.tileUrl && c.loadTile) {
+        console.log(`[DeckOverlayManager] Building TileLayer (COG): ${c.id}`);
+        
+        const tileBounds = c.tileBounds || { west: 5.87, south: 47.27, east: 15.04, north: 55.06 };
+        
+        return new TileLayer({
+          id: c.id,
+          minZoom: c.minZoom ?? 5,
+          maxZoom: c.maxZoom ?? 14,
+          tileSize: c.tileSize ?? 256,
+          opacity: c.opacity ?? 0.7,
+          extent: [tileBounds.west, tileBounds.south, tileBounds.east, tileBounds.north],
+          
+          getTileData: async (tile: any) => {
+            const { bbox, z } = tile;
+            try {
+              const result = await c.loadTile!({ bbox, z });
+              return result;
+            } catch (err) {
+              console.warn(`[DeckOverlayManager] Tile load failed:`, err);
+              return null;
+            }
+          },
+          
+          renderSubLayers: (props: any) => {
+            const { data, tile } = props;
+            if (!data || !data.image) return null;
+            
+            return new BitmapLayer({
+              id: `${props.id}-bitmap`,
+              image: data.image,
+              bounds: data.bounds,
+              opacity: c.opacity ?? 0.7,
+              coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+              parameters: {
+                depthTest: false,
+                blend: true
+              }
+            });
+          },
+        });
+      }
+      
+      // MVTLayer for PMTiles streaming (CatRaRE)
+      if (c.type === 'mvt' && c.pmtilesUrl) {
+        console.log(`[DeckOverlayManager] Building MVTLayer (PMTiles): ${c.id}`);
+        
+        const style = c.styleConfig || {};
+        
+        // Convert pmtiles:// URL format for MVTLayer
+        const tileUrl = `pmtiles://${c.pmtilesUrl}/{z}/{x}/{y}.mvt`;
+        
+        return new MVTLayer({
+          id: c.id,
+          data: tileUrl,
+          minZoom: 4,
+          maxZoom: 12,
+          opacity: c.opacity ?? 0.6,
+          
+          // Layer filtering
+          ...(c.layerName ? { layerName: c.layerName } : {}),
+          
+          // Polygon styling
+          filled: true,
+          stroked: true,
+          pickable: style.pickable ?? true,
+          
+          getFillColor: style.getFillColor || ((f: any) => [100, 100, 100, 100]),
+          getLineColor: style.getLineColor || ((f: any) => [50, 50, 50, 255]),
+          getLineWidth: style.lineWidth || 2,
+          lineWidthUnits: 'pixels',
+          
+          parameters: {
+            depthTest: false,
+            blend: true
+          },
+          
+          // Handle errors gracefully
+          onTileError: (err: any) => {
+            console.warn(`[DeckOverlayManager] MVT tile error:`, err);
+          },
+        });
+      }
+      
+      console.warn(`[DeckOverlayManager] Skipping layer ${c.id}: unsupported type or missing data`, {
         type: c.type,
       });
       return null;
@@ -233,7 +312,6 @@ export function getDiagnostics() {
     initialized: !!overlayInstance,
     layerCount: currentLayers.size,
     layers: Array.from(currentLayers.keys()),
-    // Für OverlayDiagnosticsPanel:
     canvasDimensions: deckCanvas ? { width: deckCanvas.width, height: deckCanvas.height } : null,
     canvasCssDimensions: deckCanvas ? { 
       width: Math.round(deckCanvas.getBoundingClientRect().width), 

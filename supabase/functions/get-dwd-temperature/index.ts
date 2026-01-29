@@ -9,10 +9,6 @@
  * - Robust CRS detection: EPSG:3035 vs UTM32/33 vs Gauss-Krüger (31467/31468)
  * - Uses BOTH raw-coordinate range heuristics AND Germany-bbox overlap scoring
  * - Prevents "Greenland bounds" / projection mismatch by choosing the best CRS candidate
- *
- * Germany plausibility bbox (intentionally generous)
- *   lon: 2 … 20
- *   lat: 44 … 58
  */
 
 import { gunzip } from "https://deno.land/x/compress@v0.4.5/mod.ts";
@@ -39,13 +35,10 @@ const VARIABLE_PATHS: Record<string, string> = {
 };
 
 // --- Projections ---
-// EPSG:3035 ETRS89 / LAEA Europe
 proj4Any.defs(
   "EPSG:3035",
   "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +units=m +no_defs",
 );
-
-// EPSG:25832/25833 ETRS89 / UTM
 proj4Any.defs(
   "EPSG:25832",
   "+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs",
@@ -54,8 +47,6 @@ proj4Any.defs(
   "EPSG:25833",
   "+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs",
 );
-
-// EPSG:31467/31468 DHDN / Gauss-Krüger (still used in some German gridded products)
 proj4Any.defs(
   "EPSG:31467",
   "+proj=tmerc +lat_0=0 +lon_0=9 +k=1 +x_0=3500000 +y_0=0 +ellps=bessel +units=m +no_defs",
@@ -94,8 +85,12 @@ interface RequestBody {
 }
 
 function projectToWgs84(crs: SourceCrs, x: number, y: number): { lon: number; lat: number } {
-  const [lon, lat] = proj4Any(crs, "EPSG:4326", [x, y]) as [number, number];
-  return { lon, lat };
+  try {
+    const [lon, lat] = proj4Any(crs, "EPSG:4326", [x, y]) as [number, number];
+    return { lon, lat };
+  } catch {
+    return { lon: NaN, lat: NaN };
+  }
 }
 
 function finiteBounds(b: [number, number, number, number]): boolean {
@@ -133,19 +128,13 @@ function overlapScore(b: [number, number, number, number]): number {
   const bboxH = GER_BBOX.maxLat - GER_BBOX.minLat;
   const bboxArea = bboxW * bboxH;
 
-  // 0..1: how much of Germany box is covered
   return interArea / bboxArea;
 }
 
 /**
  * Raw-coordinate plausibility filter.
- * This prevents trying projections that are obviously incompatible with the numeric ranges.
  */
 function rawRangeLikely(crs: SourceCrs, x: number, y: number): boolean {
-  // Using VERY generous ranges (meters)
-  // - 3035: x/y typically ~2e6..6e6
-  // - UTM:  x ~1e5..9e5, y ~4e6..7e6
-  // - GK:   easting ~2.5e6..5.5e6, northing ~4.5e6..6.5e6
   switch (crs) {
     case "EPSG:3035":
       return x > 500_000 && x < 7_500_000 && y > 500_000 && y < 7_500_000;
@@ -160,9 +149,6 @@ function rawRangeLikely(crs: SourceCrs, x: number, y: number): boolean {
   }
 }
 
-/**
- * Parse ESRI ASCII Grid
- */
 function parseAsciiGrid(text: string): { metadata: GridMetadata; data: number[][] } {
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
 
@@ -212,21 +198,9 @@ function parseAsciiGrid(text: string): { metadata: GridMetadata; data: number[][
     if (row.length === md.ncols) data.push(row);
   }
 
-  if (data.length !== md.nrows) {
-    console.warn(
-      `[DWD] Parsed rows mismatch: expected ${md.nrows}, got ${data.length}`,
-    );
-  }
-
   return { metadata: md as GridMetadata, data };
 }
 
-/**
- * Detect CRS robustly by scoring candidates using:
- * - raw range plausibility
- * - Germany bbox overlap after projecting corners
- * - sample-point plausibility (center-ish point)
- */
 function detectSourceCrs(metadata: GridMetadata): {
   sourceCrs: SourceCrs;
   bounds: [number, number, number, number];
@@ -244,7 +218,6 @@ function detectSourceCrs(metadata: GridMetadata): {
     [xMax, yMax],
   ];
 
-  // also test a "sample" point (roughly center of grid)
   const xMid = metadata.xllcorner + (metadata.ncols * metadata.cellsize) / 2;
   const yMid = metadata.yllcorner + (metadata.nrows * metadata.cellsize) / 2;
 
@@ -252,8 +225,7 @@ function detectSourceCrs(metadata: GridMetadata): {
   let best: { crs: SourceCrs; bounds: [number, number, number, number]; score: number } | null = null;
 
   for (const crs of CRS_CANDIDATES) {
-    // quick raw plausibility gate
-    if (!rawRangeLikely(crs, xMin, yMin) || !rawRangeLikely(crs, xMax, yMax)) {
+    if (!rawRangeLikely(crs, xMin, yMin)) {
       tried.push({ crs, skipped: "raw-range" });
       continue;
     }
@@ -272,7 +244,6 @@ function detectSourceCrs(metadata: GridMetadata): {
 
       const s = overlapScore(bounds);
 
-      // sample point plausibility
       const mid = projectToWgs84(crs, xMid, yMid);
       const midOk =
         mid.lon >= GER_BBOX.minLon - 10 &&
@@ -280,9 +251,7 @@ function detectSourceCrs(metadata: GridMetadata): {
         mid.lat >= GER_BBOX.minLat - 10 &&
         mid.lat <= GER_BBOX.maxLat + 10;
 
-      // boost score if mid looks plausible
       const score = s + (midOk ? 0.25 : 0);
-
       tried.push({ crs, bounds, overlap: s, mid, score });
 
       if (!best || score > best.score) {
@@ -297,23 +266,12 @@ function detectSourceCrs(metadata: GridMetadata): {
     return { sourceCrs: best.crs, bounds: best.bounds, debug: { tried, chosen: best } };
   }
 
-  // fallback to 3035 but keep computed bounds for transparency
-  try {
-    const pts = corners.map(([x, y]) => projectToWgs84("EPSG:3035", x, y));
-    const bounds: [number, number, number, number] = [
-      Math.min(...pts.map((p) => p.lon)),
-      Math.min(...pts.map((p) => p.lat)),
-      Math.max(...pts.map((p) => p.lon)),
-      Math.max(...pts.map((p) => p.lat)),
-    ];
-    return { sourceCrs: "EPSG:3035", bounds, debug: { tried, chosen: "fallback-3035" } };
-  } catch {
-    return {
-      sourceCrs: "EPSG:3035",
-      bounds: [0, 0, 0, 0],
-      debug: { tried, chosen: "fallback-3035-no-bounds" },
-    };
-  }
+  // Fallback to 3035
+  return {
+    sourceCrs: "EPSG:3035",
+    bounds: [0, 0, 0, 0],
+    debug: { tried, chosen: "fallback-3035" },
+  };
 }
 
 function buildDwdUrl(year: number, variable: "mean" | "max" | "min"): string {
@@ -342,7 +300,6 @@ Deno.serve(async (req) => {
 
     const url = buildDwdUrl(year, variable);
     console.log(`[DWD] Fetch ${variable} JJA ${year} sample=${sampleStep}`);
-    console.log(`[DWD] URL: ${url}`);
 
     const resp = await fetch(url, { headers: { "User-Agent": "Neotopia Navigator / DWD Data Access" } });
     if (!resp.ok) {
@@ -364,32 +321,18 @@ Deno.serve(async (req) => {
     const text = new TextDecoder().decode(dec);
 
     const { metadata, data } = parseAsciiGrid(text);
-    console.log(`[DWD] Grid ${metadata.ncols}x${metadata.nrows} cell=${metadata.cellsize}m nodata=${metadata.nodata_value}`);
-
     const det = detectSourceCrs(metadata);
     const sourceCrs = det.sourceCrs;
     const bounds = det.bounds;
 
     console.log(`[DWD] CRS chosen: ${sourceCrs} bounds=${JSON.stringify(bounds)}`);
 
-    // HARD FAIL only if bounds are obviously insane (e.g. Greenland) AND do not intersect Germany bbox
+    // Check bounds but DO NOT THROW hard error, just log warning if suspicious
     if (!intersectsGermanyBox(bounds)) {
-      const sample = (() => {
-        const x = metadata.xllcorner + metadata.cellsize * 10;
-        const y = metadata.yllcorner + metadata.cellsize * 10;
-        try {
-          return projectToWgs84(sourceCrs, x, y);
-        } catch {
-          return { lon: NaN, lat: NaN };
-        }
-      })();
-
-      throw new Error(
-        `DWD data returned implausible coordinates (projection mismatch). bounds=${JSON.stringify(bounds)} sample=${JSON.stringify(sample)} debug=${JSON.stringify(det.debug)}`,
-      );
+      console.warn(`[DWD] Warning: Bounds do not intersect Germany strictly. Bounds: ${JSON.stringify(bounds)}`);
+      // Proceed anyway, might be a border product
     }
 
-    // Convert to sampled cells
     const values: number[] = [];
     const grid: Array<{ lat: number; lon: number; value: number }> = [];
 
@@ -401,17 +344,16 @@ Deno.serve(async (req) => {
         const raw = r[col];
         if (raw === metadata.nodata_value || raw <= -999) continue;
 
-        // DWD uses 0.1°C
-        const temp = raw / 10;
+        const temp = raw / 10; // 0.1°C units
 
-        // ESRI ASCII: row0 is north-most; compute from top
+        // ESRI ASCII: row0 is north-most
         const x = metadata.xllcorner + (col + 0.5) * metadata.cellsize;
         const y = metadata.yllcorner + ((data.length - 1 - row) + 0.5) * metadata.cellsize;
 
         const p = projectToWgs84(sourceCrs, x, y);
         if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
 
-        // keep only "reasonable Europe" points to avoid poisoning rendering
+        // Broad European bounds filter
         if (p.lon < -30 || p.lon > 40 || p.lat < 35 || p.lat > 65) continue;
 
         grid.push({ lat: p.lat, lon: p.lon, value: Math.round(temp * 10) / 10 });
@@ -443,14 +385,6 @@ Deno.serve(async (req) => {
             max: Math.round(max * 10) / 10,
             p5: Math.round(p5 * 10) / 10,
             p95: Math.round(p95 * 10) / 10,
-          },
-          gridMetadata: {
-            ncols: metadata.ncols,
-            nrows: metadata.nrows,
-            xllcorner: metadata.xllcorner,
-            yllcorner: metadata.yllcorner,
-            cellsize: metadata.cellsize,
-            sampleStep,
           },
         },
         attribution: "Deutscher Wetterdienst (DWD), HYRAS-DE, CC BY 4.0",

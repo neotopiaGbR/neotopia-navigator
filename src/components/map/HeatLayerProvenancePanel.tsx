@@ -1,69 +1,53 @@
 /**
  * Heat Layer Data Provenance Panel
  * 
- * Shows detailed information about active heat layers:
+ * Shows information about active heat layers:
  * - Base layer (MODIS/VIIRS) - always active
  * - High-res ECOSTRESS Summer Composite - when available
- * - Coverage confidence, normalization, and quality filtering info
  */
 
 import React from 'react';
-import { AlertCircle, CheckCircle, Info, Layers, Satellite, Globe, ShieldCheck, ShieldAlert, Shield } from 'lucide-react';
+import { AlertCircle, CheckCircle, Info, Layers, Satellite, Globe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { GLOBAL_LST_INFO } from './GlobalLSTOverlay';
-import type { AggregationMethod, CoverageConfidence } from './ecostress/compositeUtils';
+import type { AggregationMethod } from './ecostress/compositeUtils';
 
 interface EcostressMetadata {
   status: 'match' | 'no_coverage' | 'loading' | null;
   cogUrl?: string;
   acquisitionDatetime?: string;
   granuleId?: string;
-  qualityScore?: number;
-  coveragePercent?: number;
-  cloudPercent?: number;
-  candidatesChecked?: number;
   message?: string;
   // Summer composite fields
   granuleCount?: number;
   successfulGranules?: number;
-  discardedGranules?: number;
   aggregationMethod?: AggregationMethod;
   timeWindow?: { from: string; to: string };
-  coverageConfidence?: CoverageConfidence;
-  p5Temp?: number;
-  p95Temp?: number;
-  bestRejected?: {
-    quality_score: number;
-    coverage_percent: number;
-    cloud_percent: number;
-    datetime: string;
-  };
 }
 
 interface HeatLayerProvenancePanelProps {
   visible: boolean;
-  ecostressEnabled: boolean;
-  ecostressMetadata: EcostressMetadata | null;
-  ecostressLoading: boolean;
-  globalLSTOpacity: number;
-  ecostressOpacity: number;
+  ecostressEnabled?: boolean;
+  ecostressMetadata?: EcostressMetadata | null;
+  ecostressLoading?: boolean;
+  globalLSTOpacity?: number;
+  ecostressOpacity?: number;
   aggregationMethod?: AggregationMethod;
 }
 
 const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
   visible,
-  ecostressEnabled,
+  ecostressEnabled = false,
   ecostressMetadata,
-  ecostressLoading,
-  globalLSTOpacity,
-  ecostressOpacity,
+  ecostressLoading = false,
+  globalLSTOpacity = 80,
+  ecostressOpacity = 80,
   aggregationMethod = 'median',
 }) => {
   if (!visible) return null;
 
   const hasEcostressMatch = ecostressMetadata?.status === 'match';
   const hasNoCoverage = ecostressMetadata?.status === 'no_coverage';
-  const confidence = ecostressMetadata?.coverageConfidence;
 
   return (
     <div className="p-3 rounded-lg border border-border bg-muted/30 space-y-3">
@@ -131,10 +115,6 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
               status="active"
               statusText="Aktiv"
               attribution="NASA LP DAAC / ECOSTRESS"
-              coverageConfidence={confidence}
-              discardedGranules={ecostressMetadata.discardedGranules}
-              p5Temp={ecostressMetadata.p5Temp}
-              p95Temp={ecostressMetadata.p95Temp}
             />
           ) : hasNoCoverage ? (
             <LayerInfo
@@ -146,8 +126,6 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
               status="unavailable"
               statusText="Nicht verfügbar"
               message={ecostressMetadata.message || 'Keine ausreichende Abdeckung für diese Region.'}
-              bestRejected={ecostressMetadata.bestRejected}
-              candidatesChecked={ecostressMetadata.candidatesChecked}
             />
           ) : (
             <LayerInfo
@@ -170,7 +148,7 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
           <Info className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
           <p className="text-[11px] text-amber-700 dark:text-amber-300">
             Die globale MODIS-Basiskarte bleibt sichtbar. Das hochauflösende ECOSTRESS-Sommer-Komposit
-            wird nur angezeigt, wenn genügend qualitativ hochwertige Aufnahmen für diese Region existieren.
+            wird nur angezeigt, wenn genügend Aufnahmen für diese Region existieren.
           </p>
         </div>
       )}
@@ -188,28 +166,14 @@ interface LayerInfoProps {
   coverage?: string;
   temporalInfo?: string;
   opacity?: number;
-  qualityScore?: number;
-  cloudPercent?: number;
   aggregation?: string;
   status: 'active' | 'loading' | 'unavailable';
   statusText: string;
   message?: string;
   attribution?: string;
-  coverageConfidence?: CoverageConfidence;
-  discardedGranules?: number;
-  p5Temp?: number;
-  p95Temp?: number;
-  bestRejected?: {
-    quality_score: number;
-    coverage_percent: number;
-    cloud_percent: number;
-    datetime: string;
-  };
-  candidatesChecked?: number;
 }
 
 const LayerInfo: React.FC<LayerInfoProps> = ({
-  tier,
   icon,
   title,
   source,
@@ -217,19 +181,11 @@ const LayerInfo: React.FC<LayerInfoProps> = ({
   coverage,
   temporalInfo,
   opacity,
-  qualityScore,
-  cloudPercent,
   aggregation,
   status,
   statusText,
   message,
   attribution,
-  coverageConfidence,
-  discardedGranules,
-  p5Temp,
-  p95Temp,
-  bestRejected,
-  candidatesChecked,
 }) => {
   const statusConfig = {
     active: { icon: <CheckCircle className="h-3 w-3" />, color: 'text-green-500', bg: 'bg-green-500/10' },
@@ -238,31 +194,6 @@ const LayerInfo: React.FC<LayerInfoProps> = ({
   };
 
   const cfg = statusConfig[status];
-
-  // Confidence icon and color
-  const getConfidenceIcon = () => {
-    if (!coverageConfidence) return null;
-    switch (coverageConfidence.level) {
-      case 'high':
-        return <ShieldCheck className="h-3 w-3 text-green-500" />;
-      case 'medium':
-        return <Shield className="h-3 w-3 text-yellow-500" />;
-      case 'low':
-        return <ShieldAlert className="h-3 w-3 text-orange-500" />;
-    }
-  };
-
-  const getConfidenceColor = () => {
-    if (!coverageConfidence) return '';
-    switch (coverageConfidence.level) {
-      case 'high':
-        return 'text-green-600 dark:text-green-400';
-      case 'medium':
-        return 'text-yellow-600 dark:text-yellow-400';
-      case 'low':
-        return 'text-orange-600 dark:text-orange-400';
-    }
-  };
 
   return (
     <div className={cn('p-2.5 rounded-md border', status === 'active' ? 'border-green-500/30 bg-green-500/5' : 'border-border/50 bg-background/50')}>
@@ -277,17 +208,6 @@ const LayerInfo: React.FC<LayerInfoProps> = ({
           <span>{statusText}</span>
         </div>
       </div>
-
-      {/* Coverage Confidence Indicator (for ECOSTRESS) */}
-      {coverageConfidence && status === 'active' && (
-        <div className="mt-2 flex items-center gap-2 p-1.5 rounded bg-muted/50 border border-border/50">
-          {getConfidenceIcon()}
-          <span className={cn('text-[10px] font-medium', getConfidenceColor())}>
-            Konfidenz: {coverageConfidence.level === 'high' ? 'Hoch' : coverageConfidence.level === 'medium' ? 'Mittel' : 'Gering'}
-          </span>
-          <span className="text-[10px] text-muted-foreground">({coverageConfidence.percent}%)</span>
-        </div>
-      )}
 
       {/* Details Grid */}
       <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
@@ -311,34 +231,10 @@ const LayerInfo: React.FC<LayerInfoProps> = ({
           </>
         )}
 
-        {qualityScore != null && (
-          <>
-            <span className="text-muted-foreground">Qualität:</span>
-            <span className="text-foreground font-medium">{Math.round(qualityScore * 100)}%</span>
-          </>
-        )}
-
-        {cloudPercent != null && (
-          <>
-            <span className="text-muted-foreground">Bewölkung:</span>
-            <span className="text-foreground">{cloudPercent}%</span>
-          </>
-        )}
-
         {aggregation && (
           <>
             <span className="text-muted-foreground">Aggregation:</span>
             <span className="text-foreground font-medium">{aggregation}</span>
-          </>
-        )}
-
-        {/* Normalization range */}
-        {p5Temp != null && p95Temp != null && (
-          <>
-            <span className="text-muted-foreground">Normalisierung:</span>
-            <span className="text-foreground">
-              {(p5Temp - 273.15).toFixed(0)}°C – {(p95Temp - 273.15).toFixed(0)}°C (P5–P95)
-            </span>
           </>
         )}
 
@@ -348,40 +244,11 @@ const LayerInfo: React.FC<LayerInfoProps> = ({
             <span className="text-foreground">{opacity}%</span>
           </>
         )}
-
-        {discardedGranules != null && discardedGranules > 0 && (
-          <>
-            <span className="text-muted-foreground">Verworfen:</span>
-            <span className="text-foreground">{discardedGranules} (Qualitätsfilter)</span>
-          </>
-        )}
       </div>
 
       {/* Unavailable message */}
       {message && status === 'unavailable' && (
         <p className="mt-2 text-[10px] text-muted-foreground">{message}</p>
-      )}
-
-      {/* Best rejected granule info */}
-      {bestRejected && (
-        <div className="mt-2 p-1.5 rounded bg-muted/50 border border-border/50">
-          <p className="text-[10px] text-muted-foreground font-medium">Beste verfügbare Aufnahme:</p>
-          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] mt-1">
-            <span className="text-muted-foreground">Qualität:</span>
-            <span>{Math.round(bestRejected.quality_score * 100)}%</span>
-            <span className="text-muted-foreground">Abdeckung:</span>
-            <span>{bestRejected.coverage_percent}%</span>
-            <span className="text-muted-foreground">Datum:</span>
-            <span>{new Date(bestRejected.datetime).toLocaleDateString('de-DE')}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Candidates checked */}
-      {candidatesChecked != null && (
-        <p className="mt-1 text-[9px] text-muted-foreground/60">
-          {candidatesChecked} Aufnahmen geprüft
-        </p>
       )}
 
       {/* Attribution */}

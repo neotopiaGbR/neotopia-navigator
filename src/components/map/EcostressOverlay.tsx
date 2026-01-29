@@ -20,9 +20,6 @@ interface GranuleData {
   datetime: string;
   granule_id: string;
   granule_bounds: [number, number, number, number];
-  quality_score: number;
-  coverage_percent: number;
-  cloud_percent: number;
 }
 
 interface EcostressOverlayProps {

@@ -8,9 +8,6 @@ export interface GranuleData {
   datetime: string;
   granule_id: string;
   granule_bounds: [number, number, number, number];
-  quality_score: number;
-  coverage_percent: number;
-  cloud_percent: number;
 }
 
 // Minimal metadata type exported for downstream consumers

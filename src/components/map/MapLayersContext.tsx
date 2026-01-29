@@ -118,7 +118,7 @@ const defaultHeatLayers: HeatLayerTierConfig = {
   ecostressEnabled: true, // Try to enhance with ECOSTRESS
   ecostressOpacity: 80,
   ecostressMinCoverage: 0.8, // 80% coverage threshold
-  aggregationMethod: 'median', // Default to median aggregation
+  aggregationMethod: 'p90', // Default to P90 for urban heat island analysis
 };
 
 const defaultAirTemperature: AirTemperatureConfig = {

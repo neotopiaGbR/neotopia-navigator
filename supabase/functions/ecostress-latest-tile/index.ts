@@ -26,17 +26,18 @@ interface RequestBody {
   max_granules?: number; // Cap on returned granules (default: 40)
 }
 
-// Daytime filter: Use approximate *solar local time* derived from longitude.
+// SCIENTIFIC PEAK-HEAT FILTER: Only include afternoon acquisitions (12:00-17:00 solar local time)
+// This eliminates cooler morning overpasses and ensures comparable surface temperatures.
 // solarLocalTime ≈ UTC + lon/15 (hours). This is more robust than filtering by UTC.
-const DAYTIME_START_LOCAL = 9;
+const DAYTIME_START_LOCAL = 12; // Changed from 9 to 12 for peak-heat only
 const DAYTIME_END_LOCAL = 17;
 
-// Maximum granules to return - INCREASED for robust P90 statistics
-// More granules = better differentiation between P90 and Max
-const DEFAULT_MAX_GRANULES = 100;
-// CMR page size (max 2000) - keep high to capture full summer
-const CMR_PAGE_SIZE = 1000;
-// Max pages to fetch (safety limit) - allows up to 5000 granules
+// Maximum granules to return - INCREASED for robust multi-year P90 statistics
+// With 3 summers of data, we need more granules for stable statistical aggregation
+const DEFAULT_MAX_GRANULES = 150;
+// CMR page size (max 2000) - keep high to capture 3 full summers
+const CMR_PAGE_SIZE = 2000;
+// Max pages to fetch (safety limit) - allows up to 10,000 granules for 3-year search
 const MAX_CMR_PAGES = 5;
 
 function getSolarLocalHour(date: Date, lon: number): number {

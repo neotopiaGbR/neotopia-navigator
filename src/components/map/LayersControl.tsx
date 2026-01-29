@@ -338,22 +338,11 @@ const HeatOverlayControl = React.forwardRef<HTMLDivElement, HeatOverlayControlPr
             </div>
           )}
 
-          {/* Aggregation Method Toggle */}
+          {/* Aggregation Method Toggle - Only P90 and Max for Urban Heat Island Analysis */}
           {hasEcostressMatch && (
             <div className="space-y-1.5">
               <span className="text-xs text-muted-foreground">Aggregationsmethode:</span>
               <div className="flex gap-2">
-                <button
-                  onClick={() => onAggregationMethodChange('median')}
-                  className={cn(
-                    'flex-1 px-2 py-1.5 text-xs rounded border transition-colors',
-                    heatLayers.aggregationMethod === 'median'
-                      ? 'bg-primary text-primary-foreground border-primary'
-                      : 'bg-background border-border hover:bg-muted'
-                  )}
-                >
-                  Median
-                </button>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -500,7 +489,7 @@ const HeatOverlayControl = React.forwardRef<HTMLDivElement, HeatOverlayControlPr
             <div className="text-[10px] text-muted-foreground/70 space-y-1">
               <p>
                 Sommer-Komposit: {granuleCount} Aufnahmen 
-                ({heatLayers.aggregationMethod === 'p90' ? '90. Perzentil' : 'Median'})
+                ({heatLayers.aggregationMethod === 'max' ? 'Maximum' : '90. Perzentil'})
               </p>
               {info.tooltipNote && (
                 <p className="italic">{info.tooltipNote}</p>

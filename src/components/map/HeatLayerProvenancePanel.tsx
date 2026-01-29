@@ -111,7 +111,7 @@ const HeatLayerProvenancePanel: React.FC<HeatLayerProvenancePanelProps> = ({
                     : 'Sommer (Jun–Aug)'
               }
               opacity={ecostressOpacity}
-              aggregation={aggregationMethod === 'max' ? 'Maximum' : aggregationMethod === 'p90' ? '90. Perzentil' : 'Median'}
+              aggregation={aggregationMethod === 'max' ? 'Maximum' : '90. Perzentil'}
               status="active"
               statusText="Aktiv"
               attribution="NASA LP DAAC / ECOSTRESS"

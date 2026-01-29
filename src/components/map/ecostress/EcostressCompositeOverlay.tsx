@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
-import { updateLayer, removeLayer } from '../DeckOverlayManager';
+import { useEffect, useState, useRef } from 'react';
+import { updateLayer, removeLayer, isReady } from '../DeckOverlayManager';
 import { createComposite, type AggregationMethod } from './compositeUtils';
-import { supabase } from '@/integrations/supabase/client';
 
 interface Props {
   visible: boolean;
@@ -11,7 +10,12 @@ interface Props {
   aggregationMethod?: AggregationMethod;
 }
 
-// NUR "export function", KEIN "export default"
+/**
+ * ECOSTRESS Summer Composite Overlay
+ * 
+ * Renders a heat-colorized bitmap from multiple ECOSTRESS granules.
+ * Uses deck.gl BitmapLayer via DeckOverlayManager singleton.
+ */
 export function EcostressCompositeOverlay({
   visible,
   opacity = 0.8,
@@ -19,95 +23,116 @@ export function EcostressCompositeOverlay({
   regionBbox,
   aggregationMethod = 'median',
 }: Props) {
-  const [internalGranules, setInternalGranules] = useState<any[]>([]);
-  const [layerData, setLayerData] = useState<{ image: ImageBitmap; bounds: any } | null>(null);
+  const [layerData, setLayerData] = useState<{ image: ImageBitmap; bounds: [number, number, number, number] } | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  
+  // Refs to track previous values and avoid redundant regeneration
+  const prevGranulesKeyRef = useRef<string>('');
+  const prevAggregationRef = useRef<AggregationMethod>(aggregationMethod);
+  const generationIdRef = useRef(0);
 
-  // 1. Fetching
+  // Create a stable key for granules to detect actual changes
+  const granulesKey = allGranules.length > 0 
+    ? `${allGranules.length}-${allGranules[0]?.granule_id || ''}-${allGranules[allGranules.length - 1]?.granule_id || ''}`
+    : '';
+
+  // Generate composite when granules or aggregation method changes
   useEffect(() => {
-    if (allGranules && allGranules.length > 0) {
-      setInternalGranules(allGranules);
-      return;
-    }
-    if (!visible || !regionBbox) return;
-
-    const fetchGranules = async () => {
-      try {
-        const centerLat = (regionBbox[1] + regionBbox[3]) / 2;
-        const centerLon = (regionBbox[0] + regionBbox[2]) / 2;
-
-        const { data, error } = await supabase.functions.invoke('ecostress-latest-tile', {
-          body: {
-            lat: centerLat,
-            lon: centerLon,
-            region_bbox: regionBbox,
-            date_from: getDaysAgo(60),
-            date_to: new Date().toISOString().split('T')[0],
-          },
-        });
-
-        if (!error && data?.all_granules) {
-            console.log(`[Ecostress] Fetched ${data.all_granules.length} granules`);
-            setInternalGranules(data.all_granules);
+    // Skip if not visible or no data
+    if (!visible || !regionBbox || allGranules.length === 0) {
+      // Clear layer if we were previously showing something
+      if (layerData) {
+        removeLayer('ecostress-composite');
+        if (layerData.image) {
+          try { layerData.image.close(); } catch { /* ignore */ }
         }
-      } catch (err) {
-        console.error(err);
+        setLayerData(null);
       }
-    };
-    fetchGranules();
-  }, [visible, regionBbox, allGranules]);
-
-  // 2. Generation (ImageBitmap)
-  useEffect(() => {
-    const granulesToUse = allGranules.length > 0 ? allGranules : internalGranules;
-
-    if (!visible || !regionBbox || granulesToUse.length === 0) {
-      removeLayer('ecostress-composite');
       return;
     }
 
-    let active = true;
+    // Skip if nothing changed (same granules + same aggregation)
+    if (granulesKey === prevGranulesKeyRef.current && aggregationMethod === prevAggregationRef.current && layerData) {
+      return;
+    }
+
+    // Track this generation to handle race conditions
+    const genId = ++generationIdRef.current;
+    prevGranulesKeyRef.current = granulesKey;
+    prevAggregationRef.current = aggregationMethod;
 
     async function generate() {
+      setIsGenerating(true);
+      console.log(`[EcostressComposite] Starting ${aggregationMethod} composite from ${allGranules.length} granules...`);
+      
       try {
-        const result = await createComposite(granulesToUse, regionBbox!, aggregationMethod);
-        if (!active || !result) return;
+        const result = await createComposite(allGranules, regionBbox!, aggregationMethod);
+        
+        // Check if this generation is still current
+        if (genId !== generationIdRef.current) {
+          console.log('[EcostressComposite] Generation superseded, discarding result');
+          return;
+        }
+        
+        if (!result) {
+          console.warn('[EcostressComposite] createComposite returned null');
+          setIsGenerating(false);
+          return;
+        }
 
-        const cvs = document.createElement('canvas');
-        cvs.width = result.imageData.width;
-        cvs.height = result.imageData.height;
-        const ctx = cvs.getContext('2d');
-        if (!ctx) return;
+        console.log(`[EcostressComposite] Composite complete: ${result.stats.validPixels} valid pixels, bounds:`, result.bounds);
+
+        // Create ImageBitmap from ImageData for stable WebGL texture
+        const canvas = document.createElement('canvas');
+        canvas.width = result.imageData.width;
+        canvas.height = result.imageData.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          console.error('[EcostressComposite] Failed to get canvas context');
+          setIsGenerating(false);
+          return;
+        }
         
         ctx.putImageData(result.imageData, 0, 0);
-        
-        // ImageBitmap für Performance & Stabilität
-        const bitmap = await createImageBitmap(cvs);
+        const bitmap = await createImageBitmap(canvas);
 
-        if (active) {
-             setLayerData({ image: bitmap, bounds: result.bounds });
-        } else {
-             bitmap.close();
+        // Check again after async operation
+        if (genId !== generationIdRef.current) {
+          bitmap.close();
+          return;
         }
-      } catch (e) {
-        console.error('[Ecostress] Bitmap error:', e);
+
+        // Close previous bitmap if exists
+        if (layerData?.image) {
+          try { layerData.image.close(); } catch { /* ignore */ }
+        }
+
+        setLayerData({ image: bitmap, bounds: result.bounds });
+        setIsGenerating(false);
+        
+      } catch (err) {
+        console.error('[EcostressComposite] Generation error:', err);
+        setIsGenerating(false);
       }
     }
 
     generate();
-    return () => { 
-        active = false;
-        if (layerData?.image) layerData.image.close();
-    };
-  }, [visible, regionBbox, allGranules, internalGranules, aggregationMethod]);
 
-  // 3. Update Deck
+    // Cleanup on unmount or when effect re-runs
+    return () => {
+      // Mark this generation as stale
+      generationIdRef.current++;
+    };
+  }, [visible, regionBbox, granulesKey, aggregationMethod]);
+
+  // Update deck.gl layer when layerData or opacity changes
   useEffect(() => {
     if (!visible || !layerData) {
       removeLayer('ecostress-composite');
       return;
     }
 
-    // Bounds sicherstellen
+    // Validate and normalize bounds [west, south, east, north]
     const b = layerData.bounds;
     const safeBounds: [number, number, number, number] = [
       Math.min(b[0], b[2]),
@@ -115,6 +140,14 @@ export function EcostressCompositeOverlay({
       Math.max(b[0], b[2]),
       Math.max(b[1], b[3])
     ];
+
+    // Sanity check bounds are valid WGS84
+    if (safeBounds[0] < -180 || safeBounds[2] > 180 || safeBounds[1] < -90 || safeBounds[3] > 90) {
+      console.error('[EcostressComposite] Invalid bounds, skipping layer update:', safeBounds);
+      return;
+    }
+
+    console.log('[EcostressComposite] Updating deck layer with bounds:', safeBounds, 'opacity:', opacity);
 
     updateLayer({
       id: 'ecostress-composite',
@@ -125,13 +158,20 @@ export function EcostressCompositeOverlay({
       opacity,
     });
 
+    return () => {
+      // Don't remove on every opacity change, only when truly unmounting
+    };
   }, [visible, layerData, opacity]);
 
-  return null;
-}
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      removeLayer('ecostress-composite');
+      if (layerData?.image) {
+        try { layerData.image.close(); } catch { /* ignore */ }
+      }
+    };
+  }, []);
 
-function getDaysAgo(days: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().split('T')[0];
+  return null;
 }

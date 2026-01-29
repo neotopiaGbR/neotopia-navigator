@@ -1,370 +1,236 @@
 /**
- * DeckOverlayManager - Singleton manager for deck.gl overlays on MapLibre
- * 
- * CRITICAL ARCHITECTURE RULES:
- * 1. EXACTLY ONE MapboxOverlay instance attached to the map at any time
- * 2. All layer updates via setProps({ layers }) - never recreate overlay
- * 3. Canvas CSS: 100% width/height, z-index above map, pointer-events: none
- * 4. coordinateSystem: LNGLAT for all layers, bounds in WGS84 [west, south, east, north]
- * 5. BitmapLayer.image: HTMLCanvasElement or ImageBitmap - NEVER DataURL strings
+ * DeckOverlayManager – deterministic, correct deck.gl integration for MapLibre
+ *
+ * HARD RULE:
+ * MapboxOverlay MUST be attached via onAdd() to map.getCanvasContainer(),
+ * NOT via map.addControl().
  */
 
-import { MapboxOverlay } from '@deck.gl/mapbox';
-import { BitmapLayer, ScatterplotLayer } from '@deck.gl/layers';
-import type { Map as MapLibreMap, IControl } from 'maplibre-gl';
-import { COORDINATE_SYSTEM } from '@deck.gl/core';
+import { MapboxOverlay } from "@deck.gl/mapbox";
+import { BitmapLayer, ScatterplotLayer } from "@deck.gl/layers";
+import type { Map as MapLibreMap } from "maplibre-gl";
+import { COORDINATE_SYSTEM } from "@deck.gl/core";
 
-const DECK_CANVAS_SELECTOR =
-  'canvas.deckgl-canvas, canvas[id*="deck"], canvas.deck-canvas, canvas[data-deck], canvas.deck-canvas';
-
-const DECK_STYLE_ID = 'neotopia-deck-overlay-css';
-
-let deckCssObserver: MutationObserver | null = null;
+/* ============================================================
+   Types
+============================================================ */
 
 export interface DeckLayerConfig {
   id: string;
-  type: 'bitmap' | 'scatterplot';
+  type: "bitmap" | "scatterplot";
   visible: boolean;
   opacity?: number;
-  // For bitmap layers
+
+  // Bitmap
   image?: HTMLCanvasElement | ImageBitmap;
-  bounds?: [number, number, number, number]; // [west, south, east, north] WGS84
-  // For scatterplot layers
-  data?: Array<{ position: [number, number]; color?: [number, number, number, number]; radius?: number }>;
+  bounds?: [number, number, number, number]; // WGS84
+
+  // Scatter
+  data?: Array<any>;
   getPosition?: (d: any) => [number, number];
   getColor?: (d: any) => [number, number, number, number];
   getRadius?: (d: any) => number;
   radiusPixels?: number;
 }
 
-// Singleton state
-let overlayInstance: MapboxOverlay | null = null;
+/* ============================================================
+   Singleton state
+============================================================ */
+
+let overlay: MapboxOverlay | null = null;
+let overlayElement: HTMLElement | null = null;
 let attachedMap: MapLibreMap | null = null;
-let currentLayers: Map<string, DeckLayerConfig> = new Map();
-let isDevMode = false;
+let layers = new Map<string, DeckLayerConfig>();
+let devMode = false;
 
-function getDeckCanvas(): HTMLCanvasElement | null {
-  const container = attachedMap?.getContainer?.() as HTMLElement | undefined;
-  const scope: ParentNode = container ?? document;
-  return scope.querySelector(DECK_CANVAS_SELECTOR) as HTMLCanvasElement | null;
-}
+/* ============================================================
+   Init / Attach
+============================================================ */
 
-function ensureGlobalDeckStyle(): void {
-  if (document.getElementById(DECK_STYLE_ID)) return;
+export function initDeckOverlay(map: MapLibreMap, dev = false, opts?: { force?: boolean }): void {
+  devMode = dev;
 
-  const style = document.createElement('style');
-  style.id = DECK_STYLE_ID;
-  style.textContent = `
-    .maplibregl-map .deckgl-overlay,
-    .mapboxgl-map .deckgl-overlay {
-      position: absolute !important;
-      inset: 0 !important;
-      z-index: 10 !important;
-      pointer-events: none !important;
-    }
-
-    .maplibregl-map .deckgl-overlay canvas,
-    .mapboxgl-map .deckgl-overlay canvas,
-    .maplibregl-map canvas.deckgl-canvas,
-    .mapboxgl-map canvas.deckgl-canvas,
-    .maplibregl-map canvas[id*="deck"],
-    .mapboxgl-map canvas[id*="deck"],
-    .maplibregl-map canvas.deck-canvas,
-    .mapboxgl-map canvas.deck-canvas,
-    .maplibregl-map canvas[data-deck],
-    .mapboxgl-map canvas[data-deck] {
-      width: 100% !important;
-      height: 100% !important;
-      position: absolute !important;
-      top: 0 !important;
-      left: 0 !important;
-      z-index: 10 !important;
-      pointer-events: none !important;
-    }
-  `;
-
-  document.head.appendChild(style);
-}
-
-/**
- * Initialize the deck.gl overlay manager
- * Call this once when the map is ready
- */
-export function initDeckOverlay(
-  map: MapLibreMap,
-  dev: boolean = false,
-  options?: { force?: boolean }
-): void {
-  isDevMode = dev;
-
-  const force = !!options?.force;
-  const switchingMap = !!attachedMap && attachedMap !== map;
-  const preservedLayers = switchingMap ? new Map<string, DeckLayerConfig>() : new Map(currentLayers);
-  
-  if (!force && attachedMap === map && overlayInstance && getDeckCanvas()) {
-    console.log('[DeckOverlayManager] Already initialized for this map');
+  if (!opts?.force && overlay && attachedMap === map) {
     return;
   }
-  
-  // Clean up previous instance if switching maps
-  if (overlayInstance && attachedMap) {
-    try {
-      attachedMap.removeControl(overlayInstance as unknown as IControl);
-      // Ensure WebGL resources are released
-      (overlayInstance as any)?.finalize?.();
-    } catch (e) {
-      console.warn('[DeckOverlayManager] Failed to remove previous overlay:', e);
-    }
-    overlayInstance = null;
-  }
-  
-  // Create new overlay with interleaved: false for correct stacking
-  overlayInstance = new MapboxOverlay({
+
+  finalizeDeckOverlay();
+
+  overlay = new MapboxOverlay({
     interleaved: false,
     layers: [],
   });
-  
-  // Attach to map
-  map.addControl(overlayInstance as unknown as IControl);
+
+  // 🔴 THIS IS THE FIX
+  overlayElement = (overlay as any).onAdd(map) as HTMLElement;
+  map.getCanvasContainer().appendChild(overlayElement);
+
   attachedMap = map;
 
-  // Preserve existing layers on same-map reinit (e.g. after style.load)
-  currentLayers = switchingMap ? new Map() : preservedLayers;
-  
-  // Ensure CSS is correct
-  enforceDeckCSS();
-
-  // Re-apply layers after re-attach
+  applyDeckCSS();
   rebuildLayers();
-  
-  console.log('[DeckOverlayManager] ✅ Initialized singleton overlay on map');
-  
-  // Add render proof if in dev mode
-  if (isDevMode) {
+
+  if (devMode) {
     addRenderProof();
   }
+
+  console.log("[DeckOverlayManager] Initialized (correct canvas attachment)");
 }
 
-/**
- * Enforce correct CSS for deck.gl canvas
- */
-function enforceDeckCSS(): void {
-  ensureGlobalDeckStyle();
+/* ============================================================
+   CSS – minimal & deterministic
+============================================================ */
 
-  // Clean up previous observer to avoid leaks across re-inits
-  if (deckCssObserver) {
-    try {
-      deckCssObserver.disconnect();
-    } catch {
-      // ignore
+function applyDeckCSS(): void {
+  if (!overlayElement) return;
+
+  overlayElement.style.position = "absolute";
+  overlayElement.style.inset = "0";
+  overlayElement.style.pointerEvents = "none";
+  overlayElement.style.zIndex = "10";
+
+  const canvas = overlayElement.querySelector("canvas") as HTMLCanvasElement | null;
+  if (canvas) {
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+  }
+}
+
+/* ============================================================
+   Layer API
+============================================================ */
+
+export function updateLayer(cfg: DeckLayerConfig): void {
+  if (!overlay) return;
+  layers.set(cfg.id, cfg);
+  rebuildLayers();
+}
+
+export function removeLayer(id: string): void {
+  if (!overlay) return;
+  layers.delete(id);
+  rebuildLayers();
+}
+
+export function clearLayers(): void {
+  if (!overlay) return;
+  layers.clear();
+  rebuildLayers();
+}
+
+/* ============================================================
+   Layer rebuild
+============================================================ */
+
+function rebuildLayers(): void {
+  if (!overlay) return;
+
+  const deckLayers: any[] = [];
+
+  layers.forEach((cfg) => {
+    if (!cfg.visible) return;
+
+    if (cfg.type === "bitmap" && cfg.image && cfg.bounds) {
+      const [w, s, e, n] = cfg.bounds;
+      if (w < -180 || e > 180 || s < -90 || n > 90) return;
+
+      deckLayers.push(
+        new BitmapLayer({
+          id: cfg.id,
+          image: cfg.image,
+          bounds: cfg.bounds,
+          opacity: cfg.opacity ?? 0.8,
+          coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+          parameters: { depthTest: false },
+        }),
+      );
     }
-    deckCssObserver = null;
+
+    if (cfg.type === "scatterplot" && cfg.data) {
+      deckLayers.push(
+        new ScatterplotLayer({
+          id: cfg.id,
+          data: cfg.data,
+          getPosition: cfg.getPosition ?? ((d) => d.position),
+          getColor: cfg.getColor ?? (() => [255, 0, 255, 255]),
+          getRadius: cfg.getRadius ?? (() => 10),
+          radiusUnits: "pixels",
+          radiusMinPixels: cfg.radiusPixels ?? 10,
+          coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+        }),
+      );
+    }
+  });
+
+  overlay.setProps({ layers: deckLayers });
+
+  if (devMode) {
+    console.log(
+      "[DeckOverlayManager] Layers:",
+      deckLayers.map((l) => l.id),
+    );
+  }
+}
+
+/* ============================================================
+   Diagnostics
+============================================================ */
+
+export function isReady(): boolean {
+  return !!overlay && !!overlayElement && !!attachedMap;
+}
+
+export function getDiagnostics() {
+  const canvas = overlayElement?.querySelector("canvas") as HTMLCanvasElement | null;
+  const rect = canvas?.getBoundingClientRect();
+
+  return {
+    initialized: isReady(),
+    layerCount: layers.size,
+    layerIds: [...layers.keys()],
+    canvasCssSize: rect ? { w: Math.round(rect.width), h: Math.round(rect.height) } : null,
+    bufferSize: canvas ? { w: canvas.width, h: canvas.height } : null,
+    dpr: window.devicePixelRatio || 1,
+  };
+}
+
+/* ============================================================
+   Cleanup
+============================================================ */
+
+export function finalizeDeckOverlay(): void {
+  if (overlay && attachedMap) {
+    try {
+      overlay.setProps({ layers: [] });
+      (overlay as any).onRemove(attachedMap);
+      overlayElement?.remove();
+      (overlay as any).finalize?.();
+    } catch {
+      /* noop */
+    }
   }
 
-  // Use MutationObserver to catch deck canvas when it's created
-  const container = attachedMap?.getContainer?.() as HTMLElement | null;
-  if (!container) return;
+  overlay = null;
+  overlayElement = null;
+  attachedMap = null;
+  layers.clear();
 
-  const applyInlineStyles = () => {
-    const canvases = container.querySelectorAll(DECK_CANVAS_SELECTOR);
-    canvases.forEach((canvas) => {
-      const el = canvas as HTMLCanvasElement;
-      el.style.width = '100%';
-      el.style.height = '100%';
-      el.style.position = 'absolute';
-      el.style.top = '0';
-      el.style.left = '0';
-      el.style.zIndex = '10';
-      el.style.pointerEvents = 'none';
-    });
-  };
-
-  applyInlineStyles();
-
-  deckCssObserver = new MutationObserver(applyInlineStyles);
-  deckCssObserver.observe(container, { childList: true, subtree: true });
+  console.log("[DeckOverlayManager] Finalized");
 }
 
-/**
- * Add render proof layers (dev mode only)
- * These MUST be visible if deck.gl is working correctly
- */
+/* ============================================================
+   Dev proof (optional)
+============================================================ */
+
 function addRenderProof(): void {
   if (!attachedMap) return;
-  
-  const center = attachedMap.getCenter();
-  
-  // Magenta dot at map center
+
+  const c = attachedMap.getCenter();
   updateLayer({
-    id: 'render-proof-center',
-    type: 'scatterplot',
+    id: "render-proof-center",
+    type: "scatterplot",
     visible: true,
-    data: [{ position: [center.lng, center.lat], color: [255, 0, 255, 255], radius: 20 }],
-    getPosition: (d) => d.position,
-    getColor: (d) => d.color,
-    getRadius: (d) => d.radius,
+    data: [{ position: [c.lng, c.lat] }],
     radiusPixels: 20,
   });
-  
-  console.log('[DeckOverlayManager] 🟣 Render proof dot added at', center.lng.toFixed(4), center.lat.toFixed(4));
-}
-
-/**
- * Update or add a layer
- */
-export function updateLayer(config: DeckLayerConfig): void {
-  if (!overlayInstance) {
-    console.error('[DeckOverlayManager] Not initialized - call initDeckOverlay first');
-    return;
-  }
-  
-  currentLayers.set(config.id, config);
-  rebuildLayers();
-}
-
-/**
- * Remove a layer by ID
- */
-export function removeLayer(id: string): void {
-  if (!overlayInstance) return;
-  
-  currentLayers.delete(id);
-  rebuildLayers();
-}
-
-/**
- * Remove all layers (except render proof in dev mode)
- */
-export function clearLayers(): void {
-  if (!overlayInstance) return;
-  
-  const keysToRemove = Array.from(currentLayers.keys()).filter(
-    (k) => !isDevMode || !k.startsWith('render-proof')
-  );
-  keysToRemove.forEach((k) => currentLayers.delete(k));
-  rebuildLayers();
-}
-
-/**
- * Rebuild and update all layers
- */
-function rebuildLayers(): void {
-  if (!overlayInstance) return;
-  
-  const layers: Array<BitmapLayer | ScatterplotLayer> = [];
-  
-  currentLayers.forEach((config) => {
-    if (!config.visible) return;
-    
-    if (config.type === 'bitmap' && config.image && config.bounds) {
-      // Validate bounds are WGS84
-      const [west, south, east, north] = config.bounds;
-      if (west < -180 || east > 180 || south < -90 || north > 90) {
-        console.error(`[DeckOverlayManager] Invalid WGS84 bounds for ${config.id}:`, config.bounds);
-        return;
-      }
-      
-      layers.push(
-        new BitmapLayer({
-          id: config.id,
-          image: config.image,
-          bounds: config.bounds,
-          opacity: config.opacity ?? 0.8,
-          coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
-          pickable: false,
-          parameters: { depthTest: false },
-        })
-      );
-    }
-    
-    if (config.type === 'scatterplot' && config.data) {
-      layers.push(
-        new ScatterplotLayer({
-          id: config.id,
-          data: config.data,
-          getPosition: config.getPosition ?? ((d) => d.position),
-          getColor: config.getColor ?? ((d) => d.color ?? [255, 0, 255, 255]),
-          getRadius: config.getRadius ?? ((d) => d.radius ?? 10),
-          radiusUnits: 'pixels',
-          radiusMinPixels: config.radiusPixels ?? 10,
-          coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
-          pickable: false,
-        })
-      );
-    }
-  });
-  
-  // Update overlay via setProps - NEVER recreate
-  overlayInstance.setProps({ layers });
-  
-  console.log('[DeckOverlayManager] Layers updated:', layers.map((l) => l.id));
-}
-
-/**
- * Get diagnostic info for debugging
- */
-export function getDiagnostics(): {
-  initialized: boolean;
-  layerCount: number;
-  layerIds: string[];
-  canvasExists: boolean;
-  canvasDimensions: { width: number; height: number } | null;
-  canvasCssDimensions: { width: number; height: number } | null;
-  devicePixelRatio: number;
-} {
-  const canvas = getDeckCanvas();
-  const rect = canvas ? canvas.getBoundingClientRect() : null;
-  
-  return {
-    initialized: !!overlayInstance && !!attachedMap && !!canvas,
-    layerCount: currentLayers.size,
-    layerIds: Array.from(currentLayers.keys()),
-    canvasExists: !!canvas,
-    canvasDimensions: canvas ? { width: canvas.width, height: canvas.height } : null,
-    canvasCssDimensions: rect ? { width: Math.round(rect.width), height: Math.round(rect.height) } : null,
-    devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
-  };
-}
-
-/**
- * Finalize and cleanup
- */
-export function finalizeDeckOverlay(): void {
-  if (overlayInstance && attachedMap) {
-    try {
-      overlayInstance.setProps({ layers: [] });
-      attachedMap.removeControl(overlayInstance as unknown as IControl);
-      (overlayInstance as any)?.finalize?.();
-    } catch (e) {
-      console.warn('[DeckOverlayManager] Cleanup error:', e);
-    }
-  }
-  overlayInstance = null;
-  attachedMap = null;
-  currentLayers.clear();
-
-  if (deckCssObserver) {
-    try {
-      deckCssObserver.disconnect();
-    } catch {
-      // ignore
-    }
-    deckCssObserver = null;
-  }
-
-  console.log('[DeckOverlayManager] Finalized');
-}
-
-/**
- * Check if overlay is ready
- */
-export function isReady(): boolean {
-  return !!overlayInstance && !!attachedMap && !!getDeckCanvas();
-}
-
-/**
- * Get the attached map (for components that need map reference)
- */
-export function getAttachedMap(): MapLibreMap | null {
-  return attachedMap;
 }

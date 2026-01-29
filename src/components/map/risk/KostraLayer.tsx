@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { updateLayer, removeLayer } from '../DeckOverlayManager';
-import { getKostraPmtilesUrl, KOSTRA_COLOR_SCALE, type KostraDuration, type KostraReturnPeriod } from './RiskLayersConfig';
+import { getKostraPmtilesUrl, type KostraDuration, type KostraReturnPeriod } from './RiskLayersConfig';
 import { toast } from '@/hooks/use-toast';
-import * as pmtiles from 'pmtiles';
+import { PMTiles } from 'pmtiles';
 
 interface KostraLayerProps {
   visible: boolean;
@@ -13,74 +13,31 @@ interface KostraLayerProps {
 
 const LAYER_ID = 'kostra-precipitation';
 
-// Ensure PMTiles protocol is registered globally
-let protocolRegistered = false;
-
-function ensurePmtilesProtocol() {
-  if (protocolRegistered) return;
-  
-  const protocol = new pmtiles.Protocol();
-  // Register for use with MVTLayer
-  (globalThis as any).pmtilesProtocol = protocol;
-  protocolRegistered = true;
-  console.log('[KostraLayer] PMTiles protocol registered');
-}
+// Track if we've logged properties (for debugging)
+let hasLoggedProps = false;
 
 /**
- * Color mapping function for KOSTRA precipitation values (HN in mm)
- * Returns RGBA array for deck.gl styling
- * 
- * Scale for D60 (1-hour events):
- * - < 20mm: Light blue (low intensity)
- * - 20-30mm: Blue (moderate)
- * - 30-40mm: Purple-blue (significant)
- * - 40-50mm: Purple (high)
- * - > 50mm: Dark purple (extreme)
+ * Convert precipitation value (HN in mm) to RGBA color.
+ * Uses the KOSTRA color scale for consistent styling.
  */
 function precipitationToRGBA(hn: number, opacity: number = 0.6): [number, number, number, number] {
-  // NoData or invalid values
-  if (hn == null || hn < 0 || !isFinite(hn)) {
-    return [0, 0, 0, 0];
-  }
-
   const alpha = Math.round(opacity * 255);
-  
-  // Color stops for precipitation intensity
-  if (hn < 15) {
-    // Very light - almost transparent light blue
-    return [224, 243, 255, Math.round(alpha * 0.3)];
-  } else if (hn < 20) {
-    // Light blue
-    return [166, 212, 255, alpha];
-  } else if (hn < 30) {
-    // Blue
-    return [107, 179, 255, alpha];
-  } else if (hn < 40) {
-    // Medium blue
-    return [61, 139, 255, alpha];
-  } else if (hn < 50) {
-    // Purple-blue
-    return [33, 102, 204, alpha];
-  } else if (hn < 70) {
-    // Purple
-    return [92, 61, 153, alpha];
-  } else {
-    // Dark purple (extreme)
-    return [139, 26, 139, alpha];
-  }
+
+  if (hn < 15) return [224, 243, 255, alpha];      // Very light blue
+  if (hn < 20) return [166, 212, 255, alpha];      // Light blue
+  if (hn < 30) return [107, 179, 255, alpha];      // Medium blue
+  if (hn < 40) return [61, 139, 255, alpha];       // Blue
+  if (hn < 50) return [33, 102, 204, alpha];       // Dark blue
+  if (hn < 60) return [92, 61, 153, alpha];        // Purple
+  if (hn < 70) return [139, 26, 139, alpha];       // Dark purple
+  return [102, 0, 102, alpha];                      // Very dark purple
 }
 
 /**
  * KostraLayer Component - PMTiles Vector Edition
- * 
- * Renders KOSTRA-DWD-2020 precipitation intensity data using deck.gl MVTLayer.
- * Loads only visible tiles via HTTP Range Requests on PMTiles archive.
- * 
- * Benefits:
- * - Browser downloads only visible vector tiles
- * - Efficient zoom-level rendering via internal tile pyramid
- * - No tile server required - works with static hosting
- * - Vector data allows precise styling based on HN attribute
+ *
+ * Renders KOSTRA-DWD-2020 precipitation data as vector tiles.
+ * Loads vector tiles on-demand via HTTP Range Requests from a PMTiles archive.
  */
 export default function KostraLayer({
   visible,
@@ -88,99 +45,97 @@ export default function KostraLayer({
   duration,
   returnPeriod,
 }: KostraLayerProps) {
-  const [error, setError] = useState<string | null>(null);
   const [pmtilesUrl, setPmtilesUrl] = useState<string>('');
-  
-  const prevScenarioRef = useRef<string>('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Create scenario key to detect changes
-  const scenarioKey = `${duration}-${returnPeriod}`;
+  const loadIdRef = useRef(0);
+  const hasAttemptedRef = useRef(false);
 
-  // Ensure protocol is registered on mount
-  useEffect(() => {
-    ensurePmtilesProtocol();
-  }, []);
-
-  // Update PMTiles URL when scenario changes
+  // Initialize data source when visible
   useEffect(() => {
     if (!visible) {
       removeLayer(LAYER_ID);
       return;
     }
 
-    const newUrl = getKostraPmtilesUrl(duration, returnPeriod);
-    setPmtilesUrl(newUrl);
-    
-    // Verify PMTiles is accessible when scenario changes
-    if (scenarioKey !== prevScenarioRef.current) {
-      prevScenarioRef.current = scenarioKey;
-      verifyPmtiles(newUrl);
+    if (hasAttemptedRef.current && pmtilesUrl) {
+      return; // Already loaded
     }
-  }, [visible, scenarioKey, duration, returnPeriod]);
 
-  const verifyPmtiles = useCallback(async (url: string) => {
+    initDataSource();
+  }, [visible, duration, returnPeriod]);
+
+  const initDataSource = useCallback(async () => {
+    const loadId = ++loadIdRef.current;
+    setIsLoading(true);
     setError(null);
-    
+    hasAttemptedRef.current = true;
+
+    const url = getKostraPmtilesUrl(duration, returnPeriod);
+    console.log(`[KostraLayer] Loading PMTiles: ${url}`);
+
     try {
-      // Quick HEAD request to verify PMTiles exists
-      const response = await fetch(url, { method: 'HEAD' });
-      
-      if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error(`KOSTRA-Daten für ${duration}/${returnPeriod} nicht verfügbar`);
-        }
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      console.log(`[KostraLayer] PMTiles verified: ${url}`);
-      
+      // Validate PMTiles file
+      const pmtiles = new PMTiles(url);
+      const header = await pmtiles.getHeader();
+
+      if (loadId !== loadIdRef.current) return;
+
+      console.log(`[KostraLayer] PMTiles valid: z${header.minZoom}-${header.maxZoom}, ${header.numAddressedTiles} tiles`);
+
+      setPmtilesUrl(url);
+      setIsLoading(false);
     } catch (err) {
-      console.error('[KostraLayer] PMTiles verification failed:', err);
-      setError(err instanceof Error ? err.message : 'Unbekannter Fehler');
-      
+      console.error('[KostraLayer] Failed to load PMTiles:', err);
+
+      const message = err instanceof Error ? err.message : 'Unbekannter Fehler';
+      setError(message);
+      setIsLoading(false);
+
       toast({
         title: 'KOSTRA-Daten nicht verfügbar',
-        description: err instanceof Error ? err.message : 'Laden fehlgeschlagen',
+        description: 'PMTiles konnten nicht geladen werden.',
         variant: 'destructive',
       });
     }
   }, [duration, returnPeriod]);
 
-  // Register MVTLayer with DeckOverlayManager
+  // Register layer when URL is available
   useEffect(() => {
     if (!visible || !pmtilesUrl) {
       removeLayer(LAYER_ID);
       return;
     }
 
-    console.log('[KostraLayer] Registering MVTLayer for PMTiles:', pmtilesUrl);
+    console.log('[KostraLayer] Registering MVTLayer for PMTiles');
 
-    // Create MVTLayer configuration for PMTiles
     updateLayer({
       id: LAYER_ID,
       type: 'mvt',
       visible: true,
       opacity,
-      // PMTiles URL - the DeckOverlayManager will handle the protocol
-      data: `pmtiles://${pmtilesUrl}`,
-      // Styling configuration
+      pmtilesUrl,
+      layerName: 'kostra',
       styleConfig: {
-        getFillColor: (f: any) => {
-          const hn = f.properties?.HN ?? f.properties?.hn ?? 0;
+        getFillColor: (feature: any) => {
+          const props = feature.properties || {};
+
+          // Debug: Log available properties for first feature
+          if (!hasLoggedProps) {
+            console.log('[KostraLayer] Feature properties:', Object.keys(props));
+            hasLoggedProps = true;
+          }
+
+          // Try different possible attribute names for precipitation height
+          const hn = props.HN_100A ?? props.HN_0100A ?? props.HN ?? props.hn ?? 0;
           return precipitationToRGBA(hn, 0.6);
         },
-        getLineColor: [100, 100, 120, 80],
-        getLineWidth: 0.5,
-        lineWidthMinPixels: 0.5,
-        filled: true,
-        stroked: true,
+        getLineColor: [100, 100, 100, 80],
+        lineWidth: 0.5,
         pickable: true,
       },
-      // Tile settings
-      minZoom: 4,
-      maxZoom: 14,
     } as any);
-    
   }, [visible, pmtilesUrl, opacity]);
 
   // Cleanup on unmount

@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { updateLayer, removeLayer } from '../DeckOverlayManager';
 import { getCatrarePmtilesUrl, getCatrareGeoJsonUrl, CATRARE_WARNING_COLORS, type CatrareEventProperties } from './RiskLayersConfig';
 import { toast } from '@/hooks/use-toast';
-import { PMTiles, Protocol } from 'pmtiles';
+import { PMTiles } from 'pmtiles';
 
 interface CatrareLayerProps {
   visible: boolean;
@@ -12,32 +12,27 @@ interface CatrareLayerProps {
 
 const LAYER_ID = 'catrare-events';
 
-// PMTiles protocol singleton
-let pmtilesProtocol: Protocol | null = null;
-
 /**
- * Initialize PMTiles protocol for MapLibre/deck.gl integration.
- * This enables the pmtiles:// URL scheme.
+ * Convert hex color to RGBA array for deck.gl
  */
-function initPmtilesProtocol(): Protocol {
-  if (!pmtilesProtocol) {
-    pmtilesProtocol = new Protocol();
-    console.log('[CatrareLayer] PMTiles protocol initialized');
-  }
-  return pmtilesProtocol;
+function hexToRGBA(hex: string, alpha: number): [number, number, number, number] {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) return [0, 0, 0, Math.round(alpha * 255)];
+
+  return [
+    parseInt(result[1], 16),
+    parseInt(result[2], 16),
+    parseInt(result[3], 16),
+    Math.round(alpha * 255),
+  ];
 }
 
 /**
  * CatrareLayer Component - PMTiles Edition
- * 
+ *
  * Renders historical heavy rainfall events from CatRaRE using deck.gl MVTLayer.
  * Loads vector tiles on-demand via HTTP Range Requests from a PMTiles archive.
- * 
- * Benefits:
- * - Single file contains all zoom levels (z4-z12)
- * - Browser downloads only visible tiles
- * - No tile server required - works with static hosting
- * 
+ *
  * Fallback: If PMTiles fails, loads full GeoJSON.
  */
 export default function CatrareLayer({
@@ -50,7 +45,7 @@ export default function CatrareLayer({
   const [pmtilesUrl, setPmtilesUrl] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   const loadIdRef = useRef(0);
   const hasAttemptedRef = useRef(false);
 
@@ -75,66 +70,56 @@ export default function CatrareLayer({
     hasAttemptedRef.current = true;
 
     const pmtilesFullUrl = getCatrarePmtilesUrl();
-    console.log(`[CatrareLayer] Trying PMTiles: ${pmtilesFullUrl}`);
+    console.log(`[CatrareLayer] Loading PMTiles: ${pmtilesFullUrl}`);
 
     try {
-      // Try PMTiles first
-      const response = await fetch(pmtilesFullUrl, { method: 'HEAD' });
-      
-      if (response.ok) {
-        // Verify it's a valid PMTiles by checking header
-        const pmtiles = new PMTiles(pmtilesFullUrl);
-        const header = await pmtiles.getHeader();
-        
-        if (loadId !== loadIdRef.current) return;
-        
-        console.log(`[CatrareLayer] PMTiles valid: z${header.minZoom}-${header.maxZoom}, ${header.numAddressedTiles} tiles`);
-        
-        // Initialize protocol
-        initPmtilesProtocol();
-        
-        setPmtilesUrl(pmtilesFullUrl);
-        setDataSource('pmtiles');
-        setIsLoading(false);
-        return;
-      }
-    } catch (err) {
-      console.warn('[CatrareLayer] PMTiles not available, falling back to GeoJSON:', err);
-    }
+      // Validate PMTiles file
+      const pmtiles = new PMTiles(pmtilesFullUrl);
+      const header = await pmtiles.getHeader();
 
-    // Fallback to GeoJSON
-    try {
-      const geojsonUrl = getCatrareGeoJsonUrl();
-      console.log(`[CatrareLayer] Falling back to GeoJSON: ${geojsonUrl}`);
-      
-      const response = await fetch(geojsonUrl);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json() as GeoJSON.FeatureCollection;
-      
       if (loadId !== loadIdRef.current) return;
 
-      console.log(`[CatrareLayer] Loaded ${data.features?.length || 0} events from GeoJSON`);
-      
-      setGeoJsonData(data);
-      setDataSource('geojson');
-      setIsLoading(false);
+      console.log(`[CatrareLayer] PMTiles valid: z${header.minZoom}-${header.maxZoom}, ${header.numAddressedTiles} tiles`);
 
-    } catch (err) {
-      console.error('[CatrareLayer] Both PMTiles and GeoJSON failed:', err);
-      
-      const message = err instanceof Error ? err.message : 'Unbekannter Fehler';
-      setError(message);
+      setPmtilesUrl(pmtilesFullUrl);
+      setDataSource('pmtiles');
       setIsLoading(false);
-      
-      toast({
-        title: 'CatRaRE-Daten nicht verfügbar',
-        description: 'Weder PMTiles noch GeoJSON konnten geladen werden.',
-        variant: 'destructive',
-      });
+    } catch (err) {
+      console.warn('[CatrareLayer] PMTiles not available, falling back to GeoJSON:', err);
+
+      // Fallback to GeoJSON
+      try {
+        const geojsonUrl = getCatrareGeoJsonUrl();
+        console.log(`[CatrareLayer] Falling back to GeoJSON: ${geojsonUrl}`);
+
+        const response = await fetch(geojsonUrl);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json() as GeoJSON.FeatureCollection;
+
+        if (loadId !== loadIdRef.current) return;
+
+        console.log(`[CatrareLayer] Loaded ${data.features?.length || 0} events from GeoJSON`);
+
+        setGeoJsonData(data);
+        setDataSource('geojson');
+        setIsLoading(false);
+      } catch (fallbackErr) {
+        console.error('[CatrareLayer] Both PMTiles and GeoJSON failed:', fallbackErr);
+
+        const message = fallbackErr instanceof Error ? fallbackErr.message : 'Unbekannter Fehler';
+        setError(message);
+        setIsLoading(false);
+
+        toast({
+          title: 'CatRaRE-Daten nicht verfügbar',
+          description: 'Weder PMTiles noch GeoJSON konnten geladen werden.',
+          variant: 'destructive',
+        });
+      }
     }
   }, []);
 
@@ -147,7 +132,7 @@ export default function CatrareLayer({
 
     if (dataSource === 'pmtiles' && pmtilesUrl) {
       console.log('[CatrareLayer] Registering MVTLayer for PMTiles');
-      
+
       updateLayer({
         id: LAYER_ID,
         type: 'mvt',
@@ -170,10 +155,9 @@ export default function CatrareLayer({
           pickable: true,
         },
       } as any);
-      
     } else if (dataSource === 'geojson' && geoJsonData) {
       console.log('[CatrareLayer] Registering GeoJsonLayer (fallback)');
-      
+
       updateLayer({
         id: LAYER_ID,
         type: 'geojson',
@@ -208,17 +192,4 @@ export default function CatrareLayer({
   }, []);
 
   return null;
-}
-
-// Helper to convert hex to RGBA array for deck.gl
-function hexToRGBA(hex: string, alpha: number): [number, number, number, number] {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!result) return [0, 0, 0, Math.round(alpha * 255)];
-  
-  return [
-    parseInt(result[1], 16),
-    parseInt(result[2], 16),
-    parseInt(result[3], 16),
-    Math.round(alpha * 255),
-  ];
 }

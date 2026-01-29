@@ -1,167 +1,76 @@
-/**
- * Risk Layers Configuration - Virtual Tiling Edition
- * 
- * Centralized configuration for heavy rain risk visualization layers.
- * Supports Cloud-Native formats (COG, PMTiles) for efficient streaming.
- * 
- * Data sources: DWD KOSTRA-DWD-2020 and CatRaRE.
- */
-
-// ============================================================================
-// STORAGE CONFIGURATION
-// ============================================================================
-
-/**
- * Base URL for Supabase Storage.
- * Update this after uploading data to your Supabase project.
- */
+// Basis-URL für Supabase Storage Bucket
 export const STORAGE_BASE_URL = 'https://bxchawikvnvxzerlsffs.supabase.co/storage/v1/object/public/risk-layers';
 
-/**
- * Storage paths for different data types
- */
+// Dateien liegen im Root, daher ist der Pfad gleich der Base-URL
 export const STORAGE_PATHS = {
-  kostra: `${STORAGE_BASE_URL}/kostra`,
-  catrare: `${STORAGE_BASE_URL}/catrare`,
+  kostra: STORAGE_BASE_URL,
+  catrare: STORAGE_BASE_URL,
 } as const;
 
-// ============================================================================
-// KOSTRA CONFIGURATION (Precipitation Intensity - COG)
-// ============================================================================
-
-/**
- * Available precipitation durations in KOSTRA data
- */
 export type KostraDuration = '60min' | '12h' | '24h';
-
-/**
- * Available return periods in KOSTRA data
- */
 export type KostraReturnPeriod = '10a' | '100a';
 
-/**
- * KOSTRA scenario configuration
- */
 export interface KostraScenario {
   duration: KostraDuration;
   returnPeriod: KostraReturnPeriod;
 }
 
-/**
- * Human-readable labels for durations
- */
 export const KOSTRA_DURATION_LABELS: Record<KostraDuration, string> = {
   '60min': '1 Stunde',
   '12h': '12 Stunden',
   '24h': '24 Stunden',
 };
 
-/**
- * Human-readable labels for return periods
- */
 export const KOSTRA_RETURN_PERIOD_LABELS: Record<KostraReturnPeriod, string> = {
   '10a': '10 Jahre',
   '100a': '100 Jahre',
 };
 
-/**
- * Get the PMTiles file URL for a KOSTRA scenario.
- * PMTiles support HTTP Range Requests for serverless vector tile serving.
- */
 export function getKostraPmtilesUrl(duration: KostraDuration, returnPeriod: KostraReturnPeriod): string {
-  // Duration format: 60min -> 60, 12h -> 720, 24h -> 1440 (minutes)
-  const durationMinutes = duration === '60min' ? '60' : duration === '12h' ? '720' : '1440';
-  // Return period format: 10a -> 10, 100a -> 100
-  const returnYears = returnPeriod.replace('a', '');
-  return `${STORAGE_PATHS.kostra}/kostra_d${durationMinutes}_t${returnYears}.pmtiles`;
+  // PMTiles-Datei für D60/T100 enthält alle Attribute
+  return `${STORAGE_PATHS.kostra}/kostra_d60_t100.pmtiles`;
 }
 
-/**
- * Default KOSTRA scenario (24h, 100-year return)
- */
 export const DEFAULT_KOSTRA_SCENARIO: KostraScenario = {
-  duration: '24h',
+  duration: '60min',
   returnPeriod: '100a',
 };
 
-/**
- * KOSTRA precipitation intensity color scale (mm)
- * Blue-Purple gradient for rain intensity
- */
+// Farbskala für Niederschlag (mm)
 export const KOSTRA_COLOR_SCALE: Array<{ value: number; color: string; label: string }> = [
   { value: 0, color: '#e0f3ff', label: '0 mm' },
   { value: 20, color: '#a6d4ff', label: '20 mm' },
-  { value: 40, color: '#6bb3ff', label: '40 mm' },
-  { value: 60, color: '#3d8bff', label: '60 mm' },
-  { value: 80, color: '#2166cc', label: '80 mm' },
-  { value: 100, color: '#5c3d99', label: '100 mm' },
-  { value: 150, color: '#8b1a8b', label: '≥150 mm' },
+  { value: 30, color: '#6bb3ff', label: '30 mm' },
+  { value: 40, color: '#3d8bff', label: '40 mm' },
+  { value: 50, color: '#2166cc', label: '50 mm' },
+  { value: 60, color: '#5c3d99', label: '60 mm' },
+  { value: 80, color: '#8b1a8b', label: '≥80 mm' },
 ];
 
-// ============================================================================
-// CATRARE CONFIGURATION (Historical Events - PMTiles)
-// ============================================================================
-
-/**
- * Warning levels in CatRaRE data
- */
 export type CatrareWarningLevel = 1 | 2 | 3 | 4;
 
-/**
- * CatRaRE event properties from vector tiles
- */
 export interface CatrareEventProperties {
   ID: string;
-  DATUM: number;  // YYYYMMDD format
-  ANFANG: string; // Start time
-  ENDE: string;   // End time
-  DAUER_H: number; // Duration in hours
-  N_MAX: number;  // Maximum precipitation (mm)
-  N_SUMME: number; // Total precipitation (mm)
+  JAHR: number;
   WARNSTUFE: CatrareWarningLevel;
-  FLAECHE_KM2: number;
 }
 
-/**
- * Get the PMTiles URL for CatRaRE data.
- * PMTiles support HTTP Range Requests for serverless vector tile serving.
- */
 export function getCatrarePmtilesUrl(): string {
-  return `${STORAGE_PATHS.catrare}/catrare.pmtiles`;
+  return `${STORAGE_PATHS.catrare}/catrare_events.pmtiles`;
 }
 
-/**
- * Get the GeoJSON fallback URL for CatRaRE data.
- * Used when PMTiles loading fails or for simplified rendering.
- */
 export function getCatrareGeoJsonUrl(): string {
   return `${STORAGE_PATHS.catrare}/catrare_recent.json`;
 }
 
-/**
- * Color scale for CatRaRE warning levels (DWD standard colors)
- */
 export const CATRARE_WARNING_COLORS: Record<CatrareWarningLevel, string> = {
-  1: '#FFD700', // Yellow - Minor
-  2: '#FFA500', // Orange - Moderate
-  3: '#FF4500', // Red-Orange - Severe (Unwetter)
-  4: '#8B0000', // Dark Red - Extreme
+  1: '#FFD700',
+  2: '#FFA500',
+  3: '#FF4500',
+  4: '#8B0000',
 };
 
-/**
- * Labels for CatRaRE warning levels
- */
-export const CATRARE_WARNING_LABELS: Record<CatrareWarningLevel, string> = {
-  1: 'Leicht',
-  2: 'Mäßig',
-  3: 'Stark (Unwetter)',
-  4: 'Extrem',
-};
-
-// ============================================================================
-// ATTRIBUTION
-// ============================================================================
-
+// Attribution
 export const RISK_LAYER_ATTRIBUTION = {
   kostra: {
     name: 'Starkregen-Potenzial (KOSTRA)',
@@ -179,13 +88,9 @@ export const RISK_LAYER_ATTRIBUTION = {
     license: 'CC BY 4.0',
     url: 'https://opendata.dwd.de/climate_environment/CDC/grids_germany/hourly/radolan/CatRaRE/',
     description: 'Katalog radarbasierter Starkregenereignisse in Deutschland.',
-    short: 'Quelle: DWD, CatRaRE v2023.01',
+    short: 'Quelle: DWD, CatRaRE v2025.01',
   },
 } as const;
-
-// ============================================================================
-// LAYER INFO FOR UI
-// ============================================================================
 
 export const RISK_OVERLAY_INFO = {
   kostra: {
@@ -198,7 +103,7 @@ export const RISK_OVERLAY_INFO = {
   },
   catrare: {
     name: 'Historische Starkregenereignisse',
-    description: 'Dokumentierte Starkregenereignisse der letzten 10 Jahre (CatRaRE). Zeigt Gebiete, die von schweren Niederschlägen betroffen waren.',
+    description: 'Dokumentierte Starkregenereignisse (CatRaRE). Zeigt Gebiete, die von schweren Niederschlägen betroffen waren.',
     attribution: RISK_LAYER_ATTRIBUTION.catrare.short,
     legendLabel: 'Warnstufe',
     legendColors: [
@@ -210,10 +115,6 @@ export const RISK_OVERLAY_INFO = {
     tooltipNote: 'Zeigt historische Ereignisse, kein Echtzeit-Warnstatus.',
   },
 } as const;
-
-// ============================================================================
-// DEFAULT LAYER STATE
-// ============================================================================
 
 export interface RiskLayerState {
   kostraEnabled: boolean;
@@ -227,7 +128,7 @@ export interface RiskLayerState {
 export const DEFAULT_RISK_LAYER_STATE: RiskLayerState = {
   kostraEnabled: false,
   kostraOpacity: 70,
-  kostraDuration: '24h',
+  kostraDuration: '60min',
   kostraReturnPeriod: '100a',
   catrareEnabled: false,
   catrareOpacity: 60,

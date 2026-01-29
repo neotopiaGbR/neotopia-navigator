@@ -12,10 +12,12 @@ import { MAP_STYLES } from './basemapStyles';
 
 // Overlays Imports
 import AirTemperatureOverlay from './AirTemperatureOverlay';
+import AirTemperatureLegend from './AirTemperatureLegend';
 import EcostressCompositeOverlay from './ecostress/EcostressCompositeOverlay';
 import { GlobalLSTOverlay } from './GlobalLSTOverlay';
 import LayersControl from './LayersControl';
 import OverlayDiagnosticsPanel from './OverlayDiagnosticsPanel';
+import HeatLayerProvenancePanel from './HeatLayerProvenancePanel';
 
 export default function RegionMap() {
   const mapRef = useRef<any>(null);
@@ -179,6 +181,30 @@ export default function RegionMap() {
       {/* Map UI */}
       <LayersControl />
       <OverlayDiagnosticsPanel visible={import.meta.env.DEV} mapRef={mapInstanceRef} />
+
+      {/* Legends - Top Right */}
+      <div className="absolute top-14 right-3 z-10 flex flex-col gap-2">
+        {/* Air Temperature Legend */}
+        {activeLayers.includes('air_temperature') && tempData?.normalization && (
+          <AirTemperatureLegend 
+            min={tempData.normalization.p5 ?? tempData.normalization.min ?? 10}
+            max={tempData.normalization.p95 ?? tempData.normalization.max ?? 35}
+          />
+        )}
+
+        {/* ECOSTRESS/Heat Provenance Panel */}
+        {(activeLayers.includes('ecostress') || activeLayers.includes('global_lst')) && (
+          <HeatLayerProvenancePanel
+            visible={true}
+            ecostressEnabled={activeLayers.includes('ecostress')}
+            ecostressMetadata={ecostressMetadata as any}
+            ecostressLoading={false}
+            globalLSTOpacity={heatLayers.globalLSTOpacity}
+            ecostressOpacity={heatLayers.ecostressOpacity}
+            aggregationMethod={heatLayers.aggregationMethod as any}
+          />
+        )}
+      </div>
     </div>
   );
 }

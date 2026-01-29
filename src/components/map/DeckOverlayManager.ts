@@ -60,7 +60,12 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
 
   overlayInstance = new MapboxOverlay({
     interleaved: false,
-    layers: []
+    layers: [],
+    // Prevent WebGL context loss issues
+    _typedArrayManagerProps: {
+      overAlloc: 2,
+      poolSize: 100,
+    },
   });
 
   // NOTE: In this project we attach deck manually to avoid MapLibre control/lifecycle edge cases
@@ -72,8 +77,18 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
     overlayContainerEl.classList.add('deckgl-overlay-container');
     // Ensure the container sits directly above the map canvas using inset shorthand
     overlayContainerEl.style.cssText = 'position: absolute; inset: 0; z-index: 20; pointer-events: none;';
+    
+    // Ensure the overlay canvas matches MapLibre canvas size
+    const mapCanvas = map.getCanvas();
+    const deckCanvas = overlayContainerEl.querySelector('canvas');
+    if (deckCanvas && mapCanvas) {
+      deckCanvas.width = mapCanvas.width;
+      deckCanvas.height = mapCanvas.height;
+      deckCanvas.style.cssText = 'position: absolute; inset: 0; width: 100%; height: 100%;';
+    }
+    
     canvasContainer.appendChild(overlayContainerEl);
-    console.log('[DeckOverlayManager] Attached to canvasContainer');
+    console.log('[DeckOverlayManager] Attached to canvasContainer, canvas size:', mapCanvas?.width, 'x', mapCanvas?.height);
   } catch (err) {
     console.warn('[DeckOverlayManager] Manual attach failed, using addControl fallback:', err);
     // Fallback to standard control mounting

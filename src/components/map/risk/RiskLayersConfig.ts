@@ -65,11 +65,15 @@ export const KOSTRA_RETURN_PERIOD_LABELS: Record<KostraReturnPeriod, string> = {
 };
 
 /**
- * Get the COG file URL for a KOSTRA scenario.
- * COGs support HTTP Range Requests for efficient streaming.
+ * Get the PMTiles file URL for a KOSTRA scenario.
+ * PMTiles support HTTP Range Requests for serverless vector tile serving.
  */
-export function getKostraCogUrl(duration: KostraDuration, returnPeriod: KostraReturnPeriod): string {
-  return `${STORAGE_PATHS.kostra}/kostra_d${duration}_t${returnPeriod}.tif`;
+export function getKostraPmtilesUrl(duration: KostraDuration, returnPeriod: KostraReturnPeriod): string {
+  // Duration format: 60min -> 60, 12h -> 720, 24h -> 1440 (minutes)
+  const durationMinutes = duration === '60min' ? '60' : duration === '12h' ? '720' : '1440';
+  // Return period format: 10a -> 10, 100a -> 100
+  const returnYears = returnPeriod.replace('a', '');
+  return `${STORAGE_PATHS.kostra}/kostra_d${durationMinutes}_t${returnYears}.pmtiles`;
 }
 
 /**

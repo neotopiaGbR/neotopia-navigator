@@ -258,7 +258,7 @@ interface HeatOverlayControlProps {
   onAggregationMethodChange: (method: AggregationMethod) => void;
 }
 
-const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
+const HeatOverlayControl = React.forwardRef<HTMLDivElement, HeatOverlayControlProps>(({
   info,
   config,
   heatLayers,
@@ -266,7 +266,7 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
   onGlobalOpacityChange,
   onEcostressOpacityChange,
   onAggregationMethodChange,
-}) => {
+}, ref) => {
   const [showLegend, setShowLegend] = useState(false);
   const [showProvenance, setShowProvenance] = useState(false);
 
@@ -277,7 +277,7 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
   const granuleCount = (config.metadata?.granuleCount as number) || (config.metadata?.allGranules as any[])?.length || 0;
 
   return (
-    <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+    <div ref={ref} className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
       {/* Header Row */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -514,7 +514,8 @@ const HeatOverlayControl: React.FC<HeatOverlayControlProps> = ({
       )}
     </div>
   );
-};
+});
+HeatOverlayControl.displayName = 'HeatOverlayControl';
 
 // === FLOOD RISK OVERLAY CONTROL ===
 interface OverlayControlProps {
@@ -533,18 +534,18 @@ interface OverlayControlProps {
   onOpacityChange: (value: number) => void;
 }
 
-const OverlayControl: React.FC<OverlayControlProps> = ({
+const OverlayControl = React.forwardRef<HTMLDivElement, OverlayControlProps>(({
   id,
   icon,
   info,
   config,
   onToggle,
   onOpacityChange,
-}) => {
+}, ref) => {
   const [showLegend, setShowLegend] = useState(false);
 
   return (
-    <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+    <div ref={ref} className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
       {/* Header Row */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -653,7 +654,8 @@ const OverlayControl: React.FC<OverlayControlProps> = ({
       )}
     </div>
   );
-};
+});
+OverlayControl.displayName = 'OverlayControl';
 
 // === AIR TEMPERATURE OVERLAY CONTROL (Germany only) ===
 interface AirTemperatureControlProps {
@@ -676,17 +678,17 @@ interface AirTemperatureControlProps {
   onAggregationChange: (value: AirTempAggregation) => void;
 }
 
-const AirTemperatureControl: React.FC<AirTemperatureControlProps> = ({
+const AirTemperatureControl = React.forwardRef<HTMLDivElement, AirTemperatureControlProps>(({
   info,
   config,
   onToggle,
   onOpacityChange,
   onAggregationChange,
-}) => {
+}, ref) => {
   const [showLegend, setShowLegend] = useState(false);
 
   return (
-    <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+    <div ref={ref} className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
       {/* Header Row */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -846,6 +848,7 @@ const AirTemperatureControl: React.FC<AirTemperatureControlProps> = ({
       )}
     </div>
   );
-};
+});
+AirTemperatureControl.displayName = 'AirTemperatureControl';
 
 export default LayersControl;

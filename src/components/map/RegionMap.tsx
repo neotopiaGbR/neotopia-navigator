@@ -4,17 +4,25 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
 
 import { useMapOverlays } from '@/hooks/useMapOverlays';
+import { useMapLayers } from './MapLayersContext';
 import { useRegion } from '@/contexts/RegionContext';
 import { useDwdTemperature } from '@/hooks/useDwdTemperature';
 import { initDeckOverlay, finalizeDeckOverlay } from './DeckOverlayManager';
 import { MAP_STYLES } from './basemapStyles';
 
 import AirTemperatureOverlay from './AirTemperatureOverlay';
+import AirTemperatureLegend from './AirTemperatureLegend';
 import { EcostressCompositeOverlay } from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
 
 import LayersControl from './LayersControl';
 import OverlayDiagnosticsPanel from './OverlayDiagnosticsPanel';
+
+// Accent color for regions (green)
+const ACCENT_COLOR = '#22c55e';
+const ACCENT_COLOR_SELECTED = '#16a34a';
+const ACCENT_COLOR_HOVER = 'rgba(34, 197, 94, 0.6)';
+const ACCENT_COLOR_FILL = 'rgba(34, 197, 94, 0.2)';
 
 export default function RegionMap() {
   const mapRef = useRef<MapRef>(null);
@@ -27,6 +35,7 @@ export default function RegionMap() {
     selectedRegion 
   } = useRegion();
   const { activeLayers, mapStyle } = useMapOverlays();
+  const { airTemperature } = useMapLayers();
   const { data: tempData } = useDwdTemperature();
   
   const [isMapReady, setIsMapReady] = useState(false);
@@ -113,6 +122,9 @@ export default function RegionMap() {
     }
   }, [selectedRegion?.id]);
 
+  // Show air temperature legend when layer is active and has data
+  const showAirTempLegend = airTemperature.enabled && tempData?.normalization;
+
   return (
     <div className="relative w-full h-full bg-background overflow-hidden">
       
@@ -139,7 +151,7 @@ export default function RegionMap() {
         <NavigationControl position="top-right" />
         <ScaleControl position="bottom-left" />
 
-        {/* Region Tiles */}
+        {/* Region Tiles with proper color values (not CSS variables) */}
         {regions.length > 0 && (
           <Source id="regions-source" type="geojson" data={regionsGeoJson}>
             {/* Fill Layer */}
@@ -150,12 +162,12 @@ export default function RegionMap() {
                 'fill-color': [
                   'case',
                   ['==', ['get', 'id'], selectedRegionId ?? ''],
-                  'hsl(var(--accent))',
+                  ACCENT_COLOR_SELECTED,
                   ['==', ['get', 'id'], hoveredRegionId ?? ''],
-                  'hsl(var(--accent) / 0.6)',
-                  'hsl(var(--accent) / 0.2)',
+                  ACCENT_COLOR_HOVER,
+                  ACCENT_COLOR_FILL,
                 ],
-                'fill-opacity': 0.4,
+                'fill-opacity': 0.5,
               }}
             />
             {/* Outline Layer */}
@@ -166,8 +178,8 @@ export default function RegionMap() {
                 'line-color': [
                   'case',
                   ['==', ['get', 'id'], selectedRegionId ?? ''],
-                  'hsl(var(--accent))',
-                  'hsl(var(--accent) / 0.6)',
+                  ACCENT_COLOR_SELECTED,
+                  ACCENT_COLOR,
                 ],
                 'line-width': [
                   'case',
@@ -200,6 +212,16 @@ export default function RegionMap() {
             visible={activeLayers.includes('global_lst')} 
           />
         </>
+      )}
+
+      {/* Air Temperature Legend (top-right, below nav controls) */}
+      {showAirTempLegend && tempData?.normalization && (
+        <div className="absolute top-16 right-3 z-20">
+          <AirTemperatureLegend 
+            min={tempData.normalization.p5} 
+            max={tempData.normalization.p95} 
+          />
+        </div>
       )}
 
       {/* Ebenen-Button (unten links gemäß Design) */}

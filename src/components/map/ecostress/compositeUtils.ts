@@ -59,28 +59,34 @@ interface RasterData {
 
 /**
  * Heat colormap with fixed temperature scale
+ * Yellow → Orange gradient for warm temperatures only
  */
 export function kelvinToRGBA(kelvin: number): [number, number, number, number] {
   const range = LST_MAX_K - LST_MIN_K;
   const t = Math.max(0, Math.min(1, (kelvin - LST_MIN_K) / range));
   
+  // Yellow (#FDE047) → Orange (#F97316) → Dark Orange (#EA580C)
+  // Warm color palette only - no blue/green
   let r: number, g: number, b: number;
   
-  // Blue → Cyan → Green → Yellow → Orange → Red
-  if (t < 0.2) {
-    r = 0; g = Math.round(255 * (t / 0.2)); b = 255;
-  } else if (t < 0.4) {
-    const s = (t - 0.2) / 0.2;
-    r = 0; g = 255; b = Math.round(255 * (1 - s));
-  } else if (t < 0.6) {
-    const s = (t - 0.4) / 0.2;
-    r = Math.round(255 * s); g = 255; b = 0;
-  } else if (t < 0.8) {
-    const s = (t - 0.6) / 0.2;
-    r = 255; g = Math.round(255 * (1 - s * 0.5)); b = 0;
+  if (t < 0.5) {
+    // Light Yellow (#FEF08A) → Yellow (#FACC15)
+    const s = t / 0.5;
+    r = 254;
+    g = Math.round(240 - s * 36); // 240 → 204
+    b = Math.round(138 - s * 117); // 138 → 21
+  } else if (t < 0.75) {
+    // Yellow (#FACC15) → Orange (#F97316)
+    const s = (t - 0.5) / 0.25;
+    r = Math.round(250 - s * 1); // 250 → 249
+    g = Math.round(204 - s * 89); // 204 → 115
+    b = Math.round(21 + s * 1); // 21 → 22
   } else {
-    const s = (t - 0.8) / 0.2;
-    r = 255; g = Math.round(128 * (1 - s)); b = 0;
+    // Orange (#F97316) → Dark Orange/Red (#DC2626)
+    const s = (t - 0.75) / 0.25;
+    r = Math.round(249 - s * 29); // 249 → 220
+    g = Math.round(115 - s * 77); // 115 → 38
+    b = Math.round(22 + s * 16); // 22 → 38
   }
   
   return [r, g, b, 220];

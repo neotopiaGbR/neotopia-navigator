@@ -338,7 +338,7 @@ const HeatOverlayControl = React.forwardRef<HTMLDivElement, HeatOverlayControlPr
             </div>
           )}
 
-          {/* Aggregation Method Toggle - Only P90 and Max for Urban Heat Island Analysis */}
+          {/* Aggregation Method Toggle - P90, Max, and Median for validation */}
           {hasEcostressMatch && (
             <div className="space-y-1.5">
               <span className="text-xs text-muted-foreground">Aggregationsmethode:</span>
@@ -380,6 +380,26 @@ const HeatOverlayControl = React.forwardRef<HTMLDivElement, HeatOverlayControlPr
                   <TooltipContent>
                     <p className="text-xs max-w-[200px]">
                       Maximum zeigt die heißesten gemessenen Werte
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => onAggregationMethodChange('median')}
+                      className={cn(
+                        'flex-1 px-2 py-1.5 text-xs rounded border transition-colors',
+                        heatLayers.aggregationMethod === 'median'
+                          ? 'bg-blue-500 text-white border-blue-500'
+                          : 'bg-background border-border hover:bg-muted'
+                      )}
+                    >
+                      Median
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs max-w-[200px]">
+                      Median zeigt typische Werte (Kontrollmessung)
                     </p>
                   </TooltipContent>
                 </Tooltip>

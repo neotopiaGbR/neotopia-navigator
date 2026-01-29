@@ -48,8 +48,8 @@ export default function EcostressCompositeOverlay({
     : '';
 
   // Self-fetch granules if not provided via props
-  // SCIENTIFIC UPDATE: Fetch June-August data from last 3 summers (2023, 2024, 2025)
-  // with strict peak-heat filter (12:00-17:00 solar local time)
+  // Backend now handles all date logic: Multi-summer parallel queries (2023-2025)
+  // with strict peak-heat UTC filter (10:00-15:00 UTC = 12:00-17:00 CEST)
   useEffect(() => {
     if (!visible || !regionBbox || allGranules.length > 0) {
       return;
@@ -58,29 +58,18 @@ export default function EcostressCompositeOverlay({
     const fetchGranules = async () => {
       const centerLat = (regionBbox[1] + regionBbox[3]) / 2;
       const centerLon = (regionBbox[0] + regionBbox[2]) / 2;
-      
-      // SCIENTIFIC CHANGE: Use 3-year summer range for robust P90 statistics
-      // This provides more granules for stable peak-heat aggregation and eliminates
-      // artifacts from single-year anomalies (e.g., unusually cloudy summers)
-      const currentYear = new Date().getFullYear();
-      // Start from 3 years ago, June 1st
-      const dateFrom = `${currentYear - 3}-06-01`;
-      // End at current year (or previous if before September), August 31st
-      const endYear = new Date().getMonth() < 8 ? currentYear - 1 : currentYear;
-      const dateTo = `${endYear}-08-31`;
 
-      console.log(`[EcostressComposite] Fetching 3-summer peak-heat data (${dateFrom} to ${dateTo}) for region:`, regionBbox);
+      console.log('[EcostressComposite] Fetching multi-summer peak-heat data for region:', regionBbox);
 
       try {
+        // Backend now handles all summer date logic via parallel queries
         const { data, error } = await supabase.functions.invoke('ecostress-latest-tile', {
           body: {
             lat: centerLat,
             lon: centerLon,
             region_bbox: regionBbox,
-            date_from: dateFrom,
-            date_to: dateTo,
-            daytime_only: true, // Edge function now uses 12:00-17:00 peak-heat filter
-            max_granules: 150, // Increased for 3-year dataset
+            mode: 'historic_heat',
+            max_granules: 80,
           },
         });
 
@@ -90,7 +79,10 @@ export default function EcostressCompositeOverlay({
         }
 
         if (data?.status === 'match' && Array.isArray(data.all_granules)) {
-          console.log(`[EcostressComposite] Fetched ${data.all_granules.length} peak-heat granules from ${data.total_available} available`);
+          const yearDist = data.year_distribution || {};
+          console.log(`[EcostressComposite] ✓ ${data.all_granules.length} peak-heat granules from ${data.summers_queried?.length || 3} summers`);
+          console.log(`[EcostressComposite] Year distribution:`, yearDist);
+          console.log(`[EcostressComposite] Filter: ${data.peak_heat_filter}, discarded ${data.filtered_non_peak} non-peak granules`);
           setFetchedGranules(data.all_granules);
         } else if (data?.status === 'no_coverage') {
           console.warn('[EcostressComposite] No peak-heat coverage:', data.message);

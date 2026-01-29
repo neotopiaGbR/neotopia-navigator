@@ -1,5 +1,6 @@
+// src/components/map/RegionMap.tsx
 import { useRef, useEffect, useState, useCallback } from 'react';
-import Map, { NavigationControl, ScaleControl, AttributionControl, type MapRef } from 'react-map-gl/maplibre';
+import Map, { NavigationControl, ScaleControl, AttributionControl } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { useMapOverlays } from '@/hooks/useMapOverlays';
@@ -8,46 +9,41 @@ import { useDwdTemperature } from '@/hooks/useDwdTemperature';
 import { initDeckOverlay, finalizeDeckOverlay } from './DeckOverlayManager';
 import { MAP_STYLES } from './basemapStyles';
 
-// Overlays
+// Overlays Imports
 import AirTemperatureOverlay from './AirTemperatureOverlay';
 import EcostressCompositeOverlay from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
 
 export default function RegionMap() {
-  const mapRef = useRef<MapRef>(null);
+  const mapRef = useRef<any>(null);
   const { selectedRegion } = useRegionContext();
   const { activeLayers, mapStyle } = useMapOverlays();
-  
-  // Data Fetching
   const { data: tempData } = useDwdTemperature();
-  
   const [isMapReady, setIsMapReady] = useState(false);
 
-  // 1. Initial Load
-  const onMapLoad = useCallback((e: any) => {
-    console.log('[RegionMap] Map Loaded');
-    initDeckOverlay(e.target);
-    setIsMapReady(true);
-  }, []);
-
-  // 2. Style Change Handling (Critical for Satellite switch)
-  const onStyleData = useCallback((e: any) => {
-    // Only re-init if it's a style loading event and map exists
-    if (e.dataType === 'style' && mapRef.current) {
-      initDeckOverlay(mapRef.current.getMap(), true); // Force re-init
-    }
-  }, []);
-
-  useEffect(() => {
-    return () => finalizeDeckOverlay();
-  }, []);
-
-  // Safe Style URL access
+  // Sicherer Style-Zugriff
   // @ts-ignore
   const currentStyle = MAP_STYLES[mapStyle] || MAP_STYLES.LIGHT;
 
+  const onMapLoad = useCallback((e: any) => {
+    console.log('Map loaded');
+    try {
+      initDeckOverlay(e.target);
+      setIsMapReady(true);
+    } catch (err) {
+      console.error('Deck init failed:', err);
+    }
+  }, []);
+
+  // Cleanup
+  useEffect(() => {
+    return () => {
+      try { finalizeDeckOverlay(); } catch (e) { console.error(e); }
+    };
+  }, []);
+
   return (
-    <div className="relative w-full h-full bg-slate-100">
+    <div className="relative w-full h-full bg-gray-100">
       <Map
         ref={mapRef}
         initialViewState={{
@@ -58,31 +54,27 @@ export default function RegionMap() {
         style={{ width: '100%', height: '100%' }}
         mapStyle={currentStyle}
         onLoad={onMapLoad}
-        onStyleData={onStyleData}
         attributionControl={false}
-        reuseMaps
       >
-        <AttributionControl customAttribution="Neotopia Navigator" position="bottom-right" />
         <NavigationControl position="top-right" />
         <ScaleControl position="bottom-left" />
+        <AttributionControl customAttribution="Neotopia" position="bottom-right" />
 
-        {/* --- Standard MapLibre Layers --- */}
+        {/* Layer 1: Air Temp */}
         <AirTemperatureOverlay 
           visible={activeLayers.includes('air_temperature')}
           data={tempData?.grid}
         />
 
-        {/* --- Deck.gl Overlays (Logic Only) --- */}
+        {/* Layer 2: Deck GL (Composite) */}
         {isMapReady && (
           <>
             <EcostressCompositeOverlay 
               map={mapRef.current?.getMap()}
               visible={activeLayers.includes('ecostress')}
               regionBbox={selectedRegion?.bbox}
-              // Add granules here if available from context
               allGranules={[]} 
             />
-            
             <GlobalLSTOverlay visible={activeLayers.includes('global_lst')} />
           </>
         )}

@@ -93,6 +93,7 @@ export default function EcostressCompositeOverlay({
   }, [visible, regionBbox, allGranules.length]);
 
   // Generate composite when granules or aggregation method changes
+  // Uses debounce to prevent rapid re-triggering when user clicks quickly
   useEffect(() => {
     // Skip if not visible or no data
     if (!visible || !regionBbox || effectiveGranules.length === 0) {
@@ -121,109 +122,110 @@ export default function EcostressCompositeOverlay({
       console.log(`[EcostressComposite] Aggregation changed: ${prevAggregationRef.current} → ${aggregationMethod}`);
     }
 
-    // Track this generation to handle race conditions
-    const genId = ++generationIdRef.current;
-    prevGranulesKeyRef.current = granulesKey;
-    prevAggregationRef.current = aggregationMethod;
-
-    async function generate() {
-      setIsGenerating(true);
-      console.log(`[EcostressComposite] Starting ${aggregationMethod.toUpperCase()} composite from ${effectiveGranules.length} granules...`);
+    // DEBOUNCE: Wait 300ms before starting generation to prevent rapid re-triggers
+    const debounceTimer = setTimeout(() => {
+      // Track this generation to handle race conditions
+      const genId = ++generationIdRef.current;
+      prevGranulesKeyRef.current = granulesKey;
+      prevAggregationRef.current = aggregationMethod;
       
-      try {
-        // Use the dynamic aggregation method from props (p90 or max)
-        const result = await createComposite(effectiveGranules, regionBbox!, aggregationMethod);
-        
-        // Check if this generation is still current
-        if (genId !== generationIdRef.current) {
-          console.log('[EcostressComposite] Generation superseded, discarding result');
-          return;
-        }
-        
-        if (!result) {
-          console.warn('[EcostressComposite] createComposite returned null');
-          setIsGenerating(false);
-          return;
-        }
+      runGeneration(genId);
+    }, 300);
 
-        console.log(`[EcostressComposite] Composite complete: ${result.stats.validPixels} valid pixels, raw bounds:`, result.bounds);
-
-        // CRITICAL: Strictly normalize bounds to [West, South, East, North]
-        const rawBounds = result.bounds;
-        const normalizedBounds: [number, number, number, number] = [
-          Math.min(rawBounds[0], rawBounds[2]), // west (minLon)
-          Math.min(rawBounds[1], rawBounds[3]), // south (minLat)
-          Math.max(rawBounds[0], rawBounds[2]), // east (maxLon)
-          Math.max(rawBounds[1], rawBounds[3]), // north (maxLat)
-        ];
-
-        // Validate WGS84 bounds
-        if (normalizedBounds[0] < -180 || normalizedBounds[2] > 180 || 
-            normalizedBounds[1] < -90 || normalizedBounds[3] > 90) {
-          console.error('[EcostressComposite] Invalid WGS84 bounds:', normalizedBounds);
-          setIsGenerating(false);
-          return;
-        }
-
-        // Validate positive area
-        if (normalizedBounds[0] >= normalizedBounds[2] || normalizedBounds[1] >= normalizedBounds[3]) {
-          console.error('[EcostressComposite] Zero-area bounds:', normalizedBounds);
-          setIsGenerating(false);
-          return;
-        }
-
-        console.log('[EcostressComposite] Normalized bounds:', normalizedBounds);
-
-        // CRITICAL: Create ImageBitmap from ImageData for stable WebGL texture
-        // This prevents "Vertex shader not compiled" crashes on some browsers
-        const canvas = document.createElement('canvas');
-        canvas.width = result.imageData.width;
-        canvas.height = result.imageData.height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          console.error('[EcostressComposite] Failed to get canvas context');
-          setIsGenerating(false);
-          return;
-        }
-        
-        ctx.putImageData(result.imageData, 0, 0);
-        
-        // CRITICAL: Use createImageBitmap with explicit options to prevent WebGL shader crashes
-        // premultiplyAlpha: 'none' prevents alpha blending issues
-        // colorSpaceConversion: 'none' preserves raw color values
-        const bitmap = await createImageBitmap(canvas, {
-          premultiplyAlpha: 'none',
-          colorSpaceConversion: 'none',
-        });
-
-        // Check again after async operation
-        if (genId !== generationIdRef.current) {
-          bitmap.close();
-          return;
-        }
-
-        // Close previous bitmap if exists
-        if (layerData?.image) {
-          try { layerData.image.close(); } catch { /* ignore */ }
-        }
-
-        setLayerData({ image: bitmap, bounds: normalizedBounds });
-        setIsGenerating(false);
-        
-      } catch (err) {
-        console.error('[EcostressComposite] Generation error:', err);
-        setIsGenerating(false);
-      }
-    }
-
-    generate();
-
-    // Cleanup on unmount or when effect re-runs
     return () => {
-      // Mark this generation as stale
-      generationIdRef.current++;
+      clearTimeout(debounceTimer);
     };
   }, [visible, regionBbox, granulesKey, aggregationMethod, effectiveGranules]);
+
+  // Extracted generation logic for cleaner code
+  const runGeneration = async (genId: number) => {
+    setIsGenerating(true);
+    console.log(`[EcostressComposite] Starting ${aggregationMethod.toUpperCase()} composite from ${effectiveGranules.length} granules...`);
+      
+    try {
+      // Use the dynamic aggregation method from props (p90 or max)
+      const result = await createComposite(effectiveGranules, regionBbox!, aggregationMethod);
+      
+      // Check if this generation is still current
+      if (genId !== generationIdRef.current) {
+        console.log('[EcostressComposite] Generation superseded, discarding result');
+        setIsGenerating(false);
+        return;
+      }
+      
+      if (!result) {
+        console.warn('[EcostressComposite] createComposite returned null');
+        setIsGenerating(false);
+        return;
+      }
+
+      console.log(`[EcostressComposite] Composite complete: ${result.stats.validPixels} valid pixels, raw bounds:`, result.bounds);
+
+      // CRITICAL: Strictly normalize bounds to [West, South, East, North]
+      const rawBounds = result.bounds;
+      const normalizedBounds: [number, number, number, number] = [
+        Math.min(rawBounds[0], rawBounds[2]), // west (minLon)
+        Math.min(rawBounds[1], rawBounds[3]), // south (minLat)
+        Math.max(rawBounds[0], rawBounds[2]), // east (maxLon)
+        Math.max(rawBounds[1], rawBounds[3]), // north (maxLat)
+      ];
+
+      // Validate WGS84 bounds
+      if (normalizedBounds[0] < -180 || normalizedBounds[2] > 180 || 
+          normalizedBounds[1] < -90 || normalizedBounds[3] > 90) {
+        console.error('[EcostressComposite] Invalid WGS84 bounds:', normalizedBounds);
+        setIsGenerating(false);
+        return;
+      }
+
+      // Validate positive area
+      if (normalizedBounds[0] >= normalizedBounds[2] || normalizedBounds[1] >= normalizedBounds[3]) {
+        console.error('[EcostressComposite] Zero-area bounds:', normalizedBounds);
+        setIsGenerating(false);
+        return;
+      }
+
+      console.log('[EcostressComposite] Normalized bounds:', normalizedBounds);
+
+      // CRITICAL: Create ImageBitmap from ImageData for stable WebGL texture
+      const canvas = document.createElement('canvas');
+      canvas.width = result.imageData.width;
+      canvas.height = result.imageData.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.error('[EcostressComposite] Failed to get canvas context');
+        setIsGenerating(false);
+        return;
+      }
+      
+      ctx.putImageData(result.imageData, 0, 0);
+      
+      // CRITICAL: Use createImageBitmap with explicit options to prevent WebGL shader crashes
+      const bitmap = await createImageBitmap(canvas, {
+        premultiplyAlpha: 'none',
+        colorSpaceConversion: 'none',
+      });
+
+      // Check again after async operation
+      if (genId !== generationIdRef.current) {
+        bitmap.close();
+        setIsGenerating(false);
+        return;
+      }
+
+      // Close previous bitmap if exists
+      if (layerData?.image) {
+        try { layerData.image.close(); } catch { /* ignore */ }
+      }
+
+      setLayerData({ image: bitmap, bounds: normalizedBounds });
+      setIsGenerating(false);
+      
+    } catch (err) {
+      console.error('[EcostressComposite] Generation error:', err);
+      setIsGenerating(false);
+    }
+  };
 
   // Update deck.gl layer when layerData or opacity changes
   useEffect(() => {

@@ -5,15 +5,13 @@
 import React from 'react';
 import { Flame } from 'lucide-react';
 
+// Yellow → Orange → Red gradient matching compositeUtils.ts kelvinToRGBA
 const HEAT_LEGEND_COLORS = [
-  { color: '#313695', label: '< 20°C' },
-  { color: '#4575b4', label: '25°C' },
-  { color: '#74add1', label: '30°C' },
-  { color: '#abd9e9', label: '35°C' },
-  { color: '#fee090', label: '40°C' },
-  { color: '#fdae61', label: '45°C' },
-  { color: '#f46d43', label: '50°C' },
-  { color: '#d73027', label: '> 55°C' },
+  { color: '#FEF9C3', label: '20°C' },
+  { color: '#FDE047', label: '30°C' },
+  { color: '#F97316', label: '38°C' },
+  { color: '#EA580C', label: '45°C' },
+  { color: '#DC2626', label: '55°C+' },
 ];
 
 interface HeatLegendProps {

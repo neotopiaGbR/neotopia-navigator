@@ -17,7 +17,9 @@ import { cn } from '@/lib/utils';
 interface DiagnosticData {
   mapInstanceId: string | null;
   mapContainerSize: { width: number; height: number } | null;
-  deckCanvasSize: { width: number; height: number } | null;
+  deckCanvasSize: { width: number; height: number } | null; // backing buffer (device pixels)
+  deckCanvasCssSize: { width: number; height: number } | null; // CSS pixels
+  devicePixelRatio: number;
   deckCanvasZIndex: string | null;
   deckInitialized: boolean;
   deckLayerCount: number;
@@ -50,8 +52,14 @@ export function OverlayDiagnosticsPanel({ visible, mapRef }: OverlayDiagnosticsP
     const updateDiagnostics = () => {
       const map = mapRef.current;
       const mapContainer = map?.getContainer?.() as HTMLElement | null;
-      const deckCanvas = document.querySelector('canvas[id*="deck"], canvas.deck-canvas') as HTMLCanvasElement | null;
+      const deckCanvas = (mapContainer
+        ? (mapContainer.querySelector(
+            'canvas.deckgl-canvas, canvas[id*="deck"], canvas.deck-canvas, canvas[data-deck]'
+          ) as HTMLCanvasElement | null)
+        : null);
       const deckDiag = getDiagnostics();
+
+      const rect = deckCanvas ? deckCanvas.getBoundingClientRect() : null;
       
       setDiagnostics({
         mapInstanceId: map?._mapId ?? map?.getCanvas?.()?.id ?? 'unknown',
@@ -59,6 +67,8 @@ export function OverlayDiagnosticsPanel({ visible, mapRef }: OverlayDiagnosticsP
           ? { width: mapContainer.clientWidth, height: mapContainer.clientHeight }
           : null,
         deckCanvasSize: deckDiag.canvasDimensions,
+        deckCanvasCssSize: rect ? { width: Math.round(rect.width), height: Math.round(rect.height) } : deckDiag.canvasCssDimensions,
+        devicePixelRatio: deckDiag.devicePixelRatio,
         deckCanvasZIndex: getComputedZIndex(deckCanvas),
         deckInitialized: deckDiag.initialized,
         deckLayerCount: deckDiag.layerCount,
@@ -101,10 +111,18 @@ export function OverlayDiagnosticsPanel({ visible, mapRef }: OverlayDiagnosticsP
       : <AlertCircle className="h-3 w-3 text-destructive" />;
   };
   
-  const canvasSizeMismatch = diagnostics.mapContainerSize && diagnostics.deckCanvasSize && (
-    Math.abs(diagnostics.mapContainerSize.width - diagnostics.deckCanvasSize.width) > 10 ||
-    Math.abs(diagnostics.mapContainerSize.height - diagnostics.deckCanvasSize.height) > 10
+  // NOTE: canvas.width/height are device-pixel buffer sizes; compare DPR-aware.
+  const cssSizeMismatch = diagnostics.mapContainerSize && diagnostics.deckCanvasCssSize && (
+    Math.abs(diagnostics.mapContainerSize.width - diagnostics.deckCanvasCssSize.width) > 2 ||
+    Math.abs(diagnostics.mapContainerSize.height - diagnostics.deckCanvasCssSize.height) > 2
   );
+
+  const bufferSizeMismatch = diagnostics.mapContainerSize && diagnostics.deckCanvasSize && (
+    Math.abs(diagnostics.mapContainerSize.width * diagnostics.devicePixelRatio - diagnostics.deckCanvasSize.width) > 64 ||
+    Math.abs(diagnostics.mapContainerSize.height * diagnostics.devicePixelRatio - diagnostics.deckCanvasSize.height) > 64
+  );
+
+  const canvasSizeMismatch = !!(cssSizeMismatch || bufferSizeMismatch);
   
   return (
     <div className="absolute bottom-24 left-3 z-50 w-72 bg-background/95 backdrop-blur-md border border-border rounded-lg shadow-xl overflow-hidden text-xs font-mono">
@@ -134,11 +152,19 @@ export function OverlayDiagnosticsPanel({ visible, mapRef }: OverlayDiagnosticsP
         >
           <Row label="Initialized" value={diagnostics.deckInitialized ? '✓' : '✗'} ok={diagnostics.deckInitialized} />
           <Row 
-            label="Size" 
-            value={diagnostics.deckCanvasSize 
-              ? `${diagnostics.deckCanvasSize.width}×${diagnostics.deckCanvasSize.height}` 
+            label="CSS Size" 
+            value={diagnostics.deckCanvasCssSize
+              ? `${diagnostics.deckCanvasCssSize.width}×${diagnostics.deckCanvasCssSize.height}`
               : 'not found'
-            } 
+            }
+            ok={!canvasSizeMismatch}
+          />
+          <Row
+            label="Buffer"
+            value={diagnostics.deckCanvasSize
+              ? `${diagnostics.deckCanvasSize.width}×${diagnostics.deckCanvasSize.height} (DPR ${diagnostics.devicePixelRatio})`
+              : '–'
+            }
             ok={!canvasSizeMismatch}
           />
           <Row 

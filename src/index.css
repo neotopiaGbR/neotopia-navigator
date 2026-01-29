@@ -107,7 +107,10 @@
   .maplibregl-map .deck-canvas,
   .mapboxgl-map canvas[id*="deck"],
   .mapboxgl-map .deck-canvas,
-  canvas.deckgl-overlay {
+  .maplibregl-map .deckgl-overlay,
+  .mapboxgl-map .deckgl-overlay,
+  .maplibregl-map canvas.deckgl-canvas,
+  .mapboxgl-map canvas.deckgl-canvas {
     width: 100% !important;
     height: 100% !important;
     position: absolute !important;

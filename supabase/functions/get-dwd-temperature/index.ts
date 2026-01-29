@@ -38,6 +38,13 @@ const MONTHLY_PATHS: Record<string, string> = {
   min: "monthly/air_temperature_min",
 };
 
+// Monthly folders on DWD OpenData are nested by month, e.g. .../06_Jun/
+const MONTHLY_FOLDERS: Record<number, string> = {
+  6: "06_Jun",
+  7: "07_Jul",
+  8: "08_Aug",
+};
+
 // --- Projections ---
 proj4Any.defs(
   "EPSG:3035",
@@ -290,10 +297,14 @@ function buildSeasonalUrl(year: number, variable: "mean" | "max" | "min"): strin
 
 function buildMonthlyUrl(year: number, month: number, variable: "mean" | "max" | "min"): string {
   const path = MONTHLY_PATHS[variable];
+  const folder = MONTHLY_FOLDERS[month];
+  if (!folder) {
+    throw new Error(`Unsupported monthly request: month=${month} (supported: 6,7,8)`);
+  }
   const varPart = variable === "mean" ? "mean" : variable === "max" ? "max" : "min";
   const monthStr = month.toString().padStart(2, "0");
   const filename = `grids_germany_monthly_air_temp_${varPart}_${year}${monthStr}.asc.gz`;
-  return `${DWD_BASE_URL}/${path}/${filename}`;
+  return `${DWD_BASE_URL}/${path}/${folder}/${filename}`;
 }
 
 function quantile(sorted: number[], q: number): number {

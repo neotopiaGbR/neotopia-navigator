@@ -50,6 +50,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const profileFetchAbortRef = useRef<AbortController | null>(null);
 
   // Non-blocking profile fetch with timeout - NEVER throws, NEVER blocks UI
+  // Uses get_user_role() function to fetch role from user_roles table
   const fetchProfileAsync = useCallback(async (userId: string) => {
     // Abort any existing profile fetch
     if (profileFetchAbortRef.current) {
@@ -67,14 +68,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     try {
-      const fetchPromise = supabase
-        .from('profiles')
-        .select('id, role')
-        .eq('id', userId)
-        .maybeSingle();
+      // Use get_user_role() database function to fetch role from user_roles table
+      const fetchPromise = supabase.rpc('get_user_role', { _user_id: userId });
 
       // Race between fetch and timeout
-      const { data, error, status } = await Promise.race([
+      const { data: role, error } = await Promise.race([
         fetchPromise,
         timeoutPromise,
       ]) as Awaited<typeof fetchPromise>;
@@ -83,7 +81,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (error) {
         devLog('PROFILE_FETCH_ERROR', {
-          status,
           code: error.code,
           message: error.message,
           hint: error.hint,
@@ -94,15 +91,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      if (!data) {
-        devLog('PROFILE_FETCH_OK', { result: 'no_row_found', fallback: 'user' });
+      if (!role) {
+        devLog('PROFILE_FETCH_OK', { result: 'no_role_found', fallback: 'user' });
         setProfile({ id: userId, role: 'user' });
         setProfileStatus('loaded');
         return;
       }
 
-      devLog('PROFILE_FETCH_OK', { role: data.role });
-      setProfile({ id: data.id, role: (data.role as UserRole) || 'user' });
+      devLog('PROFILE_FETCH_OK', { role });
+      setProfile({ id: userId, role: (role as UserRole) || 'user' });
       setProfileStatus('loaded');
     } catch (err) {
       if (!mountedRef.current) return;

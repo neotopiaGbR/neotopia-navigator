@@ -28,7 +28,7 @@ export function AirTemperatureOverlay({
     }
   }, [data]);
 
-  const layerStyle = useMemo(() => {
+  const layerStyle = useMemo<any>(() => {
     return {
       id: 'air-temp-circles',
       type: 'circle' as const,

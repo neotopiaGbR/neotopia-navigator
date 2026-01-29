@@ -28,6 +28,34 @@ let overlayInstance: MapboxOverlay | null = null;
 let attachedMap: MapLibreMap | null = null;
 let currentLayers: Map<string, DeckLayerConfig> = new Map();
 
+export function getDiagnostics() {
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+
+  const visibleLayerIds = Array.from(currentLayers.values())
+    .filter((c) => c.visible)
+    .map((c) => c.id);
+
+  let canvas: HTMLCanvasElement | null = null;
+  let rect: DOMRect | null = null;
+  if (typeof document !== 'undefined') {
+    canvas = document.querySelector(
+      'canvas.deckgl-canvas, canvas[id*="deck"], canvas.deck-canvas, canvas[data-deck]'
+    ) as HTMLCanvasElement | null;
+    rect = canvas ? canvas.getBoundingClientRect() : null;
+  }
+
+  return {
+    initialized: !!overlayInstance,
+    devicePixelRatio: dpr,
+    layerCount: visibleLayerIds.length,
+    layerIds: visibleLayerIds,
+    canvasDimensions: canvas ? { width: canvas.width, height: canvas.height } : null,
+    canvasCssDimensions: rect
+      ? { width: Math.round(rect.width), height: Math.round(rect.height) }
+      : null,
+  };
+}
+
 // CSS Injection to FORCE canvas visibility
 const CSS_ID = 'neotopia-deck-styles';
 const FORCE_CSS = `

@@ -14,7 +14,7 @@ import AirTemperatureOverlay from './AirTemperatureOverlay';
 import { EcostressCompositeOverlay } from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
 
-import RegionSidebar from './RegionSidebar';
+
 import LayersControl from './LayersControl';
 import OverlayDiagnosticsPanel from './OverlayDiagnosticsPanel';
 
@@ -89,12 +89,6 @@ export default function RegionMap() {
       )}
 
       {/* UI TOOLS */}
-      <div className="absolute top-0 left-0 z-20 h-full p-4 pointer-events-none">
-        <div className="pointer-events-auto h-full max-w-md shadow-2xl">
-           <RegionSidebar />
-        </div>
-      </div>
-
       <div className="absolute top-4 right-4 z-20 pointer-events-none">
         <div className="pointer-events-auto">
           <LayersControl />

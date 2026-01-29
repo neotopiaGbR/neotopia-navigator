@@ -20,6 +20,7 @@ interface HeatLegendProps {
   aggregationMethod?: 'median' | 'p90' | 'max';
   granuleCount?: number;
   meanTemperature?: number; // Mean temperature in Kelvin
+  yearDistribution?: Record<number, number>; // e.g. {2023: 30, 2024: 35, 2025: 35}
 }
 
 const HeatLegend: React.FC<HeatLegendProps> = ({ 
@@ -27,6 +28,7 @@ const HeatLegend: React.FC<HeatLegendProps> = ({
   aggregationMethod = 'p90',
   granuleCount,
   meanTemperature,
+  yearDistribution,
 }) => {
   if (!visible) return null;
 
@@ -86,8 +88,24 @@ const HeatLegend: React.FC<HeatLegendProps> = ({
         )}
         <div className="flex justify-between">
           <span>Zeitraum:</span>
-          <span className="font-medium text-foreground">Jun–Aug</span>
+          <span className="font-medium text-foreground">
+            {yearDistribution && Object.keys(yearDistribution).length > 0
+              ? `Sommer ${Math.min(...Object.keys(yearDistribution).map(Number))}–${Math.max(...Object.keys(yearDistribution).map(Number))}`
+              : 'Sommer 2023–2025'
+            }
+          </span>
         </div>
+        {yearDistribution && Object.keys(yearDistribution).length > 1 && (
+          <div className="flex justify-between text-[9px] opacity-70">
+            <span>Verteilung:</span>
+            <span>
+              {Object.entries(yearDistribution)
+                .sort(([a], [b]) => Number(a) - Number(b))
+                .map(([year, count]) => `${year.slice(-2)}: ${count}`)
+                .join(', ')}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Attribution */}

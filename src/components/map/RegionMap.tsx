@@ -187,6 +187,7 @@ export default function RegionMap() {
   const showHeatLegend = overlays.ecostress.enabled;
   const ecostressGranuleCount = (overlays.ecostress.metadata?.granuleCount as number) || 
     (overlays.ecostress.metadata?.allGranules as any[])?.length || 0;
+  const ecostressYearDistribution = (overlays.ecostress.metadata?.yearDistribution as Record<number, number>) || undefined;
 
   // Find temperature value for selected region (nearest grid cell)
   const regionTempValue = useMemo(() => {
@@ -318,6 +319,7 @@ export default function RegionMap() {
           aggregationMethod={heatLayers.aggregationMethod}
           granuleCount={ecostressGranuleCount}
           meanTemperature={heatLayers.ecostressStats?.mean}
+          yearDistribution={ecostressYearDistribution}
         />
 
         {/* Air Temperature Legend */}

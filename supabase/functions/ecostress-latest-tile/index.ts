@@ -36,11 +36,12 @@ const UTC_HOUR_START = 10;
 const UTC_HOUR_END = 15;
 
 // Granules per summer season (will fetch 3 seasons in parallel)
-const GRANULES_PER_SUMMER = 30;
-// Total max granules to return after merging
-const DEFAULT_MAX_GRANULES = 80;
-// CMR page size per request
-const CMR_PAGE_SIZE = 100;
+// With 3 summers, we target ~35 per summer to get 100+ total for robust P90
+const GRANULES_PER_SUMMER = 40;
+// Total max granules to return after merging (increased for statistical validity)
+const DEFAULT_MAX_GRANULES = 100;
+// CMR page size per request (fetch more to ensure enough after filtering)
+const CMR_PAGE_SIZE = 150;
 
 const ECOSTRESS_CONCEPT_ID = 'C2076090826-LPCLOUD';
 const CMR_API_URL = 'https://cmr.earthdata.nasa.gov/search/granules.json';

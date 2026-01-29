@@ -65,20 +65,17 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
 
   // NOTE: In this project we attach deck manually to avoid MapLibre control/lifecycle edge cases
   // (canvas occasionally not visible / lost on style changes).
+  // CRITICAL: Use getCanvasContainer() to insert directly above the map canvas, not getContainer()
   try {
-    const container = map.getContainer();
+    const canvasContainer = map.getCanvasContainer();
     overlayContainerEl = overlayInstance.onAdd(map as any) as unknown as HTMLElement;
     overlayContainerEl.classList.add('deckgl-overlay-container');
-    // Ensure the container sits above the map canvas.
-    overlayContainerEl.style.position = 'absolute';
-    overlayContainerEl.style.top = '0';
-    overlayContainerEl.style.left = '0';
-    overlayContainerEl.style.right = '0';
-    overlayContainerEl.style.bottom = '0';
-    overlayContainerEl.style.pointerEvents = 'none';
-    overlayContainerEl.style.zIndex = '20';
-    container.appendChild(overlayContainerEl);
+    // Ensure the container sits directly above the map canvas using inset shorthand
+    overlayContainerEl.style.cssText = 'position: absolute; inset: 0; z-index: 20; pointer-events: none;';
+    canvasContainer.appendChild(overlayContainerEl);
+    console.log('[DeckOverlayManager] Attached to canvasContainer');
   } catch (err) {
+    console.warn('[DeckOverlayManager] Manual attach failed, using addControl fallback:', err);
     // Fallback to standard control mounting
     map.addControl(overlayInstance as any);
   }

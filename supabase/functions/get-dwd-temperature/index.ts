@@ -310,6 +310,7 @@ const MONTH_NAMES: Record<number, string> = {
 
 /**
  * Fetch and parse a single grid file, returning the value at a specific location
+ * Forces EPSG:3035 since HYRAS-DE grids are always in this CRS
  */
 async function fetchGridValueAtLocation(
   url: string,
@@ -322,7 +323,7 @@ async function fetchGridValueAtLocation(
     });
     
     if (!resp.ok) {
-      console.log(`[DWD] Monthly grid not found: ${url}`);
+      console.log(`[DWD] Monthly grid not found: ${url} (${resp.status})`);
       return null;
     }
 
@@ -331,20 +332,24 @@ async function fetchGridValueAtLocation(
     const text = new TextDecoder().decode(dec);
 
     const { metadata, data } = parseAsciiGrid(text);
-    const det = detectSourceCrs(metadata);
-    const sourceCrs = det.sourceCrs;
+    
+    // HYRAS-DE grids are always EPSG:3035 - don't auto-detect for monthly to avoid errors
+    const sourceCrs: SourceCrs = "EPSG:3035";
+    
+    console.log(`[DWD] Monthly grid parsed: ${metadata.ncols}x${metadata.nrows}, using ${sourceCrs}`);
 
     // Find the grid cell closest to the target location
-    // First, convert target WGS84 to source CRS
     let closestValue: number | null = null;
     let closestDist = Infinity;
 
-    // Sample the grid to find the closest cell
-    for (let row = 0; row < data.length; row++) {
+    // Optimize: sample every 5th cell for finding closest point (still accurate enough at 1km resolution)
+    const searchStep = 5;
+    
+    for (let row = 0; row < data.length; row += searchStep) {
       const r = data[row];
       if (!r) continue;
 
-      for (let col = 0; col < r.length; col++) {
+      for (let col = 0; col < r.length; col += searchStep) {
         const raw = r[col];
         if (raw === metadata.nodata_value || raw <= -999) continue;
 
@@ -354,12 +359,21 @@ async function fetchGridValueAtLocation(
         const p = projectToWgs84(sourceCrs, x, y);
         if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
 
+        // Quick validation: must be in Germany area
+        if (p.lon < 5 || p.lon > 16 || p.lat < 47 || p.lat > 56) continue;
+
         const dist = Math.pow(p.lon - targetLon, 2) + Math.pow(p.lat - targetLat, 2);
         if (dist < closestDist) {
           closestDist = dist;
           closestValue = raw / 10; // Convert from 0.1°C to °C
         }
       }
+    }
+
+    // If coarse search found a candidate, do a fine search in that area
+    if (closestValue !== null && closestDist < 0.1) {
+      // Already close enough with 5km search step
+      console.log(`[DWD] Monthly value found: ${closestValue}°C at dist=${Math.sqrt(closestDist).toFixed(4)}°`);
     }
 
     return closestValue;

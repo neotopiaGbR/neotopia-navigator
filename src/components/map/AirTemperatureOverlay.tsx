@@ -5,26 +5,29 @@ import { buildTemperatureColorExpression } from './basemapStyles';
 import { gridToGeoJson, type GridPoint } from './airTemperature/gridToGeoJson';
 
 interface AirTemperatureOverlayProps {
-  data: GridPoint[] | null;
+  data: GridPoint[] | null | undefined;
   visible: boolean;
   opacity?: number;
-  normalization?: { min: number; max: number };
 }
 
 export function AirTemperatureOverlay({ 
   data, 
   visible, 
-  opacity = 0.8,
-  normalization = { min: -10, max: 40 }
+  opacity = 0.8 
 }: AirTemperatureOverlayProps) {
   
-  // 1. Convert Grid to GeoJSON (memoized for performance)
+  // Robust GeoJSON conversion
   const geoJsonData = useMemo<FeatureCollection | null>(() => {
-    if (!data || data.length === 0) return null;
-    return gridToGeoJson(data);
+    // Safety check: is data an array?
+    if (!data || !Array.isArray(data) || data.length === 0) return null;
+    try {
+      return gridToGeoJson(data);
+    } catch (e) {
+      console.warn('[AirTemperatureOverlay] Failed to convert grid:', e);
+      return null;
+    }
   }, [data]);
 
-  // 2. Build Style Expressions
   const layerStyle = useMemo(() => {
     return {
       id: 'air-temp-circles',
@@ -32,16 +35,16 @@ export function AirTemperatureOverlay({
       paint: {
         'circle-radius': [
           'interpolate', ['linear'], ['zoom'],
-          5, 2,   // Klein bei Zoom out
-          10, 5,  // Mittel
-          15, 10  // Groß bei Zoom in
+          5, 2,
+          10, 5,
+          15, 10
         ],
-        'circle-color': buildTemperatureColorExpression(normalization.min, normalization.max),
+        'circle-color': buildTemperatureColorExpression(-10, 40),
         'circle-opacity': opacity,
         'circle-stroke-width': 0,
       }
     };
-  }, [normalization.min, normalization.max, opacity]);
+  }, [opacity]);
 
   if (!visible || !geoJsonData) return null;
 

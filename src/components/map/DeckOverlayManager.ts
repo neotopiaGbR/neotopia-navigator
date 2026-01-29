@@ -1,13 +1,5 @@
-/**
- * DeckOverlayManager - Singleton for MapLibre Integration
- * ARCHITECT FIX:
- * 1. Removed strict DOM dependency in isReady()
- * 2. Auto-injects CSS to ensure canvas visibility (z-index fix)
- * 3. Handles map style changes gracefully
- */
-
 import { MapboxOverlay } from '@deck.gl/mapbox';
-import { BitmapLayer, ScatterplotLayer } from '@deck.gl/layers';
+import { BitmapLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { COORDINATE_SYSTEM } from '@deck.gl/core';
 
@@ -17,95 +9,51 @@ export interface DeckLayerConfig {
   visible: boolean;
   opacity?: number;
   image?: HTMLCanvasElement | ImageBitmap;
-  bounds?: [number, number, number, number]; // [W, S, E, N]
+  bounds?: [number, number, number, number];
   data?: any[];
-  getPosition?: (d: any) => [number, number];
-  getColor?: (d: any) => [number, number, number, number];
-  getRadius?: (d: any) => number;
 }
 
 let overlayInstance: MapboxOverlay | null = null;
 let attachedMap: MapLibreMap | null = null;
 let currentLayers: Map<string, DeckLayerConfig> = new Map();
 
-export function getDiagnostics() {
-  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
-
-  const visibleLayerIds = Array.from(currentLayers.values())
-    .filter((c) => c.visible)
-    .map((c) => c.id);
-
-  let canvas: HTMLCanvasElement | null = null;
-  let rect: DOMRect | null = null;
-  if (typeof document !== 'undefined') {
-    canvas = document.querySelector(
-      'canvas.deckgl-canvas, canvas[id*="deck"], canvas.deck-canvas, canvas[data-deck]'
-    ) as HTMLCanvasElement | null;
-    rect = canvas ? canvas.getBoundingClientRect() : null;
-  }
-
-  return {
-    initialized: !!overlayInstance,
-    devicePixelRatio: dpr,
-    layerCount: visibleLayerIds.length,
-    layerIds: visibleLayerIds,
-    canvasDimensions: canvas ? { width: canvas.width, height: canvas.height } : null,
-    canvasCssDimensions: rect
-      ? { width: Math.round(rect.width), height: Math.round(rect.height) }
-      : null,
-  };
-}
-
-// CSS Injection to FORCE canvas visibility
-const CSS_ID = 'neotopia-deck-styles';
-const FORCE_CSS = `
-  .maplibregl-map .deckgl-overlay {
-    z-index: 10 !important;
-    pointer-events: none !important;
-  }
-  canvas.deckgl-canvas {
-    pointer-events: none !important;
-  }
-`;
-
+// CSS Injection: Zwingt den Canvas zur Sichtbarkeit
 function injectCSS() {
   if (typeof document === 'undefined') return;
-  if (!document.getElementById(CSS_ID)) {
-    const style = document.createElement('style');
-    style.id = CSS_ID;
-    style.textContent = FORCE_CSS;
-    document.head.appendChild(style);
+  const id = 'deck-force-visible';
+  if (!document.getElementById(id)) {
+    const s = document.createElement('style');
+    s.id = id;
+    s.textContent = `
+      .maplibregl-map canvas.deckgl-canvas {
+        z-index: 5 !important;
+        pointer-events: none !important;
+        opacity: 1 !important;
+      }
+    `;
+    document.head.appendChild(s);
   }
 }
 
-export function initDeckOverlay(map: MapLibreMap, force: boolean = false) {
-  if (!map) return;
-  
-  // If we are already attached to THIS map and not forced, do nothing
+export function initDeckOverlay(map: MapLibreMap, force = false) {
   if (overlayInstance && attachedMap === map && !force) return;
 
-  console.log('[DeckOverlayManager] Initializing on map instance...');
   injectCSS();
-
-  // Cleanup old instance
+  
   if (overlayInstance) {
-    try { overlayInstance.finalize(); } catch (e) { console.warn('Cleanup warning:', e); }
+    try { overlayInstance.finalize(); } catch(e) {/*ignore*/}
   }
 
-  // Create new instance
   overlayInstance = new MapboxOverlay({
-    interleaved: false, // Keep on top
+    interleaved: false,
     layers: []
   });
 
-  // Attach to map
-  const container = map.getCanvasContainer();
-  const overlayElement = overlayInstance.onAdd(map as any);
-  container.appendChild(overlayElement);
+  map.addControl(overlayInstance as any);
   attachedMap = map;
-
-  // Re-apply known layers immediately
+  
   rebuildLayers();
+  console.log('[DeckOverlayManager] Initialized & Attached');
 }
 
 export function updateLayer(config: DeckLayerConfig) {
@@ -124,7 +72,7 @@ function rebuildLayers() {
   if (!overlayInstance) return;
 
   const layers = Array.from(currentLayers.values())
-    .filter(c => c.visible)
+    .filter(l => l.visible)
     .map(c => {
       if (c.type === 'bitmap' && c.image && c.bounds) {
         return new BitmapLayer({
@@ -135,7 +83,6 @@ function rebuildLayers() {
           coordinateSystem: COORDINATE_SYSTEM.LNGLAT
         });
       }
-      // Add other types here if needed
       return null;
     })
     .filter(Boolean);
@@ -144,19 +91,26 @@ function rebuildLayers() {
 }
 
 export function finalizeDeckOverlay() {
-  if (overlayInstance) {
-    try {
-      overlayInstance.onRemove();
-    } catch {}
-
-    overlayInstance.finalize();
-    overlayInstance = null;
-  }
+  if (overlayInstance) overlayInstance.finalize();
+  overlayInstance = null;
   attachedMap = null;
   currentLayers.clear();
 }
 
-// FIX: Logic check only, no DOM check
+// CRITICAL FIX: Only check if instance exists. Do NOT check DOM.
 export function isReady(): boolean {
   return !!overlayInstance;
+}
+
+export function getAttachedMap() {
+  return attachedMap;
+}
+
+// Für Diagnose-Tool
+export function getDiagnostics() {
+  return {
+    initialized: !!overlayInstance,
+    layerCount: currentLayers.size,
+    layers: Array.from(currentLayers.keys())
+  };
 }

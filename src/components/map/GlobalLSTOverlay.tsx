@@ -41,7 +41,7 @@ function buildGIBSTileUrl(variant: 'day' | 'night' = 'day'): string {
 const SOURCE_ID = 'global-lst-source';
 const LAYER_ID = 'global-lst-layer';
 
-export function GlobalLSTOverlay({ map, visible, opacity = 0.6 }: GlobalLSTOverlayProps) {
+export default function GlobalLSTOverlay({ map, visible, opacity = 0.6 }: GlobalLSTOverlayProps) {
   const isAddedRef = useRef(false);
 
   useEffect(() => {

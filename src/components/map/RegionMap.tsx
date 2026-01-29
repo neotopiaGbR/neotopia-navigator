@@ -74,14 +74,17 @@ export default function RegionMap() {
       </Map>
 
       {/* LOGIK-LAYER (Außerhalb der Map um Refs-Fehler zu vermeiden) */}
-      {isMapReady && (
+      {isMapReady && mapRef.current && (
         <>
           <EcostressCompositeOverlay 
             visible={activeLayers.includes('ecostress')}
             regionBbox={selectedRegion?.bbox}
             allGranules={[]} 
           />
-          <GlobalLSTOverlay visible={activeLayers.includes('global_lst')} />
+          <GlobalLSTOverlay 
+            map={mapRef.current.getMap()} 
+            visible={activeLayers.includes('global_lst')} 
+          />
         </>
       )}
 
@@ -99,7 +102,7 @@ export default function RegionMap() {
       </div>
 
       <div className="absolute bottom-10 right-14 z-20 pointer-events-auto">
-         <OverlayDiagnosticsPanel />
+         <OverlayDiagnosticsPanel visible={true} mapRef={mapRef} />
       </div>
 
     </div>

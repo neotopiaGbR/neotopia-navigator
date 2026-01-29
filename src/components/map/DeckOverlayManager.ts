@@ -105,15 +105,26 @@ export function isReady(): boolean {
   return !!overlayInstance;
 }
 
-// DIESE EXPORTS FEHLTEN UND VERURSACHTEN DEN FEHLER:
 export function getAttachedMap() {
   return attachedMap;
 }
 
 export function getDiagnostics() {
+  const canvas = attachedMap?.getCanvas?.();
+  const container = attachedMap?.getContainer?.();
+  const deckCanvas = container?.querySelector?.('canvas.deckgl-canvas') as HTMLCanvasElement | null;
+  
   return {
     initialized: !!overlayInstance,
     layerCount: currentLayers.size,
-    layers: Array.from(currentLayers.keys())
+    layers: Array.from(currentLayers.keys()),
+    // Für OverlayDiagnosticsPanel:
+    canvasDimensions: deckCanvas ? { width: deckCanvas.width, height: deckCanvas.height } : null,
+    canvasCssDimensions: deckCanvas ? { 
+      width: Math.round(deckCanvas.getBoundingClientRect().width), 
+      height: Math.round(deckCanvas.getBoundingClientRect().height) 
+    } : null,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    layerIds: Array.from(currentLayers.keys()),
   };
 }

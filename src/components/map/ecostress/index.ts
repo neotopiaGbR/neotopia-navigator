@@ -1,8 +1,11 @@
-export { EcostressCompositeOverlay, type CompositeMetadata, type GranuleData } from './EcostressCompositeOverlay';
+export { EcostressCompositeOverlay } from './EcostressCompositeOverlay';
 export { 
   createComposite, 
   imageDataToDataUrl, 
-  kelvinToRGBA, 
+  kelvinToRGBA,
+  LST_MIN_K,
+  LST_MAX_K,
   type AggregationMethod, 
   type CompositeResult,
+  type GranuleInput,
 } from './compositeUtils';

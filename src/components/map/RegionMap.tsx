@@ -77,27 +77,26 @@ export default function RegionMap() {
           data={tempData?.grid}
         />
         
-        {/* HIER WAREN DIE DECK.GL LAYER - JETZT SIND SIE UNTEN */}
+        {/* HIER WAREN DIE DECK.GL LAYER - JETZT SIND SIE WEG */}
       </Map>
 
       {/* --- Logik-Layer (Deck.gl) --- 
           FIX: Außerhalb von <Map> platzieren, um Ref-Fehler zu vermeiden.
-          Sie funktionieren trotzdem, da sie über den Singleton/Manager auf die Karte zugreifen. 
       */}
       {isMapReady && mapRef.current && (
         <>
           <EcostressCompositeOverlay 
-            // Wir übergeben die Map-Instanz explizit, falls benötigt
-            map={mapRef.current.getMap()}
+            // Wir übergeben die Map-Instanz explizit
+            // map={mapRef.current.getMap()} -> Nicht zwingend nötig dank Singleton, aber sicherer
             visible={activeLayers.includes('ecostress')}
             regionBbox={selectedRegion?.bbox}
-            allGranules={[]} // Leeres Array, damit es sich Daten selbst holt (siehe vorherigen Fix)
+            allGranules={[]} // Leeres Array -> Triggered den Self-Fetch im Overlay
           />
           <GlobalLSTOverlay visible={activeLayers.includes('global_lst')} />
         </>
       )}
 
-      {/* 2. Die UI Tools (Absolute Positionierung über der Karte) */}
+      {/* 2. Die UI Tools */}
       
       {/* Sidebar Links */}
       <div className="absolute top-0 left-0 z-20 h-full p-4 pointer-events-none">

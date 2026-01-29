@@ -11,10 +11,6 @@ interface AirTemperatureLegendProps {
   /** Temperature value for the selected region (if available) */
   regionValue?: number | null;
   regionName?: string | null;
-  /** Full grid data to compute top 3 hottest cells */
-  gridData?: Array<{ lat: number; lon: number; value: number }>;
-  /** Region bounding box [minLon, minLat, maxLon, maxLat] to filter grid cells */
-  regionBbox?: [number, number, number, number] | null;
 }
 
 /**
@@ -30,32 +26,6 @@ const COLOR_STOPS = [
   { temp: 35, color: '#7f1d1d', label: '35+' },
 ];
 
-/**
- * Expand bbox by a buffer (in degrees) to capture nearby cells
- */
-function expandBbox(
-  bbox: [number, number, number, number], 
-  bufferDeg: number = 0.05
-): [number, number, number, number] {
-  return [
-    bbox[0] - bufferDeg,
-    bbox[1] - bufferDeg,
-    bbox[2] + bufferDeg,
-    bbox[3] + bufferDeg,
-  ];
-}
-
-/**
- * Check if a point is within a bounding box
- */
-function isInBbox(
-  lon: number, 
-  lat: number, 
-  bbox: [number, number, number, number]
-): boolean {
-  return lon >= bbox[0] && lon <= bbox[2] && lat >= bbox[1] && lat <= bbox[3];
-}
-
 export function AirTemperatureLegend({ 
   visible, 
   aggregation, 
@@ -63,8 +33,6 @@ export function AirTemperatureLegend({
   year,
   regionValue,
   regionName,
-  gridData,
-  regionBbox,
 }: AirTemperatureLegendProps) {
   if (!visible) return null;
 
@@ -82,25 +50,6 @@ export function AirTemperatureLegend({
     });
     return `linear-gradient(to right, ${stops.join(', ')})`;
   }, []);
-
-  // Compute top 3 hottest cells from grid data within the region bbox
-  const top3Hottest = useMemo(() => {
-    if (!gridData || gridData.length === 0 || !regionBbox) return null;
-    
-    // Expand bbox slightly to capture nearby cells
-    const searchBbox = expandBbox(regionBbox, 0.02);
-    
-    // Filter cells within/near the region
-    const regionCells = gridData.filter(cell => 
-      isInBbox(cell.lon, cell.lat, searchBbox)
-    );
-    
-    if (regionCells.length === 0) return null;
-    
-    // Sort by value descending and take top 3
-    const sorted = [...regionCells].sort((a, b) => b.value - a.value);
-    return sorted.slice(0, 3);
-  }, [gridData, regionBbox]);
 
   return (
     <div className="bg-background/90 backdrop-blur p-3 rounded-lg border border-border/50 shadow-sm text-xs min-w-[220px]">
@@ -150,23 +99,6 @@ export function AirTemperatureLegend({
           <span key={stop.temp}>{stop.label}</span>
         ))}
       </div>
-      
-      {/* Top 3 Hottest Cells in Region */}
-      {top3Hottest && top3Hottest.length > 0 && (
-        <div className="mt-3 pt-2 border-t border-border/30">
-          <div className="text-[10px] text-muted-foreground mb-1 font-medium">
-            🔥 Top 3 in Region (JJA)
-          </div>
-          <div className="space-y-0.5">
-            {top3Hottest.map((cell, idx) => (
-              <div key={idx} className="flex justify-between text-[10px]">
-                <span className="text-muted-foreground">#{idx + 1}</span>
-                <span className="font-mono font-medium">{cell.value.toFixed(1)}°C</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
       
       {/* Stats */}
       {normalization && (

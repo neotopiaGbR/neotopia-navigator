@@ -1,36 +1,29 @@
 /**
  * ECOSTRESS Composite Utilities
  * 
- * Implements simple pixel-level aggregation for multi-granule compositing.
- * 
- * Key features:
- * - NO quality filtering: ALL granules are included for maximum coverage
- * - Fixed temperature scale (LST_MIN_K to LST_MAX_K)
- * - Simple aggregation (median, p90, max)
+ * Implements correct geographic alignment via windowed raster reading.
+ * Each granule is cropped to the exact region bbox before stacking.
  */
 
 import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 
 // LST temperature range (Kelvin) for colorization - fixed scale
-// Adjusted for realistic summer surface temperatures
-export const LST_MIN_K = 293; // 20°C - typical cool surfaces in summer
-export const LST_MAX_K = 328; // 55°C - very hot asphalt/roofs
+export const LST_MIN_K = 293; // 20°C
+export const LST_MAX_K = 328; // 55°C
 
-// Aggregation methods: median (typical), p90 (extreme), max (absolute hottest)
-export type AggregationMethod = 'median' | 'p90' | 'max';
+export type AggregationMethod = 'median' | 'mean' | 'min' | 'max' | 'p90' | 'p95';
 
 export interface GranuleInput {
   cog_url: string;
   datetime: string;
   granule_id: string;
-  // WGS84 bounds from API (preferred over COG extraction)
   granule_bounds?: [number, number, number, number];
 }
 
 export interface CompositeResult {
   imageData: ImageData;
-  bounds: [number, number, number, number]; // [west, south, east, north] in WGS84
+  bounds: [number, number, number, number];
   stats: {
     min: number;
     max: number;
@@ -48,60 +41,58 @@ export interface CompositeResult {
   };
 }
 
-interface RasterData {
-  values: Float32Array;
-  width: number;
-  height: number;
-  bounds: [number, number, number, number]; // WGS84 bounds
-  noDataValue: number;
-  datetime: string;
-  granuleId: string;
+// Output resolution
+const OUTPUT_SIZE = 512;
+
+/**
+ * Convert lat/lon to pixel coordinates within a GeoTIFF
+ * bbox: [minLon, minLat, maxLon, maxLat] in WGS84
+ */
+function latLonToPixel(
+  lat: number, 
+  lon: number, 
+  bbox: [number, number, number, number], 
+  width: number, 
+  height: number
+): { x: number; y: number } {
+  const [minLon, minLat, maxLon, maxLat] = bbox;
+  const xPct = (lon - minLon) / (maxLon - minLon);
+  const yPct = (maxLat - lat) / (maxLat - minLat); // Y-axis inverted in images
+  return {
+    x: Math.floor(xPct * width),
+    y: Math.floor(yPct * height)
+  };
 }
 
 /**
- * Heat colormap with fixed temperature scale
- * Yellow → Orange → Red gradient for warm temperatures only
- * 
- * Scale: 20°C (293K) = Light Yellow → 55°C (328K) = Dark Red
- * Typical summer surface temps: 25-45°C
+ * Heat colormap: Yellow → Orange → Red (20°C to 55°C)
  */
 export function kelvinToRGBA(kelvin: number): [number, number, number, number] {
-  const range = LST_MAX_K - LST_MIN_K; // 35K range
+  const range = LST_MAX_K - LST_MIN_K;
   const t = Math.max(0, Math.min(1, (kelvin - LST_MIN_K) / range));
-  
-  // Multi-stop gradient for better differentiation:
-  // 0.0 (20°C) = Light Yellow #FEF9C3
-  // 0.3 (30.5°C) = Yellow #FDE047
-  // 0.5 (37.5°C) = Orange #F97316
-  // 0.7 (44.5°C) = Dark Orange #EA580C
-  // 1.0 (55°C) = Red #DC2626
   
   let r: number, g: number, b: number;
   
   if (t < 0.3) {
-    // Light Yellow (#FEF9C3) → Yellow (#FDE047)
     const s = t / 0.3;
-    r = Math.round(254 - s * 1);   // 254 → 253
-    g = Math.round(249 - s * 25);  // 249 → 224
-    b = Math.round(195 - s * 124); // 195 → 71
+    r = Math.round(254 - s * 1);
+    g = Math.round(249 - s * 25);
+    b = Math.round(195 - s * 124);
   } else if (t < 0.5) {
-    // Yellow (#FDE047) → Orange (#F97316)
     const s = (t - 0.3) / 0.2;
-    r = Math.round(253 - s * 4);   // 253 → 249
-    g = Math.round(224 - s * 109); // 224 → 115
-    b = Math.round(71 - s * 49);   // 71 → 22
+    r = Math.round(253 - s * 4);
+    g = Math.round(224 - s * 109);
+    b = Math.round(71 - s * 49);
   } else if (t < 0.7) {
-    // Orange (#F97316) → Dark Orange (#EA580C)
     const s = (t - 0.5) / 0.2;
-    r = Math.round(249 - s * 15);  // 249 → 234
-    g = Math.round(115 - s * 27);  // 115 → 88
-    b = Math.round(22 - s * 10);   // 22 → 12
+    r = Math.round(249 - s * 15);
+    g = Math.round(115 - s * 27);
+    b = Math.round(22 - s * 10);
   } else {
-    // Dark Orange (#EA580C) → Red (#DC2626)
     const s = (t - 0.7) / 0.3;
-    r = Math.round(234 - s * 14);  // 234 → 220
-    g = Math.round(88 - s * 50);   // 88 → 38
-    b = Math.round(12 + s * 26);   // 12 → 38
+    r = Math.round(234 - s * 14);
+    g = Math.round(88 - s * 50);
+    b = Math.round(12 + s * 26);
   }
   
   return [r, g, b, 220];
@@ -115,7 +106,6 @@ function utmToWgs84(easting: number, northing: number, zone: number, isNorth: bo
   const f = 1 / 298.257223563;
   const k0 = 0.9996;
   const e2 = 2 * f - f * f;
-  const e = Math.sqrt(e2);
   const ep2 = e2 / (1 - e2);
   
   const x = easting - 500000;
@@ -157,7 +147,7 @@ function utmToWgs84(easting: number, northing: number, zone: number, isNorth: bo
     + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * D * D * D * D * D / 120
   ) / cosPhi1;
   
-  return [lon * 180 / Math.PI, (isNorth ? lat : -lat) * 180 / Math.PI];
+  return [lon * 180 / Math.PI, lat * 180 / Math.PI];
 }
 
 function parseUtmZone(url: string, geoKeys: Record<string, any> | null): { zone: number; isNorth: boolean } | null {
@@ -193,122 +183,71 @@ function convertBoundsToWgs84(bounds: number[], utm: { zone: number; isNorth: bo
 }
 
 /**
- * Fetch and decode a single COG, returning raw raster values
+ * Get WGS84 bounds for a GeoTIFF image
  */
-async function fetchCOGRaster(granule: GranuleInput): Promise<RasterData | null> {
-  const proxyUrl = `${SUPABASE_URL}/functions/v1/ecostress-proxy?url=${encodeURIComponent(granule.cog_url)}`;
+function getWgs84Bounds(
+  granule: GranuleInput,
+  image: GeoTIFF.GeoTIFFImage
+): [number, number, number, number] | null {
+  // Prefer API-provided bounds
+  if (granule.granule_bounds && granule.granule_bounds.length === 4) {
+    return granule.granule_bounds;
+  }
   
-  try {
-    const tiff = await GeoTIFF.fromUrl(proxyUrl, { allowFullFile: false });
-    const image = await tiff.getImage();
-    const width = image.getWidth();
-    const height = image.getHeight();
-    
-    // PRIORITY: Use API-provided WGS84 bounds if available (most reliable)
-    let wgs84Bounds: [number, number, number, number];
-    
-    if (granule.granule_bounds && granule.granule_bounds.length === 4) {
-      // API bounds are already in WGS84 - use directly
-      wgs84Bounds = granule.granule_bounds;
-      console.log(`[CompositeUtils] Using API bounds for ${granule.granule_id}:`, wgs84Bounds);
-    } else {
-      // Fallback: Extract from COG and convert UTM to WGS84
-      const rawBounds = image.getBoundingBox();
-      const geoKeys = image.getGeoKeys();
-      
-      const utmInfo = parseUtmZone(granule.cog_url, geoKeys);
-      
-      if (utmInfo) {
-        wgs84Bounds = convertBoundsToWgs84(rawBounds, utmInfo);
-      } else if (Math.abs(rawBounds[0]) > 180 || Math.abs(rawBounds[2]) > 180) {
-        // Fallback: assume UTM zone 32N (Central Europe)
-        wgs84Bounds = convertBoundsToWgs84(rawBounds, { zone: 32, isNorth: true });
-      } else {
-        wgs84Bounds = rawBounds as [number, number, number, number];
-      }
-      console.log(`[CompositeUtils] Computed bounds for ${granule.granule_id}:`, wgs84Bounds);
-    }
-    
-    // Validate bounds are reasonable WGS84
-    if (wgs84Bounds[0] < -180 || wgs84Bounds[2] > 180 || 
-        wgs84Bounds[1] < -90 || wgs84Bounds[3] > 90) {
-      console.warn(`[CompositeUtils] Invalid bounds for ${granule.granule_id}, skipping`);
-      return null;
-    }
-    
-    // Read at reduced resolution for performance
-    const targetWidth = Math.min(width, 512);
-    const targetHeight = Math.round((targetWidth / width) * height);
-    
-    const rasters = await image.readRasters({
-      width: targetWidth,
-      height: targetHeight,
-      interleave: false,
-    });
-    
-    const data = rasters[0] as Float32Array | Float64Array | Uint16Array;
-    const values = new Float32Array(data.length);
-    
-    for (let i = 0; i < data.length; i++) {
-      values[i] = data[i];
-    }
-    
-    return {
-      values,
-      width: targetWidth,
-      height: targetHeight,
-      bounds: wgs84Bounds,
-      noDataValue: 0,
-      datetime: granule.datetime,
-      granuleId: granule.granule_id,
-    };
-  } catch (err) {
-    console.warn(`[CompositeUtils] Failed to fetch COG: ${granule.cog_url}`, err);
-    return null;
+  const rawBounds = image.getBoundingBox();
+  const geoKeys = image.getGeoKeys();
+  const utmInfo = parseUtmZone(granule.cog_url, geoKeys);
+  
+  if (utmInfo) {
+    return convertBoundsToWgs84(rawBounds, utmInfo);
+  }
+  
+  // Check if already WGS84
+  if (Math.abs(rawBounds[0]) <= 180 && Math.abs(rawBounds[2]) <= 180) {
+    return rawBounds as [number, number, number, number];
+  }
+  
+  // Fallback: assume UTM zone 32N (Central Europe)
+  return convertBoundsToWgs84(rawBounds, { zone: 32, isNorth: true });
+}
+
+/**
+ * Aggregate pixel stack using specified method
+ */
+function aggregateStack(stack: number[], method: AggregationMethod): number {
+  if (stack.length === 0) return NaN;
+  if (stack.length === 1) return stack[0];
+  
+  const sorted = stack.slice().sort((a, b) => a - b);
+  
+  switch (method) {
+    case 'max':
+      return sorted[sorted.length - 1];
+    case 'min':
+      return sorted[0];
+    case 'mean':
+      return sorted.reduce((a, b) => a + b, 0) / sorted.length;
+    case 'p90':
+      return sorted[Math.floor(sorted.length * 0.9)];
+    case 'p95':
+      return sorted[Math.floor(sorted.length * 0.95)];
+    case 'median':
+    default:
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0 
+        ? (sorted[mid - 1] + sorted[mid]) / 2 
+        : sorted[mid];
   }
 }
 
 /**
- * Simple aggregation of temperature values
- * Supports: median (typical), p90 (extreme 90th percentile), max (absolute maximum)
- */
-function aggregate(values: number[], method: AggregationMethod): number {
-  if (values.length === 0) return NaN;
-  if (values.length === 1) return values[0];
-  
-  const sorted = values.slice().sort((a, b) => a - b);
-  
-  if (method === 'max') {
-    return sorted[sorted.length - 1];
-  }
-  
-  if (method === 'p90') {
-    // Nearest-rank p90:
-    // - n=10 -> idx=8 (9th value), avoids collapsing to max too often
-    // - n=2  -> idx=1 (max)
-    const idx = Math.max(0, Math.ceil(sorted.length * 0.9) - 1);
-    return sorted[Math.min(idx, sorted.length - 1)];
-  }
-  
-  // median
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (sorted[mid - 1] + sorted[mid]) / 2;
-  }
-  return sorted[mid];
-}
-
-/**
- * Create a composite raster from multiple granules using simple pixel aggregation.
+ * Create a composite raster from multiple granules using windowed reading.
  * 
  * Algorithm:
- * 1. Fetch all granules (no quality filtering)
- * 2. Compute union bounding box of all valid rasters
- * 3. Create output grid at fixed resolution (~100m)
- * 4. For each output pixel, sample from all input rasters
- * 5. Compute median/P90/max of valid values
- * 6. Colorize using fixed temperature scale
- * 7. Return ImageData
+ * 1. For each granule, calculate pixel window corresponding to regionBbox
+ * 2. Read only that window, resampled to OUTPUT_SIZE x OUTPUT_SIZE
+ * 3. Stack valid values per pixel across all granules
+ * 4. Aggregate using specified method
  */
 export async function createComposite(
   granules: GranuleInput[],
@@ -319,177 +258,148 @@ export async function createComposite(
   if (granules.length === 0) return null;
   
   console.log(`[CompositeUtils] Creating ${aggregationMethod} composite from ${granules.length} granules`);
+  console.log(`[CompositeUtils] Region bbox: [${regionBbox.join(', ')}]`);
   
-  // Fetch all raster data in parallel (with limit)
-  const rasters: RasterData[] = [];
-  const batchSize = 4;
+  // Pixel stacks for each output pixel
+  const pixelStacks: number[][] = new Array(OUTPUT_SIZE * OUTPUT_SIZE)
+    .fill(null)
+    .map(() => []);
+  
   const acquisitionDates: string[] = [];
   const granuleIds: string[] = [];
+  let successfulGranules = 0;
   
-  for (let i = 0; i < granules.length; i += batchSize) {
-    const batch = granules.slice(i, i + batchSize);
-    const results = await Promise.all(batch.map(fetchCOGRaster));
+  // Process granules
+  for (let i = 0; i < granules.length; i++) {
+    const granule = granules[i];
+    const proxyUrl = `${SUPABASE_URL}/functions/v1/ecostress-proxy?url=${encodeURIComponent(granule.cog_url)}`;
     
-    for (const r of results) {
-      if (r) {
-        rasters.push(r);
-        acquisitionDates.push(r.datetime);
-        granuleIds.push(r.granuleId);
+    try {
+      const tiff = await GeoTIFF.fromUrl(proxyUrl, { allowFullFile: false });
+      const image = await tiff.getImage();
+      
+      const imgWidth = image.getWidth();
+      const imgHeight = image.getHeight();
+      
+      // Get WGS84 bounds
+      const wgs84Bounds = getWgs84Bounds(granule, image);
+      if (!wgs84Bounds) {
+        console.warn(`[CompositeUtils] Could not determine bounds for ${granule.granule_id}`);
+        continue;
       }
+      
+      // Calculate pixel window for the region bbox
+      const topLeft = latLonToPixel(regionBbox[3], regionBbox[0], wgs84Bounds, imgWidth, imgHeight);
+      const bottomRight = latLonToPixel(regionBbox[1], regionBbox[2], wgs84Bounds, imgWidth, imgHeight);
+      
+      // Clamp to image bounds
+      const winX = Math.max(0, Math.min(imgWidth - 1, topLeft.x));
+      const winY = Math.max(0, Math.min(imgHeight - 1, topLeft.y));
+      const winX2 = Math.max(0, Math.min(imgWidth, bottomRight.x));
+      const winY2 = Math.max(0, Math.min(imgHeight, bottomRight.y));
+      const winW = winX2 - winX;
+      const winH = winY2 - winY;
+      
+      if (winW <= 0 || winH <= 0) {
+        console.log(`[CompositeUtils] Granule ${granule.granule_id} does not overlap region`);
+        continue;
+      }
+      
+      console.log(`[CompositeUtils] ${granule.granule_id}: window [${winX}, ${winY}, ${winW}x${winH}] from ${imgWidth}x${imgHeight}`);
+      
+      // Read the window, resampled to output size
+      const rasters = await image.readRasters({
+        window: [winX, winY, winX2, winY2],
+        width: OUTPUT_SIZE,
+        height: OUTPUT_SIZE,
+        fillValue: 0,
+        interleave: false,
+      });
+      
+      const data = rasters[0] as Float32Array | Float64Array | Uint16Array;
+      
+      // Add valid values to stacks
+      for (let j = 0; j < data.length; j++) {
+        const value = data[j];
+        // ECOSTRESS LST validity: 200-400K
+        if (value > 200 && value < 400 && !isNaN(value)) {
+          pixelStacks[j].push(value);
+        }
+      }
+      
+      successfulGranules++;
+      acquisitionDates.push(granule.datetime);
+      granuleIds.push(granule.granule_id);
+      
+    } catch (err) {
+      console.warn(`[CompositeUtils] Failed to process ${granule.granule_id}:`, err);
     }
     
-    onProgress?.(Math.min(i + batchSize, granules.length), granules.length);
+    onProgress?.(i + 1, granules.length);
   }
   
-  if (rasters.length === 0) {
-    console.warn('[CompositeUtils] No valid rasters loaded after fetching');
+  if (successfulGranules === 0) {
+    console.warn('[CompositeUtils] No granules successfully processed');
     return null;
   }
   
-  console.log(`[CompositeUtils] Successfully loaded ${rasters.length}/${granules.length} rasters`);
+  console.log(`[CompositeUtils] Processed ${successfulGranules}/${granules.length} granules, aggregating...`);
   
-  // Use region bbox directly as output bounds (clipped to raster coverage)
-  // This ensures the composite aligns exactly with the selected region
-  const rasterUnionBounds: [number, number, number, number] = [
-    Math.min(...rasters.map(r => r.bounds[0])),
-    Math.min(...rasters.map(r => r.bounds[1])),
-    Math.max(...rasters.map(r => r.bounds[2])),
-    Math.max(...rasters.map(r => r.bounds[3])),
-  ];
+  // Aggregate and colorize
+  const imageData = new ImageData(OUTPUT_SIZE, OUTPUT_SIZE);
+  const pixels = imageData.data;
   
-  // Compute intersection of region and raster coverage
-  let unionBounds: [number, number, number, number] = [
-    Math.max(regionBbox[0], rasterUnionBounds[0]),
-    Math.max(regionBbox[1], rasterUnionBounds[1]),
-    Math.min(regionBbox[2], rasterUnionBounds[2]),
-    Math.min(regionBbox[3], rasterUnionBounds[3]),
-  ];
-  
-  console.log('[CompositeUtils] Region bbox:', regionBbox);
-  console.log('[CompositeUtils] Raster union bounds:', rasterUnionBounds);
-  console.log('[CompositeUtils] Intersection bounds:', unionBounds);
-  
-  // Validate bounds have positive area
-  if (unionBounds[0] >= unionBounds[2] || unionBounds[1] >= unionBounds[3]) {
-    console.warn('[CompositeUtils] No overlap between rasters and region');
-    return null;
-  }
-  
-  // Create output grid (~100m resolution, max 1024x1024)
-  const boundsWidth = unionBounds[2] - unionBounds[0];
-  const boundsHeight = unionBounds[3] - unionBounds[1];
-  const aspectRatio = boundsWidth / boundsHeight;
-  
-  const targetRes = 0.001; // ~100m
-  let outputWidth = Math.ceil(boundsWidth / targetRes);
-  let outputHeight = Math.ceil(boundsHeight / targetRes);
-  
-  // Cap at 1024 for performance
-  if (outputWidth > 1024) {
-    outputWidth = 1024;
-    outputHeight = Math.round(outputWidth / aspectRatio);
-  }
-  if (outputHeight > 1024) {
-    outputHeight = 1024;
-    outputWidth = Math.round(outputHeight * aspectRatio);
-  }
-  
-  outputWidth = Math.max(64, outputWidth);
-  outputHeight = Math.max(64, outputHeight);
-  
-  const totalPixels = outputWidth * outputHeight;
-  console.log(`[CompositeUtils] Output grid: ${outputWidth}x${outputHeight} = ${totalPixels} pixels`);
-  
-  // Sample all rasters and aggregate
-  const pixelWidth = boundsWidth / outputWidth;
-  const pixelHeight = boundsHeight / outputHeight;
-  
-  const imageData = new ImageData(outputWidth, outputHeight);
-  const data = imageData.data;
   let validPixels = 0;
   let noDataPixels = 0;
   let minTemp = Infinity;
   let maxTemp = -Infinity;
-
-  // Debug stats to ensure aggregation has enough samples to differ
-  let pixelsWith2PlusSamples = 0;
-  let maxSamplesAtPixel = 0;
-  let totalSamplesAcrossValidPixels = 0;
   
-  for (let y = 0; y < outputHeight; y++) {
-    for (let x = 0; x < outputWidth; x++) {
-      const lon = unionBounds[0] + (x + 0.5) * pixelWidth;
-      const lat = unionBounds[3] - (y + 0.5) * pixelHeight;
-      
-      const samples: number[] = [];
-      
-      for (const raster of rasters) {
-        // Check if point is within raster bounds
-        if (lon < raster.bounds[0] || lon > raster.bounds[2] ||
-            lat < raster.bounds[1] || lat > raster.bounds[3]) {
-          continue;
-        }
-        
-        // Convert to pixel coordinates in source raster
-        const srcX = Math.floor(((lon - raster.bounds[0]) / (raster.bounds[2] - raster.bounds[0])) * raster.width);
-        const srcY = Math.floor(((raster.bounds[3] - lat) / (raster.bounds[3] - raster.bounds[1])) * raster.height);
-        
-        if (srcX < 0 || srcX >= raster.width || srcY < 0 || srcY >= raster.height) {
-          continue;
-        }
-        
-        const value = raster.values[srcY * raster.width + srcX];
-        
-        // ECOSTRESS LST validity check (200-400K is valid temperature range)
-        if (value > 200 && value < 400 && !isNaN(value)) {
-          samples.push(value);
-        }
-      }
-      
-      const pixelOffset = (y * outputWidth + x) * 4;
-      
-      if (samples.length > 0) {
-        if (samples.length >= 2) pixelsWith2PlusSamples++;
-        maxSamplesAtPixel = Math.max(maxSamplesAtPixel, samples.length);
-        totalSamplesAcrossValidPixels += samples.length;
-
-        const aggValue = aggregate(samples, aggregationMethod);
-        
-        if (!isNaN(aggValue)) {
-          validPixels++;
-          minTemp = Math.min(minTemp, aggValue);
-          maxTemp = Math.max(maxTemp, aggValue);
-          
-          const [r, g, b, a] = kelvinToRGBA(aggValue);
-          data[pixelOffset] = r;
-          data[pixelOffset + 1] = g;
-          data[pixelOffset + 2] = b;
-          data[pixelOffset + 3] = a;
-        } else {
-          noDataPixels++;
-          data[pixelOffset + 3] = 0;
-        }
-      } else {
-        noDataPixels++;
-        data[pixelOffset + 3] = 0;
-      }
+  // Debug: sample distribution
+  let pixelsWith2Plus = 0;
+  let maxStackSize = 0;
+  
+  for (let i = 0; i < pixelStacks.length; i++) {
+    const stack = pixelStacks[i];
+    const offset = i * 4;
+    
+    if (stack.length === 0) {
+      noDataPixels++;
+      pixels[offset + 3] = 0; // Transparent
+      continue;
     }
+    
+    if (stack.length >= 2) pixelsWith2Plus++;
+    maxStackSize = Math.max(maxStackSize, stack.length);
+    
+    const value = aggregateStack(stack, aggregationMethod);
+    
+    if (isNaN(value)) {
+      noDataPixels++;
+      pixels[offset + 3] = 0;
+      continue;
+    }
+    
+    validPixels++;
+    minTemp = Math.min(minTemp, value);
+    maxTemp = Math.max(maxTemp, value);
+    
+    const [r, g, b, a] = kelvinToRGBA(value);
+    pixels[offset] = r;
+    pixels[offset + 1] = g;
+    pixels[offset + 2] = b;
+    pixels[offset + 3] = a;
   }
   
-  console.log(`[CompositeUtils] Composite complete: ${validPixels} valid pixels, range ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C`);
-
-  const avgSamples = validPixels > 0 ? (totalSamplesAcrossValidPixels / validPixels) : 0;
-  console.log(
-    `[CompositeUtils] Sample stats: avg ${avgSamples.toFixed(2)} samples/pixel, ` +
-    `${pixelsWith2PlusSamples}/${validPixels} pixels have >=2 samples, max=${maxSamplesAtPixel}`
-  );
+  const totalPixels = OUTPUT_SIZE * OUTPUT_SIZE;
+  console.log(`[CompositeUtils] Composite complete: ${validPixels}/${totalPixels} valid pixels`);
+  console.log(`[CompositeUtils] Temperature range: ${(minTemp - 273.15).toFixed(1)}°C to ${(maxTemp - 273.15).toFixed(1)}°C`);
+  console.log(`[CompositeUtils] Stack stats: ${pixelsWith2Plus} pixels with 2+ samples, max stack size: ${maxStackSize}`);
   
-  // Sort dates to get time window
   const sortedDates = acquisitionDates.filter(d => d).sort();
   
   return {
     imageData,
-    bounds: unionBounds,
+    bounds: regionBbox, // Image now matches region exactly!
     stats: {
       min: minTemp,
       max: maxTemp,
@@ -498,7 +408,7 @@ export async function createComposite(
       totalPixels,
       aggregationMethod,
       granuleCount: granules.length,
-      successfulGranules: rasters.length,
+      successfulGranules,
     },
     metadata: {
       timeWindow: {

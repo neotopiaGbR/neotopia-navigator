@@ -19,7 +19,13 @@ interface RequestBody {
   date_from?: string;
   date_to?: string;
   min_quality_threshold?: number; // Minimum quality score (0-1), default 0.2
+  daytime_only?: boolean; // Filter to daytime acquisitions only (default: true)
 }
+
+// Daytime filter: Only include acquisitions between these UTC hours
+// For Central Europe, daytime is roughly 09-17 UTC (11-19 local summer time)
+const DAYTIME_START_UTC = 9;
+const DAYTIME_END_UTC = 17;
 
 interface CMRGranule {
   id: string;
@@ -241,7 +247,10 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json() as RequestBody;
-    const { lat, lon, region_bbox, date_from, date_to, min_quality_threshold } = body;
+    const { lat, lon, region_bbox, date_from, date_to, min_quality_threshold, daytime_only } = body;
+    
+    // Default to daytime-only filtering for warmer surface temps
+    const filterDaytime = daytime_only !== false;
 
     if (typeof lat !== 'number' || typeof lon !== 'number') {
       return new Response(
@@ -263,6 +272,7 @@ Deno.serve(async (req) => {
       regionCentroid: { lat, lon },
       regionBbox,
       dateRange: `${startDate} to ${endDate}`,
+      daytimeFilter: filterDaytime ? `${DAYTIME_START_UTC}:00-${DAYTIME_END_UTC}:00 UTC` : 'disabled',
     });
 
     // Query NASA CMR with search radius
@@ -310,9 +320,21 @@ Deno.serve(async (req) => {
     const newestDate = new Date(endDate);
     const scoredGranules: ScoredGranule[] = [];
     
+    let skippedNighttime = 0;
+    
     for (const granule of granules) {
       const bounds = parseGranuleBounds(granule);
       if (!bounds) continue;
+      
+      // DAYTIME FILTER: Skip nighttime acquisitions for warmer surface temps
+      if (filterDaytime) {
+        const acquisitionTime = new Date(granule.time_start);
+        const utcHour = acquisitionTime.getUTCHours();
+        if (utcHour < DAYTIME_START_UTC || utcHour >= DAYTIME_END_UTC) {
+          skippedNighttime++;
+          continue; // Skip this granule (nighttime)
+        }
+      }
       
       const intersectsRegion = pointInBbox(lon, lat, bounds) || bboxIntersects(regionBbox, bounds);
       const distanceToCentroid = distanceToBboxCenter(lon, lat, bounds);
@@ -360,16 +382,19 @@ Deno.serve(async (req) => {
       .filter(g => g.intersectsRegion)
       .sort((a, b) => b.qualityScore - a.qualityScore);
 
-    console.log(`[ECOSTRESS] Found ${intersecting.length} intersecting granules out of ${granules.length} candidates.`);
+    console.log(`[ECOSTRESS] Found ${intersecting.length} daytime intersecting granules out of ${granules.length} candidates (skipped ${skippedNighttime} nighttime).`);
 
     // NO INTERSECTING GRANULES
     if (intersecting.length === 0) {
       return new Response(
         JSON.stringify({
           status: 'no_coverage',
-          message: `Keine ECOSTRESS-Aufnahme deckt die Region direkt ab.`,
+          message: filterDaytime 
+            ? `Keine ECOSTRESS-Tagesaufnahmen (${DAYTIME_START_UTC}:00-${DAYTIME_END_UTC}:00 UTC) decken die Region ab. ${skippedNighttime} Nachtaufnahmen wurden herausgefiltert.`
+            : `Keine ECOSTRESS-Aufnahme deckt die Region direkt ab.`,
           candidates_checked: granules.length,
           intersecting_count: 0,
+          skipped_nighttime: skippedNighttime,
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -419,6 +444,8 @@ Deno.serve(async (req) => {
         recency_score: bestGranule.recencyScore,
         candidates_checked: granules.length,
         intersecting_count: intersecting.length,
+        skipped_nighttime: skippedNighttime,
+        daytime_filter: filterDaytime ? `${DAYTIME_START_UTC}:00-${DAYTIME_END_UTC}:00 UTC` : null,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

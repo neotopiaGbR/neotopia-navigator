@@ -165,30 +165,34 @@ const AddressSearch: React.FC = () => {
         throw new Error(rpcError.message);
       }
 
-      // RPC returns array, take first result
-      const result = (data && data.length > 0 ? data[0] : null) as GridResult | null;
+      // RPC returns a single UUID directly
+      const regionId = data as string | null;
       
-      if (!result || !result.region_id) {
+      if (!regionId) {
         throw new Error('No region returned');
       }
-
-      setGridCode(result.grid_code);
 
       // Fetch region geometry/details and upsert into RegionContext so the map + sidebar can render it.
       const { data: regionRow, error: regionError } = await supabase
         .from('regions')
-        .select('id, name, geom')
-        .eq('id', result.region_id)
-        .single();
+        .select('id, name, grid_code, geom')
+        .eq('id', regionId)
+        .maybeSingle();
 
       if (regionError) {
         throw new Error(`Region konnte nicht geladen werden: ${regionError.message}`);
       }
 
+      if (!regionRow) {
+        throw new Error('Region nicht gefunden');
+      }
+
+      setGridCode(regionRow.grid_code || null);
+
       const bbox = getBboxFromGeom(regionRow.geom as any) ?? undefined;
       const nextRegion = {
         id: regionRow.id as string,
-        name: (regionRow as any).name || result.grid_code || 'Region',
+        name: regionRow.name || regionRow.grid_code || 'Region',
         geom: regionRow.geom as any,
         bbox,
       };
@@ -201,9 +205,9 @@ const AddressSearch: React.FC = () => {
 
       // Set the appropriate region based on target
       if (targetRegion === 'primary') {
-        setSelectedRegionId(result.region_id);
+        setSelectedRegionId(regionId);
       } else {
-        setComparisonRegionId(result.region_id);
+        setComparisonRegionId(regionId);
       }
     } catch (err) {
       setError(`Grid-Region konnte nicht erstellt werden: ${(err as Error).message}`);

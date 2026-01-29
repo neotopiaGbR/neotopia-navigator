@@ -1,16 +1,67 @@
 /**
  * Decode a single ECOSTRESS granule to ImageBitmap
  * 
- * Renders RAW LST data as grayscale - no colorization.
- * Darker = cooler, Brighter = hotter
+ * Uses NASA's official ECOSTRESS LST color palette:
+ * Blue → Cyan → Green → Yellow → Orange → Red → Magenta
  */
 
 import * as GeoTIFF from 'geotiff';
 import { SUPABASE_URL } from '@/integrations/supabase/client';
 
-// Raw temperature range for grayscale mapping
-const LST_MIN_K = 273; // 0°C  → black
-const LST_MAX_K = 330; // 57°C → white
+// NASA ECOSTRESS LST range
+const LST_MIN_K = 263; // -10°C (blue)
+const LST_MAX_K = 333; //  60°C (magenta)
+
+/**
+ * NASA ECOSTRESS official color palette
+ * Based on NASA Worldview LST visualization
+ */
+function nasaLstColor(kelvin: number): [number, number, number, number] {
+  const range = LST_MAX_K - LST_MIN_K;
+  const t = Math.max(0, Math.min(1, (kelvin - LST_MIN_K) / range));
+  
+  let r: number, g: number, b: number;
+  
+  if (t < 0.15) {
+    // Blue to Cyan (-10°C to ~0°C)
+    const s = t / 0.15;
+    r = 0;
+    g = Math.round(s * 180);
+    b = Math.round(180 + s * 75);
+  } else if (t < 0.30) {
+    // Cyan to Green (0°C to ~10°C)
+    const s = (t - 0.15) / 0.15;
+    r = 0;
+    g = Math.round(180 + s * 75);
+    b = Math.round(255 - s * 155);
+  } else if (t < 0.45) {
+    // Green to Yellow (10°C to ~22°C)
+    const s = (t - 0.30) / 0.15;
+    r = Math.round(s * 255);
+    g = 255;
+    b = Math.round(100 - s * 100);
+  } else if (t < 0.60) {
+    // Yellow to Orange (22°C to ~32°C)
+    const s = (t - 0.45) / 0.15;
+    r = 255;
+    g = Math.round(255 - s * 80);
+    b = 0;
+  } else if (t < 0.80) {
+    // Orange to Red (32°C to ~46°C)
+    const s = (t - 0.60) / 0.20;
+    r = 255;
+    g = Math.round(175 - s * 140);
+    b = 0;
+  } else {
+    // Red to Magenta (46°C to 60°C)
+    const s = (t - 0.80) / 0.20;
+    r = 255;
+    g = Math.round(35 - s * 35);
+    b = Math.round(s * 180);
+  }
+  
+  return [r, g, b, 255];
+}
 
 export interface DecodedGranule {
   image: ImageBitmap;
@@ -210,15 +261,13 @@ export async function decodeGranule(
         minTemp = Math.min(minTemp, value);
         maxTemp = Math.max(maxTemp, value);
         
-        // RAW GRAYSCALE: Map Kelvin to 0-255 brightness
-        // Darker = cooler, Brighter = hotter
-        const t = Math.max(0, Math.min(1, (value - LST_MIN_K) / (LST_MAX_K - LST_MIN_K)));
-        const gray = Math.round(t * 255);
+        // NASA ECOSTRESS official color palette
+        const [r, g, b, a] = nasaLstColor(value);
         
-        pixels[offset] = gray;     // R
-        pixels[offset + 1] = gray; // G
-        pixels[offset + 2] = gray; // B
-        pixels[offset + 3] = 255;  // Full opacity
+        pixels[offset] = r;
+        pixels[offset + 1] = g;
+        pixels[offset + 2] = b;
+        pixels[offset + 3] = a;
       } else {
         pixels[offset + 3] = 0; // Transparent
       }

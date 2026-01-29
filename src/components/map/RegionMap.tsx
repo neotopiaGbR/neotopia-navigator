@@ -123,15 +123,51 @@ export default function RegionMap() {
       );
     }
   }, [selectedRegion?.id]);
+  // Compute region bbox from geometry if not precomputed
+  const computedBbox = useMemo((): [number, number, number, number] | null => {
+    if (selectedRegion?.bbox) return selectedRegion.bbox;
+    if (!selectedRegion?.geom) return null;
+    
+    try {
+      let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+      
+      function processCoord(coord: number[]) {
+        if (coord[0] < minLon) minLon = coord[0];
+        if (coord[0] > maxLon) maxLon = coord[0];
+        if (coord[1] < minLat) minLat = coord[1];
+        if (coord[1] > maxLat) maxLat = coord[1];
+      }
+      
+      const geom = selectedRegion.geom;
+      if (geom.type === 'Point') {
+        processCoord((geom as GeoJSON.Point).coordinates);
+      } else if (geom.type === 'Polygon') {
+        for (const ring of (geom as GeoJSON.Polygon).coordinates) {
+          for (const coord of ring) processCoord(coord);
+        }
+      } else if (geom.type === 'MultiPolygon') {
+        for (const polygon of (geom as GeoJSON.MultiPolygon).coordinates) {
+          for (const ring of polygon) {
+            for (const coord of ring) processCoord(coord);
+          }
+        }
+      }
+      
+      if (minLon === Infinity) return null;
+      return [minLon, minLat, maxLon, maxLat];
+    } catch {
+      return null;
+    }
+  }, [selectedRegion?.bbox, selectedRegion?.geom]);
+
   // Compute region center for monthly data fetch
   const regionCenter = useMemo(() => {
-    if (!selectedRegion?.bbox) return null;
-    const bbox = selectedRegion.bbox;
+    if (!computedBbox) return null;
     return {
-      lat: (bbox[1] + bbox[3]) / 2,
-      lon: (bbox[0] + bbox[2]) / 2,
+      lat: (computedBbox[1] + computedBbox[3]) / 2,
+      lon: (computedBbox[0] + computedBbox[2]) / 2,
     };
-  }, [selectedRegion?.bbox]);
+  }, [computedBbox]);
 
   // Fetch monthly temperature data for selected region
   const monthlyData = useDwdMonthlyTemperature({
@@ -239,7 +275,7 @@ export default function RegionMap() {
         <>
           <EcostressCompositeOverlay 
             visible={activeLayers.includes('ecostress')}
-            regionBbox={selectedRegion?.bbox}
+            regionBbox={computedBbox ?? undefined}
             allGranules={(overlays.ecostress.metadata?.allGranules as any[]) ?? []}
             aggregationMethod={heatLayers.aggregationMethod}
             opacity={heatLayers.ecostressOpacity / 100}

@@ -106,9 +106,18 @@ export default function EcostressCompositeOverlay({
       return;
     }
 
-    // Skip if nothing changed (same granules + same aggregation)
-    if (granulesKey === prevGranulesKeyRef.current && aggregationMethod === prevAggregationRef.current && layerData) {
+    // Skip only if BOTH granules AND aggregation are unchanged
+    const granulesUnchanged = granulesKey === prevGranulesKeyRef.current;
+    const aggregationUnchanged = aggregationMethod === prevAggregationRef.current;
+    
+    if (granulesUnchanged && aggregationUnchanged && layerData) {
+      console.log('[EcostressComposite] No change, skipping regeneration');
       return;
+    }
+    
+    // Force regenerate if aggregation changed
+    if (!aggregationUnchanged) {
+      console.log(`[EcostressComposite] Aggregation changed: ${prevAggregationRef.current} → ${aggregationMethod}`);
     }
 
     // Track this generation to handle race conditions

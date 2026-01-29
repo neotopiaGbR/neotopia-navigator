@@ -66,9 +66,9 @@ export function OverlayDiagnosticsPanel({ visible, mapRef }: OverlayDiagnosticsP
         mapContainerSize: mapContainer 
           ? { width: mapContainer.clientWidth, height: mapContainer.clientHeight }
           : null,
-        deckCanvasSize: deckDiag.bufferSize ? { width: deckDiag.bufferSize.w, height: deckDiag.bufferSize.h } : null,
-        deckCanvasCssSize: rect ? { width: Math.round(rect.width), height: Math.round(rect.height) } : deckDiag.canvasCssSize ? { width: deckDiag.canvasCssSize.w, height: deckDiag.canvasCssSize.h } : null,
-        devicePixelRatio: deckDiag.dpr,
+        deckCanvasSize: deckDiag.canvasDimensions,
+        deckCanvasCssSize: rect ? { width: Math.round(rect.width), height: Math.round(rect.height) } : deckDiag.canvasCssDimensions,
+        devicePixelRatio: deckDiag.devicePixelRatio,
         deckCanvasZIndex: getComputedZIndex(deckCanvas),
         deckInitialized: deckDiag.initialized,
         deckLayerCount: deckDiag.layerCount,

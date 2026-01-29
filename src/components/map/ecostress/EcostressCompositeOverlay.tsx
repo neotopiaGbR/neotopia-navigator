@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { updateLayer, removeLayer } from '../DeckOverlayManager';
 import { createComposite, type AggregationMethod, type GranuleInput } from './compositeUtils';
 import { supabase } from '@/integrations/supabase/client';
+import { useMapLayers } from '../MapLayersContext';
 
 interface Props {
   visible: boolean;
@@ -28,6 +29,7 @@ export default function EcostressCompositeOverlay({
   regionBbox,
   aggregationMethod = 'p90',
 }: Props) {
+  const { setEcostressStats } = useMapLayers();
   const [layerData, setLayerData] = useState<{ image: ImageBitmap; bounds: [number, number, number, number] } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [fetchedGranules, setFetchedGranules] = useState<GranuleInput[]>([]);
@@ -159,7 +161,16 @@ export default function EcostressCompositeOverlay({
         return;
       }
 
-      console.log(`[EcostressComposite] Composite complete: ${result.stats.validPixels} valid pixels, raw bounds:`, result.bounds);
+      console.log(`[EcostressComposite] Composite complete: ${result.stats.validPixels} valid pixels, Ø ${(result.stats.mean - 273.15).toFixed(1)}°C`);
+
+      // Update context with stats for legend display
+      setEcostressStats({
+        min: result.stats.min,
+        max: result.stats.max,
+        mean: result.stats.mean,
+        validPixels: result.stats.validPixels,
+        successfulGranules: result.stats.successfulGranules,
+      });
 
       // CRITICAL: Strictly normalize bounds to [West, South, East, North]
       const rawBounds = result.bounds;

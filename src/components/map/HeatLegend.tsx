@@ -1,34 +1,40 @@
 /**
  * Heat Layer Legend - Always visible on map when heat overlay is active
+ * Shows aggregation method, granule count, and mean temperature
  */
 
 import React from 'react';
-import { Flame } from 'lucide-react';
+import { Flame, Thermometer } from 'lucide-react';
 
-// Yellow → Orange → Red gradient matching compositeUtils.ts kelvinToRGBA
+// NASA LST color palette matching compositeUtils.ts kelvinToRGBA
 const HEAT_LEGEND_COLORS = [
-  { color: '#FEF9C3', label: '20°C' },
-  { color: '#FDE047', label: '30°C' },
-  { color: '#F97316', label: '38°C' },
-  { color: '#EA580C', label: '45°C' },
-  { color: '#DC2626', label: '55°C+' },
+  { color: '#00B4FF', label: '20°C' },  // Blue
+  { color: '#00FFAA', label: '30°C' },  // Cyan/Green
+  { color: '#FFFF00', label: '37°C' },  // Yellow
+  { color: '#FF8800', label: '45°C' },  // Orange
+  { color: '#FF0000', label: '55°C+' }, // Red
 ];
 
 interface HeatLegendProps {
   visible: boolean;
   aggregationMethod?: 'median' | 'p90' | 'max';
   granuleCount?: number;
+  meanTemperature?: number; // Mean temperature in Kelvin
 }
 
 const HeatLegend: React.FC<HeatLegendProps> = ({ 
   visible, 
   aggregationMethod = 'p90',
   granuleCount,
+  meanTemperature,
 }) => {
   if (!visible) return null;
 
   const aggregationLabel = 
     aggregationMethod === 'max' ? 'Maximum' : '90. Perzentil';
+
+  // Convert Kelvin to Celsius for display
+  const meanCelsius = meanTemperature ? (meanTemperature - 273.15).toFixed(1) : null;
 
   return (
     <div className="bg-background/90 backdrop-blur p-3 rounded-lg border border-border/50 shadow-sm text-xs min-w-[200px]">
@@ -38,7 +44,7 @@ const HeatLegend: React.FC<HeatLegendProps> = ({
         <span className="font-medium">Hitze-Hotspots</span>
       </div>
 
-      {/* Gradient bar */}
+      {/* Gradient bar - NASA LST palette */}
       <div 
         className="h-3 w-full rounded-full mb-1"
         style={{
@@ -52,6 +58,17 @@ const HeatLegend: React.FC<HeatLegendProps> = ({
         <span>35°C</span>
         <span>55°C+</span>
       </div>
+
+      {/* Mean Temperature - Highlight */}
+      {meanCelsius && (
+        <div className="bg-primary/10 rounded-md p-2 mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <Thermometer className="h-3.5 w-3.5 text-primary" />
+            <span className="text-[10px] text-muted-foreground">Ø Temperatur:</span>
+          </div>
+          <span className="font-semibold text-primary">{meanCelsius}°C</span>
+        </div>
+      )}
 
       {/* Metadata */}
       <div className="text-[10px] text-muted-foreground border-t border-border/50 pt-2 space-y-0.5">
@@ -73,7 +90,7 @@ const HeatLegend: React.FC<HeatLegendProps> = ({
 
       {/* Attribution */}
       <p className="text-[9px] text-muted-foreground/60 mt-1.5">
-        NASA GIBS / ECOSTRESS
+        NASA ECOSTRESS LST
       </p>
     </div>
   );

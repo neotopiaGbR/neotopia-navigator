@@ -13,6 +13,14 @@ export interface OverlayConfig {
   metadata: Record<string, unknown>;
 }
 
+export interface EcostressStats {
+  min: number; // Min temperature in Kelvin
+  max: number; // Max temperature in Kelvin
+  mean: number; // Mean temperature in Kelvin
+  validPixels: number;
+  successfulGranules: number;
+}
+
 export interface HeatLayerTierConfig {
   globalLSTEnabled: boolean; // TIER 1: MODIS/VIIRS (always on when heat enabled)
   globalLSTOpacity: number;
@@ -20,6 +28,7 @@ export interface HeatLayerTierConfig {
   ecostressOpacity: number;
   ecostressMinCoverage: number; // Minimum coverage threshold (default 0.8 = 80%)
   aggregationMethod: AggregationMethod; // Median or P90 for extreme heat
+  ecostressStats: EcostressStats | null; // Stats from last composite generation
 }
 
 export interface AirTemperatureConfig {
@@ -94,6 +103,7 @@ interface MapLayersContextType extends MapLayersState {
   setHeatLayerOpacity: (tier: 'globalLST' | 'ecostress', opacity: number) => void;
   setEcostressMinCoverage: (coverage: number) => void;
   setAggregationMethod: (method: AggregationMethod) => void;
+  setEcostressStats: (stats: EcostressStats | null) => void;
   // Air temperature layer controls
   toggleAirTemperature: () => void;
   setAirTemperatureOpacity: (opacity: number) => void;
@@ -119,6 +129,7 @@ const defaultHeatLayers: HeatLayerTierConfig = {
   ecostressOpacity: 80,
   ecostressMinCoverage: 0.8, // 80% coverage threshold
   aggregationMethod: 'p90', // Default to P90 for urban heat island analysis
+  ecostressStats: null, // No stats until composite is generated
 };
 
 const defaultAirTemperature: AirTemperatureConfig = {
@@ -234,6 +245,13 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
     }));
   }, []);
 
+  const setEcostressStats = useCallback((stats: EcostressStats | null) => {
+    setHeatLayers((prev) => ({
+      ...prev,
+      ecostressStats: stats,
+    }));
+  }, []);
+
   // Air Temperature layer controls
   const toggleAirTemperature = useCallback(() => {
     setAirTemperature((prev) => ({
@@ -299,6 +317,7 @@ export const MapLayersProvider: React.FC<{ children: ReactNode }> = ({ children 
         setHeatLayerOpacity,
         setEcostressMinCoverage,
         setAggregationMethod,
+        setEcostressStats,
         toggleAirTemperature,
         setAirTemperatureOpacity,
         setAirTemperatureAggregation,

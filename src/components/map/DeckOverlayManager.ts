@@ -1,9 +1,9 @@
 /**
- * DeckOverlayManager - Singleton manager for deck.gl overlays on MapLibre
- * STAFF+ AUDIT FIXES:
- * 1. Removed race condition in isReady() (no DOM dependency).
- * 2. Enforces CSS z-index to ensure canvas is visible.
- * 3. Adds robust logging for debugging "invisible" layers.
+ * DeckOverlayManager - Singleton for MapLibre Integration
+ * ARCHITECT FIX:
+ * 1. Removed strict DOM dependency in isReady()
+ * 2. Auto-injects CSS to ensure canvas visibility (z-index fix)
+ * 3. Handles map style changes gracefully
  */
 
 import { MapboxOverlay } from '@deck.gl/mapbox';
@@ -17,74 +17,68 @@ export interface DeckLayerConfig {
   visible: boolean;
   opacity?: number;
   image?: HTMLCanvasElement | ImageBitmap;
-  // Bounds must be [West, South, East, North] (Lon, Lat, Lon, Lat)
-  bounds?: [number, number, number, number]; 
-  data?: Array<any>;
+  bounds?: [number, number, number, number]; // [W, S, E, N]
+  data?: any[];
   getPosition?: (d: any) => [number, number];
   getColor?: (d: any) => [number, number, number, number];
   getRadius?: (d: any) => number;
-  radiusPixels?: number;
 }
 
 let overlayInstance: MapboxOverlay | null = null;
 let attachedMap: MapLibreMap | null = null;
 let currentLayers: Map<string, DeckLayerConfig> = new Map();
 
-// CSS to force the deck canvas to be visible and overlay the map correctly
-const DECK_GLOBAL_STYLE = `
+// CSS Injection to FORCE canvas visibility
+const CSS_ID = 'neotopia-deck-styles';
+const FORCE_CSS = `
   .maplibregl-map .deckgl-overlay {
     z-index: 10 !important;
     pointer-events: none !important;
   }
-  /* Force canvas visibility for debugging */
   canvas.deckgl-canvas {
-    width: 100% !important;
-    height: 100% !important;
-    position: absolute !important;
-    top: 0 !important;
-    left: 0 !important;
-    opacity: 1 !important;
+    pointer-events: none !important;
   }
 `;
 
-function ensureStyles() {
-  if (!document.getElementById('neotopia-deck-style')) {
+function injectCSS() {
+  if (typeof document === 'undefined') return;
+  if (!document.getElementById(CSS_ID)) {
     const style = document.createElement('style');
-    style.id = 'neotopia-deck-style';
-    style.textContent = DECK_GLOBAL_STYLE;
+    style.id = CSS_ID;
+    style.textContent = FORCE_CSS;
     document.head.appendChild(style);
   }
 }
 
-export function initDeckOverlay(map: MapLibreMap) {
-  if (overlayInstance && attachedMap === map) return;
+export function initDeckOverlay(map: MapLibreMap, force: boolean = false) {
+  if (!map) return;
+  
+  // If we are already attached to THIS map and not forced, do nothing
+  if (overlayInstance && attachedMap === map && !force) return;
 
-  console.log('[DeckOverlayManager] Initializing...');
-  ensureStyles();
+  console.log('[DeckOverlayManager] Initializing on map instance...');
+  injectCSS();
 
-  // Cleanup old instance if switching maps (rare)
+  // Cleanup old instance
   if (overlayInstance) {
-    try { overlayInstance.finalize(); } catch(e) { console.warn(e); }
+    try { overlayInstance.finalize(); } catch (e) { console.warn('Cleanup warning:', e); }
   }
 
-  // Create new Overlay
+  // Create new instance
   overlayInstance = new MapboxOverlay({
-    interleaved: false, // false = Top-most layer (safe for overlays)
-    layers: [],
+    interleaved: false, // Keep on top
+    layers: []
   });
 
-  // Attach to MapLibre
+  // Attach to map
   map.addControl(overlayInstance as any);
   attachedMap = map;
-  
-  // Re-apply any pending layers
+
+  // Re-apply known layers immediately
   rebuildLayers();
-  
-  console.log('[DeckOverlayManager] ✅ Ready and attached.');
 }
 
 export function updateLayer(config: DeckLayerConfig) {
-  // Store the config even if map isn't ready yet (lazy loading)
   currentLayers.set(config.id, config);
   rebuildLayers();
 }
@@ -103,34 +97,32 @@ function rebuildLayers() {
     .filter(c => c.visible)
     .map(c => {
       if (c.type === 'bitmap' && c.image && c.bounds) {
-        // Validation: Bounds must be West < East, South < North
-        // If [Lat, Lon] was passed by mistake, these might be flipped.
-        const [w, s, e, n] = c.bounds;
-        
         return new BitmapLayer({
           id: c.id,
           image: c.image,
-          bounds: [w, s, e, n],
+          bounds: c.bounds,
           opacity: c.opacity ?? 0.8,
-          coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+          coordinateSystem: COORDINATE_SYSTEM.LNGLAT
         });
       }
+      // Add other types here if needed
       return null;
     })
-    .filter(Boolean); // Remove nulls
+    .filter(Boolean);
 
   overlayInstance.setProps({ layers });
 }
 
-export function getDiagnostics() {
-  return {
-    ready: !!overlayInstance && !!attachedMap,
-    layerCount: currentLayers.size,
-    layers: Array.from(currentLayers.keys()),
-  };
+export function finalizeDeckOverlay() {
+  if (overlayInstance) {
+    overlayInstance.finalize();
+    overlayInstance = null;
+  }
+  attachedMap = null;
+  currentLayers.clear();
 }
 
-// THE FIX: isReady should NOT check the DOM. It only checks logic state.
+// FIX: Logic check only, no DOM check
 export function isReady(): boolean {
   return !!overlayInstance;
 }

@@ -255,6 +255,7 @@ export default function RegionMap() {
           year={tempData?.year}
           regionValue={regionTempValue}
           regionName={selectedRegion?.name}
+          gridData={tempData?.grid}
         />
       </div>
 

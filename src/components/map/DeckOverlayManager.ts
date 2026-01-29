@@ -8,6 +8,7 @@ export interface DeckLayerConfig {
   type: 'bitmap' | 'scatterplot';
   visible: boolean;
   opacity?: number;
+  // HIER: ImageBitmap explizit erlaubt
   image?: HTMLCanvasElement | ImageBitmap;
   bounds?: [number, number, number, number];
   data?: any[];
@@ -17,7 +18,6 @@ let overlayInstance: MapboxOverlay | null = null;
 let attachedMap: MapLibreMap | null = null;
 let currentLayers: Map<string, DeckLayerConfig> = new Map();
 
-// CSS Injection: Zwingt den Canvas zur Sichtbarkeit
 function injectCSS() {
   if (typeof document === 'undefined') return;
   const id = 'deck-force-visible';
@@ -40,20 +40,23 @@ export function initDeckOverlay(map: MapLibreMap, force = false) {
 
   injectCSS();
   
+  // Cleanup old if exists
   if (overlayInstance) {
-    try { overlayInstance.finalize(); } catch(e) {/*ignore*/}
+    try { overlayInstance.finalize(); } catch(e) {}
   }
 
+  // Create new
   overlayInstance = new MapboxOverlay({
     interleaved: false,
     layers: []
   });
 
+  // Attach
   map.addControl(overlayInstance as any);
   attachedMap = map;
   
   rebuildLayers();
-  console.log('[DeckOverlayManager] Initialized & Attached');
+  console.log('[DeckOverlayManager] Initialized');
 }
 
 export function updateLayer(config: DeckLayerConfig) {
@@ -80,7 +83,12 @@ function rebuildLayers() {
           image: c.image,
           bounds: c.bounds,
           opacity: c.opacity ?? 0.8,
-          coordinateSystem: COORDINATE_SYSTEM.LNGLAT
+          coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+          // Optimization for bitmaps
+          parameters: {
+            depthTest: false,
+            blend: true
+          }
         });
       }
       return null;
@@ -97,20 +105,6 @@ export function finalizeDeckOverlay() {
   currentLayers.clear();
 }
 
-// CRITICAL FIX: Only check if instance exists. Do NOT check DOM.
 export function isReady(): boolean {
   return !!overlayInstance;
-}
-
-export function getAttachedMap() {
-  return attachedMap;
-}
-
-// Für Diagnose-Tool
-export function getDiagnostics() {
-  return {
-    initialized: !!overlayInstance,
-    layerCount: currentLayers.size,
-    layers: Array.from(currentLayers.keys())
-  };
 }

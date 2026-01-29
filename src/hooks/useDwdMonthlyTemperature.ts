@@ -19,10 +19,12 @@ interface MonthlyDataState {
 interface UseDwdMonthlyTemperatureProps {
   lat: number | null;
   lon: number | null;
+  /** Optional: use the same year as the currently loaded DWD overlay dataset */
+  year?: number | null;
   enabled: boolean;
 }
 
-export function useDwdMonthlyTemperature({ lat, lon, enabled }: UseDwdMonthlyTemperatureProps) {
+export function useDwdMonthlyTemperature({ lat, lon, year: preferredYear, enabled }: UseDwdMonthlyTemperatureProps) {
   const { airTemperature } = useMapLayers();
   const [state, setState] = useState<MonthlyDataState>({
     loading: false,
@@ -31,7 +33,7 @@ export function useDwdMonthlyTemperature({ lat, lon, enabled }: UseDwdMonthlyTem
     year: null,
   });
 
-  const lastFetchRef = useRef<{ lat?: number; lon?: number; aggregation?: AirTempAggregation }>({});
+  const lastFetchRef = useRef<{ lat?: number; lon?: number; aggregation?: AirTempAggregation; year?: number }>({});
 
   useEffect(() => {
     if (!enabled || lat === null || lon === null) {
@@ -39,11 +41,15 @@ export function useDwdMonthlyTemperature({ lat, lon, enabled }: UseDwdMonthlyTem
       return;
     }
 
-    // Skip if already fetched for this location and aggregation
+    const nowYear = new Date().getFullYear();
+    const year = Number.isFinite(preferredYear as number) ? (preferredYear as number) : nowYear - 1;
+
+    // Skip if already fetched for this location, aggregation and year
     if (
       lastFetchRef.current.lat === lat &&
       lastFetchRef.current.lon === lon &&
       lastFetchRef.current.aggregation === airTemperature.aggregation &&
+      lastFetchRef.current.year === year &&
       state.values
     ) {
       return;
@@ -54,8 +60,6 @@ export function useDwdMonthlyTemperature({ lat, lon, enabled }: UseDwdMonthlyTem
 
       try {
         const variable = airTemperature.aggregation === 'daily_max' ? 'max' : 'mean';
-        const nowYear = new Date().getFullYear();
-        const year = nowYear - 1;
 
         console.log('[useDwdMonthlyTemperature] Fetching monthly data for', { lat, lon, variable, year });
 
@@ -80,7 +84,7 @@ export function useDwdMonthlyTemperature({ lat, lon, enabled }: UseDwdMonthlyTem
 
         const monthlyValues = responseData.data?.monthlyValues as MonthlyTemperatureValue[] | undefined;
 
-        lastFetchRef.current = { lat, lon, aggregation: airTemperature.aggregation };
+        lastFetchRef.current = { lat, lon, aggregation: airTemperature.aggregation, year };
         
         setState({
           loading: false,
@@ -104,7 +108,7 @@ export function useDwdMonthlyTemperature({ lat, lon, enabled }: UseDwdMonthlyTem
     // Debounce to avoid rapid requests
     const timeout = setTimeout(fetchMonthlyData, 500);
     return () => clearTimeout(timeout);
-  }, [enabled, lat, lon, airTemperature.aggregation]);
+  }, [enabled, lat, lon, preferredYear, airTemperature.aggregation, state.values]);
 
   // Reset when disabled
   useEffect(() => {

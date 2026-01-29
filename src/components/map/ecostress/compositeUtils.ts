@@ -65,7 +65,8 @@ function latLonToPixel(
 }
 
 /**
- * Heat colormap: Yellow → Orange → Red (20°C to 55°C)
+ * NASA ECOSTRESS official color palette
+ * Blue → Cyan → Green → Yellow → Orange → Red → Magenta
  */
 export function kelvinToRGBA(kelvin: number): [number, number, number, number] {
   const range = LST_MAX_K - LST_MIN_K;
@@ -73,26 +74,42 @@ export function kelvinToRGBA(kelvin: number): [number, number, number, number] {
   
   let r: number, g: number, b: number;
   
-  if (t < 0.3) {
-    const s = t / 0.3;
-    r = Math.round(254 - s * 1);
-    g = Math.round(249 - s * 25);
-    b = Math.round(195 - s * 124);
-  } else if (t < 0.5) {
-    const s = (t - 0.3) / 0.2;
-    r = Math.round(253 - s * 4);
-    g = Math.round(224 - s * 109);
-    b = Math.round(71 - s * 49);
-  } else if (t < 0.7) {
-    const s = (t - 0.5) / 0.2;
-    r = Math.round(249 - s * 15);
-    g = Math.round(115 - s * 27);
-    b = Math.round(22 - s * 10);
+  if (t < 0.15) {
+    // Blue to Cyan (20°C to ~25°C)
+    const s = t / 0.15;
+    r = 0;
+    g = Math.round(s * 180);
+    b = Math.round(180 + s * 75);
+  } else if (t < 0.30) {
+    // Cyan to Green (25°C to ~30°C)
+    const s = (t - 0.15) / 0.15;
+    r = 0;
+    g = Math.round(180 + s * 75);
+    b = Math.round(255 - s * 155);
+  } else if (t < 0.45) {
+    // Green to Yellow (30°C to ~37°C)
+    const s = (t - 0.30) / 0.15;
+    r = Math.round(s * 255);
+    g = 255;
+    b = Math.round(100 - s * 100);
+  } else if (t < 0.60) {
+    // Yellow to Orange (37°C to ~44°C)
+    const s = (t - 0.45) / 0.15;
+    r = 255;
+    g = Math.round(255 - s * 80);
+    b = 0;
+  } else if (t < 0.80) {
+    // Orange to Red (44°C to ~51°C)
+    const s = (t - 0.60) / 0.20;
+    r = 255;
+    g = Math.round(175 - s * 140);
+    b = 0;
   } else {
-    const s = (t - 0.7) / 0.3;
-    r = Math.round(234 - s * 14);
-    g = Math.round(88 - s * 50);
-    b = Math.round(12 + s * 26);
+    // Red to Magenta (51°C to 55°C)
+    const s = (t - 0.80) / 0.20;
+    r = 255;
+    g = Math.round(35 - s * 35);
+    b = Math.round(s * 180);
   }
   
   return [r, g, b, 220];

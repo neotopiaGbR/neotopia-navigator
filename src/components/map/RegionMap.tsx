@@ -15,8 +15,8 @@ import AirTemperatureOverlay from './AirTemperatureOverlay';
 import AirTemperatureLegend from './AirTemperatureLegend';
 import HeatLegend from './HeatLegend';
 // Default imports for overlay components (fixes ref warnings)
-// STACKED MODE: Render all granules individually without aggregation
-import EcostressStackedOverlay from './ecostress/EcostressStackedOverlay';
+// AGGREGATION MODE: P90/Max composite from all summer granules
+import EcostressCompositeOverlay from './ecostress/EcostressCompositeOverlay';
 import GlobalLSTOverlay from './GlobalLSTOverlay';
 
 import LayersControl from './LayersControl';
@@ -273,12 +273,13 @@ export default function RegionMap() {
 
       {/* LOGIC LAYERS - Rendered OUTSIDE Map component as invisible React nodes */}
       {/* These components use the DeckOverlayManager singleton - no refs needed */}
-      {/* STACKED MODE: All granules rendered individually */}
+      {/* AGGREGATION MODE: P90/Max composite */}
       {isMapReady && (
-        <EcostressStackedOverlay 
+        <EcostressCompositeOverlay 
           visible={activeLayers.includes('ecostress')}
           regionBbox={computedBbox ?? undefined}
           allGranules={(overlays.ecostress.metadata?.allGranules as any[]) ?? []}
+          aggregationMethod={heatLayers.aggregationMethod}
           opacity={heatLayers.ecostressOpacity / 100}
         />
       )}

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import Map, { NavigationControl, ScaleControl, AttributionControl, Source, Layer, type MapRef } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
@@ -7,6 +7,7 @@ import { useMapOverlays } from '@/hooks/useMapOverlays';
 import { useMapLayers } from './MapLayersContext';
 import { useRegion } from '@/contexts/RegionContext';
 import { useDwdTemperature } from '@/hooks/useDwdTemperature';
+import { useDwdMonthlyTemperature } from '@/hooks/useDwdMonthlyTemperature';
 import { initDeckOverlay, finalizeDeckOverlay } from './DeckOverlayManager';
 import { MAP_STYLES } from './basemapStyles';
 
@@ -122,6 +123,22 @@ export default function RegionMap() {
       );
     }
   }, [selectedRegion?.id]);
+  // Compute region center for monthly data fetch
+  const regionCenter = useMemo(() => {
+    if (!selectedRegion?.bbox) return null;
+    const bbox = selectedRegion.bbox;
+    return {
+      lat: (bbox[1] + bbox[3]) / 2,
+      lon: (bbox[0] + bbox[2]) / 2,
+    };
+  }, [selectedRegion?.bbox]);
+
+  // Fetch monthly temperature data for selected region
+  const monthlyData = useDwdMonthlyTemperature({
+    lat: regionCenter?.lat ?? null,
+    lon: regionCenter?.lon ?? null,
+    enabled: airTemperature.enabled && !!selectedRegion,
+  });
 
   // Show legends when layers are active
   const showAirTempLegend = airTemperature.enabled && tempData?.normalization;
@@ -130,22 +147,15 @@ export default function RegionMap() {
     (overlays.ecostress.metadata?.allGranules as any[])?.length || 0;
 
   // Find temperature value for selected region (nearest grid cell)
-  const regionTempValue = (() => {
-    if (!selectedRegion || !tempData?.grid || tempData.grid.length === 0) return null;
-    
-    // Get region center from bbox
-    const bbox = selectedRegion.bbox;
-    if (!bbox) return null;
-    
-    const centerLon = (bbox[0] + bbox[2]) / 2;
-    const centerLat = (bbox[1] + bbox[3]) / 2;
+  const regionTempValue = useMemo(() => {
+    if (!selectedRegion || !tempData?.grid || tempData.grid.length === 0 || !regionCenter) return null;
     
     // Find nearest grid cell
     let nearest = tempData.grid[0];
     let minDist = Infinity;
     
     for (const cell of tempData.grid) {
-      const dist = Math.pow(cell.lon - centerLon, 2) + Math.pow(cell.lat - centerLat, 2);
+      const dist = Math.pow(cell.lon - regionCenter.lon, 2) + Math.pow(cell.lat - regionCenter.lat, 2);
       if (dist < minDist) {
         minDist = dist;
         nearest = cell;
@@ -153,7 +163,7 @@ export default function RegionMap() {
     }
     
     return nearest?.value ?? null;
-  })();
+  }, [selectedRegion, tempData?.grid, regionCenter]);
 
   return (
     <div className="relative w-full h-full bg-background overflow-hidden">
@@ -255,6 +265,8 @@ export default function RegionMap() {
           year={tempData?.year}
           regionValue={regionTempValue}
           regionName={selectedRegion?.name}
+          monthlyValues={monthlyData.values}
+          monthlyLoading={monthlyData.loading}
         />
       </div>
 

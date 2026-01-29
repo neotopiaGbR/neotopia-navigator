@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
-import { Thermometer, Info } from 'lucide-react';
+import { Thermometer, Info, Loader2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import type { AirTempAggregation } from './MapLayersContext';
+import type { AirTempAggregation, MonthlyTemperatureValue } from './MapLayersContext';
 
 interface AirTemperatureLegendProps {
   visible: boolean;
@@ -11,6 +11,9 @@ interface AirTemperatureLegendProps {
   /** Temperature value for the selected region (if available) */
   regionValue?: number | null;
   regionName?: string | null;
+  /** Monthly values (June, July, August) */
+  monthlyValues?: MonthlyTemperatureValue[] | null;
+  monthlyLoading?: boolean;
 }
 
 /**
@@ -33,6 +36,8 @@ export function AirTemperatureLegend({
   year,
   regionValue,
   regionName,
+  monthlyValues,
+  monthlyLoading,
 }: AirTemperatureLegendProps) {
   if (!visible) return null;
 
@@ -83,7 +88,29 @@ export function AirTemperatureLegend({
           </div>
           <div className="text-lg font-bold tabular-nums">
             {regionValue.toFixed(1)}°C
+            <span className="text-[10px] font-normal text-muted-foreground ml-1">(JJA)</span>
           </div>
+          
+          {/* Monthly Values */}
+          {monthlyLoading && (
+            <div className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Monatsdaten laden...
+            </div>
+          )}
+          
+          {!monthlyLoading && monthlyValues && monthlyValues.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-border/30">
+              <div className="grid grid-cols-3 gap-1">
+                {monthlyValues.map((mv) => (
+                  <div key={mv.month} className="text-center">
+                    <div className="text-[9px] text-muted-foreground">{mv.monthName}</div>
+                    <div className="font-mono font-medium text-[11px]">{mv.value.toFixed(1)}°</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       
